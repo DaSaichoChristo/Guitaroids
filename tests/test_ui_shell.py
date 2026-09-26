@@ -47,8 +47,43 @@ def test_self_test_runs_and_exits_zero() -> None:
 
 def test_self_test_reports_the_platform_and_size() -> None:
     result = _self_test("--self-test")
+    assert result.returncode == 0, result.stderr
     assert "platform=offscreen" in result.stdout
-    assert "size=960x640" in result.stdout
+    # Full screen is the default, so the size is the platform's screen size rather
+    # than anything we choose. Asserting a literal here would only pin the
+    # offscreen platform's default; the windowed case below pins our own size.
+    assert "fullscreen=true" in result.stdout
+    assert "size=" in result.stdout
+
+
+def test_windowed_mode_uses_the_declared_default_size() -> None:
+    """--windowed must land on DEFAULT_SIZE, and must not be full screen."""
+    from guitaroids.app import DEFAULT_SIZE
+
+    result = _self_test("--self-test", "--windowed")
+    assert result.returncode == 0, result.stderr
+    assert f"size={DEFAULT_SIZE[0]}x{DEFAULT_SIZE[1]}" in result.stdout
+    assert "fullscreen=false" in result.stdout
+
+
+def test_fullscreen_is_the_default() -> None:
+    """A flag is only meaningful if the other branch is what happens without it."""
+    from guitaroids.app import parse_args
+
+    assert parse_args([]).windowed is False
+    assert parse_args(["--windowed"]).windowed is True
+
+
+def test_the_app_asks_for_full_screen_not_maximized() -> None:
+    """Maximized keeps the title bar and a taskbar entry.
+
+    This is a game; chrome the player has to click past is the thing being
+    removed. Asserted on the source text because Qt's showMaximized() would look
+    correct in a screenshot and would still be the wrong choice.
+    """
+    source = (ROOT / "guitaroids" / "app.py").read_text()
+    assert "showFullScreen()" in source
+    assert "showMaximized()" not in source, "maximized is not full screen"
 
 
 def test_main_module_bootstraps_before_importing_app() -> None:

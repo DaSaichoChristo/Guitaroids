@@ -84,10 +84,9 @@ Look at a screen without launching the app:
 .venv/bin/python scripts/screenshot_ui.py --all  # PNGs in /tmp/opencode/ui
 ```
 
-## Two things that will bite you
+## Three things that will bite you
 
-Both cost real time, and both are now enforced by tests.
-
+All three cost real time, and all three are now enforced by tests.
 - **A layout that does not fit does not clip — it compresses.** Children get squeezed
   below their minimum height and end up drawn on top of each other. This shipped a
   preferences screen with three combo boxes overlapping. Tall forms go in a
@@ -95,6 +94,11 @@ Both cost real time, and both are now enforced by tests.
 - **`AppContext` must stay free of Qt.** It is pinned by a subprocess test, and it is
   why the background library loader is owned by a screen rather than by the context.
   Put a `QObject` on the context and every context test becomes a Qt test.
+- **The app opens full screen, and nothing scales with the screen.** Type sizes and
+  control widths are fixed pixels, so an ultrawide display renders a small UI
+  (`DESIGN.md` §12.2). Fine at 1080p, visibly small above ~2560px. Fixing it means
+  scaling the QSS and `content_column`/`constrained_button` together. Use
+  `--windowed` when working on the layouts.
 
 ## Unblock this first
 

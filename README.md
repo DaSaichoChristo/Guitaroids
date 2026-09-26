@@ -37,11 +37,19 @@ Verify at any time:
 
 ## Running it
 
+The app opens **full screen** — no title bar, no taskbar entry.
+
 ```bash
-.venv/bin/python -m guitaroids                      # the app
+.venv/bin/python -m guitaroids                      # the app, full screen
+.venv/bin/python -m guitaroids --windowed           # 960x600 window instead
 .venv/bin/python -m guitaroids --songs /path/tabs   # a different library
 .venv/bin/python -m guitaroids --self-test          # build the UI, render, exit
 ```
+
+`--self-test` reports the geometry the window manager actually gave the window,
+which on a full screen is the whole screen rather than a size we chose. It waits
+for the window to be exposed before reporting, because until the WM has done its
+round trip the window is still sitting at its minimum size.
 
 Four of the six screens are real: the main menu, **song select** (pick a tab, pick a
 track, tune the audio offset), **import GP** (copy a tab into the library) and

@@ -82,6 +82,9 @@ is where the "why" belongs.
 | Import copies via temp-file-and-rename, so a failure cannot leave a half-written tab | live | §11 |
 | `.gpx` is refused **at import** with a reason, rather than copied in to fail at scan time | live | §11 |
 | `AppContext` stays **free of Qt**; a screen owns its own loader | live | §11 |
+| The app opens **full screen** (`showFullScreen`, not maximized); `--windowed` opts out | live | §12 |
+| Before reporting geometry, the entry point **waits for the window to be exposed** | live | §12 |
+| **Nothing scales with the screen** — type and control widths are fixed pixels | live | §12 |
 
 ## The clock
 

@@ -1472,3 +1472,83 @@ blocking static call that would hang a test outright.
 - One crash-dump artifact appeared when the M0 gate was chained immediately after
   the full suite. It did not reproduce in four attempts, and the gate passes 6/6
   standalone and in-suite. Noted, not root-caused.
+
+---
+
+## §12 — Full screen, and a self-test that was lying (2026-09-26)
+
+The app now opens full screen. `showFullScreen()`, not `showMaximized()`: this is a
+game, and a title bar and a taskbar entry are chrome the player has to click past.
+`--windowed` is the escape hatch, for development and for running beside other
+windows, and it restores the old 960x640.
+
+### 12.1 The self-test reported a geometry that was simply wrong
+
+Worth recording, because it is the same failure shape as §11.6.
+
+A single `processEvents()` after `showFullScreen()` is **not** enough. Until the
+window manager has done its round trip, the window is still sitting at its minimum
+size. So the self test printed:
+
+```
+self-test ok: ... size=720x480 fullscreen=true ...
+```
+
+720x480 is `MainWindow.setMinimumSize(720, 480)`. It was not a real result — the
+window was not full screen yet, it had not been mapped. The check still exited 0,
+so it passed while reporting something false, which is worse than no self-test,
+because it looks like a passing check.
+
+`_settle()` now spins the event loop until `windowHandle().isExposed()`, capped at
+one second. Costs **3ms on offscreen, ~60ms on a real display**, which is why it can
+live in the entry path rather than only in tests.
+
+Verified on this machine, both modes, both platforms:
+
+| platform | mode | reported |
+|---|---|---|
+| xcb | full screen | `size=3440x1440 fullscreen=true` |
+| xcb | `--windowed` | `size=960x640 fullscreen=false` |
+| offscreen | full screen | `size=800x800 fullscreen=true` |
+
+`test_the_app_asks_for_full_screen_not_maximized` asserts on the *source text*
+rather than on behaviour, because `showMaximized()` would look perfectly correct in
+a screenshot and would still be the wrong choice.
+
+### 12.2 What full screen looks like, honestly
+
+Checked at 3440x1440, 1920x1080 and 1366x768. The menu screens are a width-capped
+centred column, so:
+
+- **1920x1080 and below: good.** A centred column with generous whitespace, which is
+  what a title screen is supposed to look like.
+- **3440x1440 ultrawide: small but not broken.** The column is 520px on a 3440px
+  screen and the type is fixed at 14px, so the UI reads as a small strip in the
+  middle of a lot of empty space.
+
+The layout was designed against a 960x640 assumption and nothing scales with the
+screen. This is cosmetic, and the alternative -- a scale factor applied to the QSS
+font sizes, `content_column`'s `max_width` and `constrained_button`'s widths -- is a
+theme refactor that touches every screen. Not done on this section's evidence; see
+below.
+
+### Not done — §12
+
+- **No UI scaling.** Type and control widths are fixed pixel values, so an ultrawide
+  display renders a small UI. Cosmetic, and only visible above ~2560px wide, but
+  real. Fixing it means a `build_stylesheet(scale)` in `theme.py` plus scaling
+  `content_column` and `constrained_button`, which is a theme refactor rather than a
+  two-line change.
+- **`--self-test` does not assert anything.** It prints values and exits 0. The
+  checks are in `test_ui_shell.py`, which parses that output; a broken `_settle`
+  would show up there, not in the self-test itself.
+- **Full screen was verified on xcb only.** The macOS and Windows paths are the same
+  Qt call, but neither was run.
+- **Escape still navigates back rather than leaving full screen.** On the main menu
+  it does nothing, so a full-screen app with no title bar has no keyboard route out
+  of full screen at all — only the Quit button. A keybinding for that does not exist.
+- **The window title is now invisible in normal use.** `navigate()` still sets
+  `Guitaroids - <screen>`, which is only visible in `--windowed` mode or in the task
+  manager. Harmless, but the title bar is no longer a debugging surface.
+- **Screen selection is not handled.** With two monitors the window goes to whichever
+  screen it is on, defaulting to the primary. There is no flag to choose a display.
