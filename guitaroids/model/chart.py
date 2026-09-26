@@ -283,20 +283,67 @@ def suggest_track(song) -> object:
 # --- tempo --------------------------------------------------------------------
 
 
+def _mix_tempo(effect) -> int | None:
+    """The BPM this beat's effect sets, or ``None`` if it does not set one.
+
+    Two shapes, both real, both from PyGuitarPro 0.11 reading two different files:
+
+    - some effect types wrap a mix table as ``effect.mixTableChange``;
+    - others **are** the mix table, with ``effect.tempo`` directly on them.
+
+    And ``tempo`` is not a number in either case -- it is a ``MixTableItem``, a
+    value/duration/allTracks triple -- and is ``None`` when the change only touches
+    volume or reverb.
+
+    Every version of this function that assumed one shape raised on a real tab. It
+    raised ``TypeError`` (``int()`` of a ``MixTableItem``) and ``AttributeError``
+    (no ``mixTableChange``), and because this runs inside the library scan, either
+    one took out **every** song rather than the one that was malformed.
+    """
+    change = getattr(effect, "mixTableChange", None)
+    if change is None:
+        change = effect  # the effect *is* the mix table
+    tempo = getattr(change, "tempo", None)
+    if tempo is None:
+        return None
+    try:
+        return int(getattr(tempo, "value", tempo))
+    except (TypeError, ValueError):
+        return None
+
+
+def changes_tempo(song, track) -> bool:
+    """Public: does this track change tempo? Song select filters on it.
+
+    A tempo-changing track cannot be charted, so offering it would be offering a
+    dead end -- song select would list it and the game would come up empty.
+    """
+    return _has_tempo_change(song, track)
+
+
 def _has_tempo_change(song, track) -> bool:
     """True if any beat carries a mix table change that alters the tempo.
 
     DESIGN.md §1.6 / §6.4: constant tempo only. A tab that changes tempo is
     rejected rather than silently misplayed against a single global tempo.
     """
+    try:
+        song_tempo = int(song.tempo)
+    except (TypeError, ValueError):
+        return False
+    if song_tempo <= 0:
+        # Nothing to compare against. A tab with no usable tempo is played at full
+        # speed elsewhere (``Game.rate_for``), so rejecting its tracks here would
+        # make it unplayable in a second, unrelated way.
+        return False
+
     for measure in track.measures:
         for voice in measure.voices:
             for beat in voice.beats:
-                effect = beat.effect
-                if effect is None or effect.mixTableChange is None:
+                if beat.effect is None:
                     continue
-                change = effect.mixTableChange
-                if change.tempo is not None and int(change.tempo) != int(song.tempo):
+                changed = _mix_tempo(beat.effect)
+                if changed is not None and changed != song_tempo:
                     return True
     return False
 

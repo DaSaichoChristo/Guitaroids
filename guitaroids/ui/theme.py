@@ -196,6 +196,15 @@ QPushButton#primary {{
     font-weight: 600;
 }}
 QPushButton#primary:hover   {{ background: {COLORS["accent_hi"]}; }}
+/* An id selector beats a pseudo-state, so the plain `QPushButton:disabled` rule
+   above does NOT dim a primary button. Without this the Add button on Import GP
+   is full accent green while disabled: a live-looking control that does nothing
+   when pressed, which is worse than a dead-looking one. */
+QPushButton#primary:disabled {{
+    color: {COLORS["text_dim"]};
+    background: {COLORS["surface"]};
+    border-color: {COLORS["border"]};
+}}
 QPushButton#danger {{ background: {COLORS["danger"]}; border-color: {COLORS["danger"]}; }}
 
 /* --- lists ---------------------------------------------------------------- */

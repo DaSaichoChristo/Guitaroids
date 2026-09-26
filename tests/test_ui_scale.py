@@ -220,3 +220,17 @@ def test_no_screen_breaks_at_the_maximum_scale(shell, qapp) -> None:
                 assert label.height() >= label.sizeHint().height() - 2, (
                     f"{screen.label}: clipped {label.text()[:30]!r} at max scale"
                 )
+
+
+def test_a_disabled_primary_button_is_dimmed() -> None:
+    """An id selector beats a pseudo-state, so this needed saying out loud.
+
+    ``QPushButton#primary`` outranks ``QPushButton:disabled``, which left every
+    disabled primary button at full accent green -- a live-looking control that
+    does nothing when pressed. Found by looking at Import GP's Add button before
+    a tab had been chosen.
+    """
+    from guitaroids.ui.theme import build_stylesheet
+
+    sheet = build_stylesheet()
+    assert "QPushButton#primary:disabled" in sheet

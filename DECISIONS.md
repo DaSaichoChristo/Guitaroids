@@ -82,6 +82,13 @@ is where the "why" belongs.
 | Import is a **copy**, and **never overwrites without asking** | live | §11 |
 | Import copies via temp-file-and-rename, so a failure cannot leave a half-written tab | live | §11 |
 | `.gpx` is refused **at import** with a reason, rather than copied in to fail at scan time | live | §11 |
+| Import is **two steps** — Choose a tab, then Add to library — and the chosen file is named on screen | live | §20.1 |
+| The replace question is asked when **Add** is pressed, not when the file is selected | live | §20.1 |
+| The button says **"Add to library"**, not "Save" — the action is a copy | live | §20.1 |
+| **A tempo-changing track is not offered** in song select: it cannot be charted, so it is a dead end | live | §20.3 |
+| A song with **no usable tempo** is playable, not a tempo change | live | §20.3 |
+| `MixTableChange.tempo` is a **`MixTableItem`, not an int**, and comes in two shapes; both are read | live | §20.2 |
+| A disabled `QPushButton#primary` is **dimmed** — an id selector outranks `:disabled` | live | §20.4 |
 | `AppContext` stays **free of Qt**; a screen owns its own loader | live | §11 |
 | The app opens **full screen** (`showFullScreen`, not maximized); `--windowed` opts out | live | §12 |
 | Before reporting geometry, the entry point **waits for the window to be exposed** | live | §12 |
@@ -122,6 +129,7 @@ inside a ±35ms window reads as "the app is broken" rather than as an off-by-10m
 | `seconds = tick / 960 × (60 / tempo)` | live | §1.6 |
 | `Beat.start` is an **absolute** tick, so note times are recomputed against a running offset when repeats unroll | live | §6.5 |
 | Tempo changes are rejected outright rather than silently misplayed | live | §6.5 |
+| ...and a track that changes tempo is **dropped from the track list** rather than offered and refused | live | §20.3 |
 | Missing audio is **metronome-only**, a supported state rather than an error | live | §3.4 |
 | Track is chosen by the user; the **General MIDI program** (24–31 guitar, 32–39 bass) classifies and filters the list | live | §7.3, §8 |
 | Chords collapsed to **one note per onset**, default rule "highest pitch", with a per-song toggle for full chords | live | §7.4, §8 |

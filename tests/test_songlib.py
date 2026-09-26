@@ -13,17 +13,20 @@ import sys
 from pathlib import Path
 
 import pytest
+from guitarpro.models import MixTableItem
+from songbuild import make_song
 
 from guitaroids.songlib import (
     AUDIO_EXTENSIONS,
     Status,
     classify_error,
+    describe_tracks,
     find_audio,
     format_duration,
     load_tab,
     scan_library,
 )
-from guitaroids.model.chart import ChartError
+from guitaroids.model.chart import ChartError, changes_tempo
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -214,3 +217,104 @@ def test_cli_human_output_mentions_counts(tmp_path: Path) -> None:
     )
     assert "1 tab(s)" in result.stdout
     assert "PROBLEMS" in result.stdout
+
+
+# --- tempo changes -----------------------------------------------------------
+#
+# These use hand-built stand-ins rather than a real tab. PyGuitarPro will not
+# produce a tempo change from `make_song`, and the point is the *shape* of the API:
+# `MixTableChange.tempo` is a MixTableItem, not a number, and None when the change
+# only touches volume. Both were found by a real .gp4 (Sweet Child O' Mine).
+
+
+class _Fake:
+    """The smallest object the tempo check reads from."""
+
+    def __init__(self, **fields) -> None:
+        self.__dict__.update(fields)
+
+
+def _track_with_mix_tempo(tempo, *, song_tempo: int = 127):
+    """A track carrying one beat whose mix table sets ``tempo``."""
+    change = _Fake(tempo=tempo)
+    beat = _Fake(effect=_Fake(mixTableChange=change))
+    voice = _Fake(beats=[beat])
+    measure = _Fake(voices=[voice])
+    return _Fake(measures=[measure]), _Fake(tempo=song_tempo)
+
+
+def test_a_mix_table_tempo_is_a_value_not_a_number() -> None:
+    """The bug: `int(change.tempo)` raised TypeError on a real tab.
+
+    It took out the whole library scan, not one tab, because the crash happened
+    inside the loader's per-file guard and the guard did not catch a TypeError.
+    """
+    from guitarpro.models import MixTableItem
+
+    track, song = _track_with_mix_tempo(MixTableItem(value=96, duration=0))
+    assert changes_tempo(song, track) is True
+
+
+def test_a_mix_table_change_that_keeps_the_tempo_is_not_a_change() -> None:
+    from guitarpro.models import MixTableItem
+
+    track, song = _track_with_mix_tempo(MixTableItem(value=127, duration=0))
+    assert changes_tempo(song, track) is False
+
+
+def test_a_mix_table_change_that_never_touches_the_tempo_is_not_a_change() -> None:
+    """`tempo` is None when the change only adjusts volume or reverb."""
+    track, song = _track_with_mix_tempo(None)
+    assert changes_tempo(song, track) is False
+
+
+def test_a_song_with_no_tempo_is_not_treated_as_a_change() -> None:
+    """Otherwise every track in such a tab would be silently unplayable."""
+    track, song = _track_with_mix_tempo(96, song_tempo=0)
+    assert changes_tempo(song, track) is False
+
+
+def test_a_tempo_changing_track_is_not_offered(tmp_path: Path) -> None:
+    """Song select must not list a track the game will refuse to chart.
+
+    The tab is playable; one of its tracks is not. Offering it made the combo box
+    a list of dead ends, which is what the real .gp4's track 3 was.
+    """
+    from guitarpro.models import MixTableChange
+
+    song = make_song(tempo=127, tracks=2, notes=4)
+    song.tracks[1].measures[0].voices[0].beats[0].effect = MixTableChange(
+        tempo=MixTableItem(value=96, duration=0)
+    )
+
+    offered = describe_tracks(song, None)
+
+    assert [t.number for t in offered] == [1], "only the constant-tempo track"
+
+
+def test_a_mix_table_that_is_the_effect_itself_is_read_too() -> None:
+    """The other real shape: no ``mixTableChange`` wrapper at all.
+
+    Same file library, different PyGuitarPro effect type, and the tab that has it
+    is the one a guitarist would actually want to play.
+    """
+    from guitarpro.models import MixTableChange
+
+    effect = MixTableChange(tempo=MixTableItem(value=96, duration=0))
+    beat = _Fake(effect=effect)
+    track = _Fake(measures=[_Fake(voices=[_Fake(beats=[beat])])])
+    song = _Fake(tempo=127)
+
+    assert changes_tempo(song, track) is True
+    assert changes_tempo(_Fake(tempo=96), track) is False
+
+
+def test_an_effect_with_no_mix_table_at_all_is_not_a_tempo_change() -> None:
+    """Slides, bends and the rest must not be mistaken for mix tables.
+
+    Checked on a real tab: every synthetic note in ``make_song`` carries one, and a
+    bare ``effect.mixTableChange`` raised AttributeError on the second one. An
+    exception here is not one bad tab, it is a dead library scan.
+    """
+    song = make_song(tracks=1, notes=4)
+    assert changes_tempo(song, song.tracks[0]) is False

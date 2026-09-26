@@ -2401,3 +2401,119 @@ reasoning as the key legend in §18.1.
 - **The offset and the tempo are two controls doing one job** (both are per-attempt
   alignment of the player to the song). They are not merged, and the reason is that
   they answer different questions — one is "when", the other is "how fast".
+
+## §20 — Import GP gets a second button, and a real .gp4 gets through (2026-09-26)
+
+**Tests: 660, all passing.** Two things, and the second one is why the first was
+reported as a missing button.
+
+### 20.1 Choosing a file and adding it are two steps
+
+The screen had **one** button: it opened the file dialog and copied the file
+immediately on return. So a player who picked a tab had no moment at which they
+could see what they had picked, what name it would land as, or whether it was
+already in the library — and no way to change their mind after the dialog closed.
+
+Two buttons now, in one row because they are two steps of one action rather than
+two actions:
+
+```
+[ Add to library ]  [ Choose a tab... ]
+```
+
+- **Choose a tab...** arms the screen and shows `Selected: song.gp4` plus a preview
+  of what Add will do — `Will be added to the library as song.gp5`, or
+  `Will ask before replacing song.gp5 in the library.` Nothing is written.
+- **Add to library** does the copy, and is **disabled until something is armed**.
+  It is cleared again afterwards, so one press is one import.
+
+Two decisions inside that:
+
+**The replace question is not asked on selection.** It is asked when Add is
+pressed. A modal on selection puts a dialog in front of a player who has not
+committed to anything yet, and a native one cannot be un-asked. The screen says it
+*will* ask instead, which is the information without the interruption.
+
+**The button is labelled "Add to library", not "Save".** The action is a *copy* and
+the screen says so at the top; "Save" would imply the file is written back where it
+came from, which it never is.
+
+Focus moves with the step (Add once armed), so Enter follows the same path the mouse
+does instead of reopening the dialog. That is asserted by recording the `setFocus`
+call rather than through `hasFocus()`, because the offscreen platform has no focused
+widget at all and such a test would pass for the wrong reason.
+
+### 20.2 The real file exposed a crash, not a missing button
+
+The report was "I can select a file but there's no way to save it", and the file in
+question was a real `.gp4` — Sweet Child O' Mine, which the one-button flow *had*
+copied in successfully. It then broke the library scan completely:
+
+```
+guitaroids/model/chart.py:299: TypeError: int() argument must be ... not 'MixTableItem'
+```
+
+`_has_tempo_change` read `int(change.tempo)`. In PyGuitarPro 0.11
+`MixTableChange.tempo` is **not a number** — it is a `MixTableItem`, a
+value/duration/allTracks triple — and it is `None` when the change only touches
+volume. Worse, there are **two shapes**: some effect types wrap a mix table as
+`effect.mixTableChange`, and others *are* the mix table with `effect.tempo` on them
+directly. Both appear in the two real tabs in the library, one file each.
+
+So there were three distinct crashes — `int()` of a `MixTableItem`, a missing
+`mixTableChange` attribute, and a bare number in one shape where the other is an
+object — and **an exception here is not one bad tab, it is a dead library scan**,
+because this runs while enumerating songs. Every version that assumed a single
+shape raised on a real file. `_mix_tempo` now reads both shapes with `getattr` and
+returns `None` for anything it cannot interpret.
+
+### 20.3 A tempo-changing track was being offered, and could not be played
+
+With the scan alive, `test_offered_tracks_all_produce_charts` — a test written for
+the real library, and the reason it exists — failed properly:
+
+```
+guns_n_roses-sweet_child_o_mine track 3 offered but unplayable
+```
+
+§1.6 rejects a tab that changes tempo, because the note clock is
+`tick/960 × 60/tempo` with a single tempo. That is a deliberate limitation, but
+`describe_tracks` was offering track 3 anyway, so song select listed a track the
+game would then refuse to chart. **The tab is playable; one of its tracks is not.**
+It is now filtered out, on the same reasoning as `.gpx` and as bass/drums: a choice
+in a combo box that leads nowhere is a dead end.
+
+A song with **no usable tempo** is *not* treated as a tempo change, because there
+is nothing to compare against — it plays at full speed elsewhere (`Game.rate_for`),
+and rejecting it here would make it unplayable in a second, unrelated way.
+
+The real tab now charts: 674 notes, 127 BPM, 5:34, tracks #4 and #5 offered, #3
+correctly absent.
+
+### 20.4 A disabled primary button was still green
+
+`QPushButton#primary` is an **id** selector and `QPushButton:disabled` is a
+pseudo-state, so the id wins and a disabled primary button keeps the full accent
+colour. The new Add button therefore looked completely live while being inert — a
+live-looking control that does nothing when pressed, which is worse than a
+dead-looking one, and the exact thing the button's own test warns about. Fixed with
+`QPushButton#primary:disabled`, and pinned by a test that asserts the rule exists.
+
+### Not done — §20
+
+- **No drag and drop.** Dropping a `.gp5` on the window would skip the file dialog
+  entirely, and Qt makes that about twenty lines. It is the obvious next affordance
+  for this screen.
+- **No "import several" and no per-file queue.** One tab at a time, each needing
+  two clicks and possibly a modal.
+- **The chosen file's full path is not shown**, only its name. The destination
+  directory is on screen at the top, so the pair is enough, but a name alone cannot
+  distinguish two `song.gp5` files in different folders.
+- **The preview does not say how big the file is or how many notes it has**, which
+  is what a player importing a tab is often actually checking.
+- **Tempo-changing tracks are dropped silently.** The tab is still playable on its
+  other tracks, so there is no status to raise — but nothing tells the player that
+  track 3 existed, or why it is not in the list.
+- **§1.6's constant-tempo limitation is unchanged**, and is now the reason a real
+  track is missing. Tempo *maps* would be a much larger change to the note clock
+  than the control in §19.

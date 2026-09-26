@@ -62,10 +62,10 @@ says what ran.
 
 ## Current state
 
-`tests/` is 639 tests, all passing. **Five of the six screens are real:** the main
+`tests/` is 660 tests, all passing. **Five of the six screens are real:** the main
 menu, song select (tab + track + audio offset + **per-song practice tempo**), import
-GP, preferences, and **game** — three bars of tab notation with a left-to-right beat
-line, `E A D G B E` down the left, a six-key keyboard test mode and PERFECT/GOOD/MISS
+GP (choose a file, then Add to library), preferences, and **game** — three bars
+of tab notation with a left-to-right beat line, `E A D G B E` down the left, a six-key keyboard test mode and PERFECT/GOOD/MISS
 judging. The practice tempo is chosen on song select and travels in `PlayRequest`,
 so a run cannot be re-timed while it plays.
 **Results is still a placeholder**; counts are shown in the HUD and go nowhere.

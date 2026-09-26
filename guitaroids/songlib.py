@@ -29,6 +29,7 @@ from .model.chart import (
     TrackKind,
     classify_track,
     count_notes,
+    changes_tempo,
     playable_tracks,
     suggest_track,
 )
@@ -213,10 +214,18 @@ def describe_tracks(song, suggested) -> tuple[TrackInfo, ...]:
     Only ``TrackKind.GUITAR`` tracks with at least one playable note are offered:
     bass has 4 strings and drums are unpitched, so neither maps onto six string
     lanes, and an empty track would be a dead end in the UI (DESIGN.md §7.3).
+
+    A track that **changes tempo** is dropped for the same reason: it cannot be
+    charted at all (§1.6), so listing it means listing something the game will
+    refuse. Found by a real .gp4 whose track 3 drops to 96 against the song's 127
+    while tracks 4 and 5 are constant -- the tab is playable, one of its tracks is
+    not, and it was being offered.
     """
     suggested_number = suggested.number if suggested is not None else None
     infos = []
     for track in playable_tracks(song):
+        if changes_tempo(song, track):
+            continue
         count = count_notes(track)
         if count == 0:
             continue
