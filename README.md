@@ -51,10 +51,15 @@ which on a full screen is the whole screen rather than a size we chose. It waits
 for the window to be exposed before reporting, because until the WM has done its
 round trip the window is still sitting at its minimum size.
 
-Four of the six screens are real: the main menu, **song select** (pick a tab, pick a
-track, tune the audio offset), **import GP** (copy a tab into the library) and
-**preferences**. **Game** and **Results** are placeholders — pressing Play gets you
-to a screen that says so.
+Five of the six screens are real: the main menu, **song select** (pick a tab, pick a
+track, tune the audio offset), **import GP** (copy a tab into the library),
+**preferences**, and **game** — a horizontal note highway with the current note on
+the centre line, played with the number keys `1`–`6` and judged PERFECT/GOOD/MISS.
+**Results** is a placeholder; the score shows in the HUD during play.
+
+There is no audio yet. The game runs on a wall clock, so it tells you whether the
+lanes and keys line up but not whether the timing *feels* right — the audio clock is
+the next milestone.
 
 To look at a screen without launching the app:
 
@@ -138,7 +143,7 @@ guitaroids/
   settings.py user preferences                  pure, no Qt
   qtenv.py   Qt plugin bootstrap
 scripts/     setup, asset fetchers, import report, screenshots
-tests/       468 tests
+tests/       567 tests
 songs/       your tabs and audio (gitignored)
 ```
 

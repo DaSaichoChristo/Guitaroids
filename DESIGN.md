@@ -1767,3 +1767,162 @@ changed here.
 - **The music game's highway is not built**, so the note lane widths, fret markers
   and hit flashes have no scale story at all yet. That is the screen that will
   actually need the factor most, and it will arrive with the scale already in place.
+
+---
+
+## §15 — The game screen (2026-09-26)
+
+Milestone 2 of §1.8: highway, transport and metronome, keyboard test mode. The
+metronome is the one part deferred, and §15.6 says why that is a scheduling fact
+rather than a redesign.
+
+**Tests: 567, all passing. Verified on `xcb` at 1600x900 with the real tab.**
+
+### 15.1 Three layers, and the split is the point
+
+```
+ui/widgets/highway.py   pure render: (chart, position, zoom) -> pixels
+session/judge.py        pure logic: the windows, and pending-note state
+ui/game.py              owns the clock, routes keys, drives the other two
+```
+
+The widget owns **no clock**. `set_position(seconds)` in, pixels out. That is what
+makes it renderable to a `QImage` with no audio device, no camera and no event
+loop — and therefore the first thing in this suite whose *rendered output* can be
+asserted on. Everything before this checked sizes and positions, which catches a
+layout that overlaps and cannot catch a widget that draws the wrong thing.
+
+### 15.2 The orientation change, and what it costs
+
+The highway is **horizontal**: time runs left to right, lanes are stacked rows, and
+a vertical playline sits at the centre. This contradicts two earlier decisions:
+
+| | §1.1/§1.4 said | now |
+|---|---|---|
+| highway | "scrolls toward a hit line" (vertical) | time → x, vertical playline |
+| input | "fretting hand **x**-position → lane" | lane must come from hand **y**-position |
+
+`lane = string - 1` is unaffected — the *data* is identical, only the axis changes.
+But the hand-tracking model has to change, because x-position selected a lane only
+by virtue of lanes sitting side by side.
+
+**Hand tracking is unbuilt, so this cost nothing but a paragraph.** The same change
+made after mediapipe is wired would be a rewrite of the input pipeline. That is the
+whole argument for writing §1.4 down when a design is *considered* rather than when
+it is *implemented*: a decision nobody recorded is a decision nobody revisits.
+
+Two things the orientation gains:
+
+- **Full chords draw well.** In `collapse_chords=False` mode the real tab has 4099
+  notes, and simultaneous notes share an x and stack vertically. On a classic
+  highway that is a wide blob; on a timeline it is a clean chord shape.
+- **The fret number is legible**, because a note is 32px wide and 100px tall at the
+  default zoom rather than a small trapezoid.
+
+And one it does not: with `CollapseRule.HIGHEST`, 68% of the real chart is lane 0,
+so the highway reads as one busy row with occasional excursions. That is the
+collapse rule, not the orientation, and it is the right default for practising a
+melody.
+
+### 15.3 Windowing, and why the paint loop is cheap
+
+`chart.notes` and `chart.bar_lines` are both time-sorted, and the chart caches both
+time arrays as tuples so `visible_notes()` is a `bisect` per paint. At 200px/s in a
+1200px widget that is ±3 seconds: **10–18 notes** for the real library, against 1108
+in the chart. Iterating all of them every frame is the slow path and there is a test
+asserting the drawn count equals the window.
+
+`set_position` only stores and calls `update()`. All drawing happens in
+`paintEvent`; nothing per-frame happens outside it.
+
+### 15.4 Four bugs that only a render would find
+
+- **The hit zone was painted over the notes.** It hid the one note that matters
+  most — the one being played. It is now under them, with the playline on top. The
+  first test for this *passed with the bug present*, because it only asserted that
+  pixels varied near the centre, which the playline guarantees regardless. Rewritten
+  to check the note's own colour survives, and verified to fail with the bug back.
+- **The HUD labels were parentless.** A parentless `QLabel` is a *top-level
+  window*; `show()` on one opens a second window floating over the game.
+  `heading()` and `constrained_button()` now take a `parent`.
+- **The highway had no layout and was never resized**, so it sat at its default
+  640×480 inside the window. `_place_hud()` runs from `resizeEvent` *and* once at
+  the end of `__init__` — a widget that has never been resized has received no
+  `resizeEvent`, so the first frame would have been wrong.
+- **The HUD needed `background: transparent`**, or the default `QWidget` fill
+  painted opaque rectangles over the alternating lane bands.
+
+### 15.5 A game cannot depend on Qt focus
+
+Qt grants focus only to an **active** window. So a digit key can land on the window
+background or the Back button instead of the game screen, and the game is silently
+unplayable. This surfaced because the offscreen test platform has *no* focused widget
+at all.
+
+The screen installs an application event filter while visible, consumes only the six
+lane keys, and passes everything else through — Space still activates the button,
+Escape still navigates back, and an event aimed at the screen itself is passed
+through so `keyPressEvent` handles it exactly once. The filter is removed on hide,
+**with a test**, because a filter left installed keeps playing the game from the
+menu.
+
+### 15.6 The clock is a wall clock, and what that means
+
+`QElapsedTimer`, not the audio transport. This is a scheduling fact, not a
+reprimand:
+
+- It is **self-consistent.** The number drawn on the highway and the number judged
+  against come from one source, so a press exactly as a note crosses the playline
+  scores PERFECT. That is enough to verify lane/key alignment, note timing, hit
+  feedback, and the whole judging path — which is what a *test mode* is for.
+- It **cannot say whether the game feels right.** That needs §1.5's audio clock and
+  a metronome the player can hear.
+
+§3.5 calls the click-placement test *"the highest-value test in the project"* and
+schedules it **before** the highway widget. It did not get there first, and by the
+time the highway existed the widget was already pure, so the audio work is now an
+additive milestone rather than a rewrite of anything here. That is the argument for
+ordering by risk, and this section is the receipt for having got the order wrong.
+
+### 15.7 Judging decisions
+
+- **Strays are counted, never penalised.** The real chart is 68% one lane after
+  collapse; counting faking-through-a-solo as a miss would punish the exact
+  behaviour a practice tool exists for.
+- **The press window is `MISS`, not `GOOD`.** A press 100ms off is within the 140ms
+  a note lives for, so it resolves *that note* as a MISS. Searching only ±80ms would
+  make it a stray **and** let the note expire separately — reporting one mistimed
+  hit as two failures.
+- **The 80–140ms band is a MISS, not a straddle.** §1.6 says "miss past 140ms",
+  which describes *expiry* and leaves the band between unaddressed. Treating it as a
+  wrong hit is the common rhythm-game convention and resolves the note exactly once.
+- **`accuracy` is hits over notes judged *so far*.** It was `resolved / note_count`,
+  and `resolved` counts misses, so a run where every note was missed reported
+  **100%**. `song_accuracy` is the separate whole-chart figure for the results
+  screen.
+- **Notes are drawn a fixed 0.16s wide**, not from `duration_beats`, which is 0.0 for
+  every note in the real tab. 0.16 is deliberately under the smallest gap in that
+  tab (197ms, a 16th at 76bpm) so notes never touch at the default zoom.
+
+### Not done — §15
+
+- **No audio at all.** The clock is a wall clock (§15.6). Nothing has ever been
+  heard, and §1.5 remains the largest untested risk in the project.
+- **No hand tracking**, so the §15.2 input change is theoretical. The keyboard path
+  is the only input, and it is the one that works.
+- **The results screen is still a placeholder.** Counts are shown in the HUD and go
+  nowhere; `song_accuracy` has no consumer.
+- **No hit feedback beyond a word.** Judged notes are not marked on the highway;
+  `GameState.by_note` and `GameState.verdict_at` exist for it and nothing reads them.
+- **Only one key mapping**, hard-coded, with no settings and no alternative layout
+  for players who want `A S D F G H`. `collapse_chords=False` is a setting the
+  highway honours but nothing in the UI can change mid-game.
+- **The zoom is fixed at 200px/s.** Not a setting, and not adjusted for song density
+  — a 6nps chart and a 1nps chart get the same pixels per second.
+- **No full chords were played.** 4099-note mode is the case the orientation is
+  argued to suit, and it was verified on a synthetic chart only.
+- **Windowing is a bisect per paint, not cached.** Fine at 18 notes; a much denser
+  chart would want the static layer (lane bands, bar lines) in a pixmap, which this
+  section did not build.
+- **Nothing was verified at HiDPI**, as §14. Same gap, now with a `QPainter` surface
+  in it.

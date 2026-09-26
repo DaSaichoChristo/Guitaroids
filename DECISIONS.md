@@ -143,13 +143,39 @@ The three `assumed` rows have never been seen hold:
 | Decision | Status | Ref |
 |---|---|---|
 | Keyboard input **always** works as a fallback — a demo on an unfamiliar laptop has no camera and must not crash | live | §1.1 |
-| Fretting hand x-position → lane, EMA-smoothed with hysteresis | planned | §1.4 |
 | Strumming hand's downward wrist velocity fires all active lanes | planned | §1.4 |
 | Input-latency calibration lands **before** hand tracking, not after | planned | §4.1 |
 | Camera feed mirroring direction (affects handedness) | planned | §1.6 |
+| Hit windows: Perfect ±35ms, Good ±80ms, **expire past 140ms** | live | §1.6, §15.7 |
+| The 80–140ms band resolves the note as a **MISS**, not a stray — one hit, one outcome | live | §15.7 |
+| **Strays are counted but never penalised** — the real chart is 68% one lane after collapse | live | §15.7 |
+| `accuracy` is hits over notes **judged so far**; `song_accuracy` is the whole-chart figure | live | §15.7 |
+| Keys **1–6** for lanes 0–5, hard-coded; the only mapping there is | live | §15 |
+| The game **does not depend on Qt focus** — an app-wide filter catches the lane keys while visible | live | §15.5 |
+| The game clock is a **wall clock** for now; the audio clock of §1.5 is the next milestone | live | §15.6 |
+
+**⚠ §1.4's "fretting hand x-position → lane" is SUPERSEDED by §15.2.** The highway is
+horizontal, so lanes are rows and lane must come from the player's **y**-position.
+The hand-tracking pipeline is unbuilt, so nothing has to be rewritten — but the
+correction has to be made *before* tracking starts, not after.
 
 **Camera latency is expected to dominate all audio-side error.** The chain is
 `camera buffer (~30–100ms) → capture thread → inference → lane decision → judge`,
 and the figure scales with camera hardware rather than with our code. That is why
 calibration is its own milestone rather than a setting buried in the end
 (§4.1).
+
+## The highway
+
+| Decision | Status | Ref |
+|---|---|---|
+| **Horizontal**: time → x, lanes as rows, a vertical playline at the centre | live | §15.2 |
+| **Lane 0 at the bottom** — fretboard order, so the highway matches the instrument | live | §15.2 |
+| The widget is **pure render**: `(chart, position, zoom)` → pixels, no clock | live | §15.1 |
+| Visible notes come from a **bisect** on cached time arrays, not a full scan | live | §15.3 |
+| The hit zone is drawn from `GOOD_SECONDS` itself, so the drawn tolerance and the judged one cannot drift | live | §15.1 |
+| The hit zone is painted **under** the notes; the playline is on top | live | §15.4 |
+| The HUD is an **overlay** — the highway keeps the whole window | live | §15.4 |
+| Notes are a fixed 0.16s wide, under the real tab's smallest gap of 197ms | live | §15.7 |
+| One colour per lane, blue→red hue ramp, separate from `COLORS` | live | §15 |
+| Default zoom 200px/s — 10–18 notes visible; not a setting | live | §15 |

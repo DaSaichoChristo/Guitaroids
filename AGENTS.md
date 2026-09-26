@@ -62,14 +62,18 @@ says what ran.
 
 ## Current state
 
-`tests/` is 468 tests, all passing. **Four of the six screens are real:** the main
-menu, song select (tab + track + audio offset), import GP, and preferences. **Game
-and Results are still placeholders** — the note highway, judging and scoring are the
-whole of what remains before the app does anything playable.
+`tests/` is 567 tests, all passing. **Five of the six screens are real:** the main
+menu, song select (tab + track + audio offset), import GP, preferences, and **game** —
+a horizontal note highway with a six-key keyboard test mode and PERFECT/GOOD/MISS
+judging. **Results is still a placeholder**; counts are shown in the HUD and go
+nowhere.
 
-`model/chart.py`, `model/repeats.py`, `songlib.py`, `settings.py`, `importer.py` and
-`session/play_request.py` are pure. `context.py` holds the shared state and is also
-pinned Qt-free. `ui/` holds the screens plus a background library loader.
+`model/chart.py`, `model/repeats.py`, `songlib.py`, `settings.py`, `importer.py`,
+`session/play_request.py` and `session/judge.py` are pure. `context.py` holds the
+shared state and is also pinned Qt-free. `ui/` holds the screens, a background
+library loader, and `ui/widgets/highway.py` — which is **pure render** and owns no
+clock, so it can be rasterised to a `QImage` and asserted on with no audio device and
+no event loop. That is the only way this suite checks rendered output.
 
 Check the song library without launching the GUI:
 
@@ -131,10 +135,13 @@ hijack is gone. Re-verify after any dependency change with
 
 ## The next blocker
 
-`DESIGN.md` §11's "Not done" list. **Nothing has ever played audio**, and the note
-clock (§1.5) is still the largest untested risk in the project — it is the thing
-most likely to make the app feel broken in a way that is hard to diagnose. There is
-a `.gp5` in `songs/` now, but still no backing audio file.
+`DESIGN.md` §15.6. **Nothing has ever played audio**, and the note clock (§1.5) is
+still the largest untested risk in the project — the thing most likely to make the
+app feel broken in a way that is hard to diagnose. The game currently runs on a
+`QElapsedTimer`, which is self-consistent but cannot say whether the game *feels*
+right. §3.5 calls the click-placement test "the highest-value test in the project";
+do that next, then the sounddevice transport behind the same interface the game
+screen already calls.
 
 ## Audio
 
