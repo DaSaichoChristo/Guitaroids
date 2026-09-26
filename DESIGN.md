@@ -1,0 +1,1202 @@
+# DESIGN.md — design & work log
+
+Guitaroids. A Guitar Hero-style app that tracks your hands via webcam and walks you
+through Guitar Pro tabs at tempo, counting misses.
+
+**This file is the project's memory.** §1 is the original plan. Everything after that
+is dated work entries.
+
+> **Want the decisions, not the history?** Read [`DECISIONS.md`](DECISIONS.md) — a
+> one-screen index of every current decision with a status and a link to the
+> section here that justifies it. The pointer is the only navigational addition
+> this preamble has ever received; no section has been edited.
+
+## The convention (this file's rule about itself)
+
+This log is **append-only**. Each unit of work appends a new numbered, dated section
+at the end. Earlier sections are never edited.
+
+When something later turns out to be wrong, do **not** fix it in place. Append a
+section that names the section it overturns by number, states what was believed, what
+the evidence showed, and what changed. **The higher-numbered section wins.**
+
+Each section ends with an explicit **Not done** list: what was skipped, what was
+deferred and why, and what is still unverified. Claims carry their evidence — what
+ran, what the numbers were. An assumption that could not be checked is written as an
+assumption, in those words.
+
+Sections are addressed as `§N` and `§N.M`. They are stable addresses, so "§4.1
+supersedes §2" resolves without ambiguity.
+
+---
+
+## §1 — Plan (2026-09-26)
+
+First pass. No code written. Decisions below were reached by discussion; the
+dependency facts in §2 were verified against upstream sources.
+
+### §1.1 Product
+
+Walk a `.gp5` tab at the tab's own tempo. A 6-lane note highway scrolls toward a hit
+line. The player selects a lane with their fretting hand and strikes with their
+strumming hand. Misses are counted. `.gp5` files carry no audio, so sound is a
+metronome built from `song.tempo`, plus an optional backing audio file placed
+alongside the tab.
+
+### §1.2 Stack
+
+| Package | Role |
+|---|---|
+| PySide6 6.11 | Qt **Widgets + QPainter** (not QML — a note highway wants direct 2D control) |
+| mediapipe 1.0.1 | Hand landmarks, Tasks API only |
+| opencv-contrib-python-headless | Camera capture (forced transitive dep — see §2.2) |
+| PyGuitarPro 0.11 | `.gp5` parsing (already in `requirements.txt`) |
+| numpy ≤ 2.2.6 | Python 3.10 caps the available numpy |
+
+`mediapipe` pulls `sounddevice~=0.5` transitively, so audio output arrives free.
+
+### §1.3 Layering
+
+Four layers, strictly one-directional. Nothing below imports anything above it.
+
+```
+L4  ui/          widgets, QPainter, navigation
+L3  session/     GameSession, Judge, scoring
+L2  devices/     Transport, HandTracker, camera
+L1  model/       Chart, Note, TimeScale   (pure data, zero I/O)
+```
+
+Two rules hold it together:
+
+- **L1 is pure.** `charts.py` imports no Qt, no OpenCV, no sounddevice. This is what
+  makes the chart parser testable with no camera, no audio device, and no display —
+  which is most of the time, on a hackathon.
+- **L2 devices never import L3/L4.** `HandTracker` does not know what a lane is. It
+  emits normalized hand positions and strum events; `GameSession` assigns meaning.
+  Swapping camera input for keyboard becomes a one-file change.
+
+### §1.4 Threading
+
+| Thread | Owns | Rule |
+|---|---|---|
+| Main (Qt) | all widgets, paint, key events | never calls `cap.read()`, `write()`, or inference |
+| Audio | PortAudio stream, click track | **master clock** |
+| Capture + tracking | `cv2.VideoCapture`, `HandLandmarker` | emits frames and landmarks |
+
+Cross-thread communication is signals carrying **immutable snapshots**, never shared
+mutable state. If tracking stalls, rendering keeps 60fps and holds the last pose.
+
+**`VIDEO` mode, not `LIVE_STREAM`.** `LIVE_STREAM` + `detect_async` silently drops
+frames when busy; in a rhythm game, silently dropped input frames are invisible
+latency. `VIDEO` + `detect_for_video(image, timestamp_ms)` processes every frame we
+hand it, timestamped by us, on our own thread.
+
+### §1.5 The clock
+
+`Stream.write()` returns when the device has **consumed** the samples, not when they
+are audible. Two consequences, both from the sounddevice 0.5.6 docs:
+
+- `Stream.time` is a free-running clock — *"Starting and stopping the stream does not
+  affect the passage of time as provided here."* It is **not** a song position.
+- `Stream.latency` is the device's output latency.
+
+So audible song position is:
+
+```python
+song_pos = (stream.time - t0) - stream.latency
+```
+
+Both terms are required. Omitting `latency` makes every note read 10–20ms early,
+systematically — inside a ±35ms Perfect window that is a persistent bias that reads
+as "the app is broken." Also: `blocksize=0`, and surface `stream.cpu_load`,
+`status.output_underflow`, and `write()`'s underflow return in a debug HUD, because
+audio glitches otherwise look identical to application bugs.
+
+### §1.6 Timing model
+
+```python
+seconds = beat.start / 960 * (60 / song.tempo)    # 960 = Duration.quarterTime
+```
+
+`beat.start` is an absolute tick. Hit windows: Perfect ±35ms, Good ±80ms, Miss past
+140ms. One bar of count-in before t=0.
+
+**Lane = the tab's string number − 1.** Existing `.gp5` fingering lands on the
+highway with no mapping table. `fret` is carried for display only; lane is judged.
+
+### §1.7 Screens
+
+`QStackedWidget` over a `Screen` enum. One rule: **screens never own game objects.**
+Leaving a screen tears down its widgets; `GameSession` outlives them and is passed
+into the replacement. Otherwise audio streams and camera handles leak on every
+navigation and the app crashes on the third song.
+
+### §1.8 Milestones
+
+1. Shell + song select — scan `songs/`, parse `.gp5`, list title/artist/tempo.
+2. Highway + transport + metronome, **keyboard test mode** (6 keys).
+3. Judging, scoring, results screen, miss counter.
+4. Hand tracking + calibration + lane mapping, keyboard retained as fallback.
+5. Optional backing audio, polish.
+
+Milestone 2 is deliberately playable with no camera. It is the main de-risking move:
+the entire game becomes debuggable while tracking is still broken.
+
+### Not done — §1
+
+- **No code written.** Nothing in this section has been executed.
+- **No dependency installed.** No claim here is backed by a running import.
+- **No `.gp5` file is present in the repo.** Milestone 1 cannot be verified until
+  someone sources a tab. Unresolved and blocking.
+- **Empty scaffolding already in the repo** — `business/`, `data/`, `presentation/`
+  (all empty directories) and a zero-byte `main.py`, all untracked. Their intended
+  relationship to the `guitaroids/` package layout in §1.3 is **unconfirmed**. Not
+  reconciled; flagging rather than overriding.
+- Unanswered from the user: hammer-on/pull-off support (§1.6 judges strums only);
+  tempo-change handling; camera mirroring direction; difficulty filtering.
+- No tests written. §1.3's testing seams are described, not built.
+
+---
+
+## §2 — Dependency research (2026-09-26)
+
+Verified against upstream sources before any install. Each finding cites what was
+checked. This section exists because two of these silently invalidate the plan in §1.
+
+### §2.1 mediapipe 1.0 deleted the legacy hand API
+
+`mp.solutions.hands` no longer exists. Google describes that legacy path as
+"completely ended." Only the Tasks API is available:
+
+```python
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+
+options = vision.HandLandmarkerOptions(
+    base_options=python.BaseOptions(model_asset_path="assets/hand_landmarker.task"),
+    running_mode=vision.RunningMode.VIDEO,   # not LIVE_STREAM, per §1.4
+    num_hands=2,
+)
+```
+
+Result object, read from `mediapipe/tasks/python/vision/hand_landmarker.py` @ master:
+
+- `hand_landmarks: list[list[NormalizedLandmark]]` — normalized image coords
+- `handedness: list[list[Category]]` — `category_name` is `"Left"`/`"Right"`,
+  plus `score`, `index`
+- `hand_world_landmarks: list[list[Landmark]]` — metric coords
+
+`handedness` and `hand_landmarks` are **index-parallel lists**, not separate
+per-handedness fields.
+
+Requires a model file. Verified reachable, HTTP 200, 7,819,105 bytes:
+
+```
+https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
+```
+
+Decision: **vendor it into `assets/`** so a fresh clone needs no network.
+
+### §2.2 The OpenCV ↔ PySide6 conflict is real — highest risk in the stack
+
+mediapipe 1.0.1's `requires_dist` includes **`opencv-contrib-python`** — the GUI
+build, not headless. That build ships its own Qt plugins under `cv2/qt/plugins`,
+which hijack `QT_PLUGIN_PATH` and produce the documented failure:
+
+```
+qt.qpa.xcb: could not connect to display
+Could not load the Qt platform plugin "xcb" in ".../site-packages/cv2/qt/plugins"
+```
+
+This is why projects built on this combination fall back to pygame. Mitigation, in
+order:
+
+1. Uninstall `opencv-contrib-python`; install `opencv-contrib-python-headless` at the
+   **identical version number.** Mismatched cv2 builds are a separate bug class.
+2. Defensively set `QT_PLUGIN_PATH` to PySide6's bundled plugins in the entrypoint,
+   before any Qt import.
+3. Never call `cv2.imshow` — headless costs nothing here.
+
+**This is the first thing to test, on day one, before writing game code.** If §1.2's
+stack cannot open a window, the framework choice in §1.2 is wrong and everything
+downstream changes.
+
+### §2.3 Audio device ownership
+
+Qt does **zero** audio playback; `sounddevice` (PortAudio) owns the device
+exclusively. PortAudio cannot share a device portably, and we need the audio clock
+from §1.5 regardless. This removes a class of conflict rather than managing one.
+
+### §2.4 sounddevice API notes (0.5.6)
+
+- `OutputStream(...).write(data)` blocks until the device consumes the buffer.
+  Blocking write mode from a dedicated thread is sufficient; a stream callback is
+  not required.
+- `write()` returns an `underflowed` bool. Track it.
+- The stream callback runs at real-time priority and must not allocate, do file I/O,
+  or call PortAudio. Therefore the click track is **pre-rendered into a numpy buffer
+  before the stream starts**, and the audio thread only slices it.
+- `latency='high'` is the default and is "typically too large for interactive
+  applications" per the docs — actively wrong for a rhythm game.
+
+### §2.5 Python version ceiling
+
+- numpy 2.5.3 declares `requires_python >= 3.12`. On this repo's Python 3.10.12, the
+  newest numpy with a cp310 manylinux x86_64 wheel is **2.2.6**.
+- mediapipe 1.0.1, PySide6 6.11.2, and sounddevice 0.5.6 all ship cp310 wheels.
+- opencv-python-headless uses `cp37-abi3` wheels, which install on 3.10.
+
+### Not done — §2
+
+- **Nothing was installed and no import was run.** Every finding above is from
+  upstream metadata and documentation, not from this machine. §2.2 in particular is
+  read from issue reports and must be reproduced locally before it is trusted.
+- The wheel-version compatibility *between* mediapipe 1.0.1 and a specific
+  opencv-headless build is unverified. §2.2 requires a matching version number but
+  the required number was not determined.
+- The 7.8MB model file was confirmed reachable but **not downloaded** and not yet
+  committed to the repo.
+- mediapipe's `VIDEO`-mode behavior under a slow capture loop is untested; §1.4's
+  reasoning is from documentation, not measurement.
+- §2.4's `latency` magnitude on the actual demo hardware is unknown, so the size of
+  the bias described in §1.5 is estimated from the docs, not measured.
+
+---
+
+## §3 — Backing audio pipeline (2026-09-26)
+
+Decision: backing audio is **in scope for v1**, not optional. §1.1 called the audio
+file "optional"; this section makes it a first-class input. It does not contradict
+§1.1 — a tab with no audio still plays, in metronome-only mode.
+
+§1.2's audio decision (`sounddevice` owns the device, Qt plays nothing) is
+**upheld**, and §2.3's reasoning is confirmed by the Qt API survey in §3.2.
+
+### §3.1 Decoder selection — soundfile
+
+Surveyed every candidate for a self-contained cp310 wheel that decodes mp3:
+
+| Package | Verdict | Evidence |
+|---|---|---|
+| **soundfile 0.14.0** | **chosen** | Self-contained `manylinux_2_28_x86_64` wheel, `requires_python >=3.10`. MP3 via libsndfile 1.1.0+, which added MPEG decode using libmpg123. Only dep is numpy. |
+| `av` 18.1.0 | rejected | `requires_python >=3.11`. Unavailable on this repo's 3.10.12. |
+| `pydub` 0.25.1 | rejected | No wheels; requires an `ffmpeg` binary on the host machine. Unacceptable for a demo on an unfamiliar laptop. |
+| `miniaudio` 1.71 | held in reserve | `cp310 manylinux_2_24` wheel, one dep (cffi), decodes mp3/flac/vorbis. Note: published as `miniaudio`, **not** `pyminiaudio` — the latter is 404 on PyPI. |
+| `soxr` 1.1.0 | fallback only | `cp310` wheel present. Needed only if a device rejects the file's native rate. |
+
+**No resampler in the happy path.** The PortAudio stream is opened *at the audio
+file's own sample rate* and the host API's converter handles the difference.
+`stream.time` is in seconds regardless of rate, so §1.5's formula is unaffected.
+
+### §3.2 The clock survives; Qt is ruled out with numbers
+
+§2.3 rejected Qt audio on the grounds that PortAudio and Qt fight over the device.
+That reason is weaker than the real one, which is that **Qt cannot supply a
+device-accurate position at all**:
+
+- `QMediaPlayer.position()` — disqualified. Observed `positionChanged` granularity
+  is ~50ms (`1828 1828 1828 1880 1880 1880 1933`), and on macOS it snaps to
+  keyframes. Against a ±35ms Perfect window this is not a clock.
+- `QAudioSink` — capable but not equivalent. It exposes `elapsedUSecs()` and (new in
+  6.11) `processedUSecs()`, but Qt's own source shows `elapsedUSecs()` returns
+  `d->elapsedTime.nsecsElapsed()` — a **wall clock**, not a device clock. Qt 6.6+
+  docs state the sink's buffer size is "determined by the audio backend", so the
+  term §1.5's `- stream.latency` depends on is neither controlled nor readable.
+  The default ringbuffer is 250ms, which is an order of magnitude past the Perfect
+  window.
+
+PortAudio remains the choice because its docs make the intended use explicit:
+`Stream.time` "may be used for synchronizing other events to the audio stream, for
+example synchronizing audio to MIDI," and `Stream.latency` is the implementation's
+own measured estimate rather than a backend-determined unknown.
+
+### §3.3 One buffer, one stream, one clock
+
+Resolves the "which clock is authoritative" question permanently — the click and the
+music are the same samples, so they cannot disagree.
+
+```
+buffer = [ count-in bars: click only ][ song: music + additive clicks @ 0.25 gain ]
+                                  ↑ song_pos = 0 here
+```
+
+Clicks are summed over the music rather than ducking it — cheaper, and good enough
+at low gain. Click generator produces samples at the stream's rate, so click
+placement is exact by construction.
+
+```python
+transport_pos = (stream.time - t0) - stream.latency
+song_pos      = transport_pos - count_in_seconds - user_offset
+```
+
+This **extends** §1.5 rather than replacing it: same clock, same `- stream.latency`
+term, plus two constant offsets.
+
+### §3.4 Conventions and degradation
+
+- **Pairing:** `songs/<slug>.gp5` + `songs/<slug>.{mp3,ogg,wav,flac}`, same basename,
+  extension search ordered. Missing audio → **metronome-only mode**, badged in the
+  UI. Not an error path.
+- **Offset:** manual slider, persisted per song, default 0. Tabs are transcriptions
+  and the music rarely starts exactly at tick 0. Auto-detection by onset
+  cross-correlation is a stretch goal, explicitly not v1.
+- **Count-in:** configurable 0–2 bars, **default 1 bar**. Songs whose audio already
+  opens with a lead-in turn it to 0.
+- **Duration mismatch:** play to `max(audio_length, last_note_time)`, then fade out.
+- **Attribution:** audio files are not committed. `.gitignore` covers them;
+  `songs/ATTRIBUTION.md` records provenance. If CC-BY music is used, a credits line
+  is a product requirement, not a nicety.
+- **Decode** happens on a worker thread with a progress indicator and cancel;
+  a 4-minute stereo 48kHz float32 buffer is ~92MB, allocated up front.
+
+### §3.5 The highest-value test in the project
+
+The timing core is verifiable **with no sound card, no camera, and no display**.
+Build a mix buffer for a synthetic chart at a known tempo and assert every click
+lands on its exact expected sample index:
+
+```python
+assert click_indices == [i * samplerate * 60 // bpm for i in range(beats)]
+```
+
+That one assertion exercises chart parsing, tempo math, buffer assembly, and the
+click generator together. It is scheduled **before** the highway widget, not after,
+because it is the only cheap way to catch a tempo or offset bug before a human
+notices it as "the game feels wrong."
+
+### Not done — §3
+
+- **No decoder was installed or executed.** §3.1 is wheel-metadata research. Whether
+  soundfile 0.14.0 decodes the actual mp3s cleanly on this machine is untested.
+- **An mp3 decode edge case is known but unmeasured:** libsndfile's changelog lists a
+  fix for "Reading MP3 files without Xing or INFO headers," so variable-bitrate
+  files without headers should work — but the specific files have not been tried.
+- **ogg from ffmpeg is best-effort.** libsndfile has a documented history of failing
+  on some ffmpeg-produced opus streams. Prefer mp3 or wav; treat ogg as untested.
+- **The `soxr` fallback path does not exist yet** and the device-rejects-the-rate
+  condition has never been observed. It is speculative.
+- `stream.latency` in §3.3 is still an estimate, and the 10–20ms bias described in
+  §1.5 is still inferred from documentation, not measured on this hardware.
+- **No audio files and no `.gp5` files exist in the repo.** The whole pipeline is
+  unexercised end to end, and this remains the top blocker.
+- Hammer-ons/pull-offs remain unimplemented; §3.3's `song_pos` says nothing about
+  whether a note may be satisfied by fretting alone.
+
+---
+
+## §4 — Input latency, and a revised milestone order (2026-09-26)
+
+### §4.1 Input latency now dominates
+
+§1.5 and §3.3 make the **output** side accurate. The **input** side is worse, and
+§3 made it matter: a player following real music is far more sensitive to timing
+error than one following only a click.
+
+Evidence, from a shipping rhythm-game codebase (Funkin, PR #7790) measuring the
+same class of problem for *keyboard* input:
+
+> "there is latency between the exact frame the input was pressed and the frame at
+> which the input is actually being processed… Tested it out and the latency seems to
+> be framerate dependent, on 60 FPS I was getting around ~15-20ms while on 30 FPS it
+> was above 30ms."
+
+That is for keys. Our path is strictly longer:
+
+```
+camera buffer (~30-100ms) → capture thread → inference → lane decision → judge
+```
+
+A typical webcam buffers more than the entire audio chain above was designed to
+correct, and the figure scales with camera hardware rather than with our code. It is
+plausibly the largest single error term in the product.
+
+Consequences, both new:
+
+- **A per-user input-latency offset** is required before hand tracking is usable:
+  auto-estimated by tapping along to the metronome, plus a manual slider override.
+- **Raw input timestamps are logged**, so the real number is measured rather than
+  assumed. The estimate above is from someone else's codebase on other hardware.
+
+### §4.2 This supersedes §1.8's milestone order
+
+§1.8's five milestones are preserved in substance. The ordering gains a hard gate
+and one new step. Per this file's convention, §1.8 is left standing and superseded
+here rather than edited.
+
+- **M0 — unblock (new gate).** Install, resolve §2.2's cv2/Qt plugin conflict,
+  **open a window**. Nothing else starts until this passes. If it cannot pass, the
+  §1.2 framework choice is wrong and every later section needs revisiting.
+- **M1 — pure core, no hardware.** Chart parser, `build_mix_buffer`, and §3.5's
+  sample-exact click test.
+- **M2 — shell + song select.** Scan `songs/`, parse, pair with audio, offset and
+  count-in settings.
+- **M3 — highway + transport + results.** Judging, scoring, miss counter. Playable
+  on 6 keyboard keys with no camera.
+- **M4 — input-latency calibration (new).** Tap-along estimator + manual slider.
+  Lands *before* tracking, per §4.1.
+- **M5 — hand tracking + hand calibration.** Fret-hand x → lane with EMA and
+  hysteresis, strum detection. Keyboard retained as fallback throughout.
+- **M6 — polish.** Credits/attribution line, difficulty filter, hammer-ons if in
+  scope.
+
+The ordering principle: **prove the timing chain offline (M1), then make the game
+playable without a camera (M3), so tracking is never on the critical path.**
+
+### Not done — §4
+
+- **The 30–100ms camera figure is not measured on this hardware** and no camera has
+  been tested. It is a documented-typical range, cited as such.
+- The Funkin numbers are for a different engine, input device, and machine. They
+  establish that the effect is real and framerate-dependent; they do not predict our
+  value.
+- §4.2 changes ordering only. No milestone in it has started.
+- Whether the tap-along estimator can separate *input* latency from the player's own
+  reaction bias is unresolved — it likely cannot, which may make it a coarse
+  calibration rather than a measurement. Untested.
+- The §1.6 open questions (hammer-ons, tempo changes, camera mirroring, difficulty
+  filtering) are all still open. None is answered in this section.
+
+---
+
+## §5 — M0 executed: the gate passes (2026-09-26)
+
+M0 is the hard gate from §4.2. **It passed.** This is the first section in the log
+backed by a command that actually ran on this machine.
+
+### §5.1 §2.5's Python version analysis was wrong — the venv is 3.14
+
+§2.5 analysed version ceilings against **Python 3.10.12** and concluded numpy was
+capped at 2.2.6, and §3.1 rejected `av` 18.1.0 for requiring `>=3.11`. Both rest on
+a wrong premise.
+
+The repo's `.venv` is **Python 3.14.6**, not 3.10. The system `python3` is 3.10.12,
+which is what misled the earlier check. Worse, the venv had been
+`venv --upgrade`d from 3.10 to 3.14, which left two `site-packages` trees:
+
+```
+.venv/lib/python3.10/site-packages/   <- guitarpro, PySide6 (orphaned, unusable)
+.venv/lib/python3.14/site-packages/   <- pip only; every real dep was missing
+```
+
+`pip list` reported a single package: `pip`. Nothing from `requirements.txt` was
+actually installed in the interpreter that would run the app. The earlier
+`PyGuitarPro` reads in §1 were against the **orphaned 3.10 tree** and happened to be
+valid for API shape, but nothing had been installed for the real interpreter.
+
+Corrections, per this file's convention, stated here rather than edited into §2.5:
+
+| §2.5 / §3.1 said | Actually |
+|---|---|
+| numpy capped at 2.2.6 | **numpy 2.5.3 installed** (3.10 ceiling does not apply) |
+| `av` 18.1.0 rejected, needs `>=3.11` | would have been available on 3.14 |
+| `opencv-contrib-python-headless` installs on 3.10 via `cp37-abi3` | installed as a native `cp314` wheel |
+
+§3.1's *conclusion* (use soundfile) still stands, but on different grounds: soundfile
+has one dependency (numpy) where `av` bundles ffmpeg. The stated rejection reason is
+void, not the decision.
+
+Lesson worth carrying: **check the interpreter the venv actually uses, not the
+system `python3`.** This nearly produced a requirements file pinned to the wrong
+Python.
+
+### §5.2 The §2.2 conflict was real, and is fixed
+
+Reproduced first, then fixed — not assumed.
+
+```
+BEFORE:  .venv/.../cv2/qt/plugins/platforms   <- present, the §2.2 hazard
+FIX:     pip uninstall -y opencv-contrib-python
+         pip install opencv-contrib-python-headless==5.0.0.93
+AFTER:   cv2/qt                               <- gone
+```
+
+Both OpenCV builds were version 5.0.0.93, so the "identical version" requirement in
+§2.2 is satisfied. `import cv2` succeeds (cv2 5.0.0), so the separate
+`libGL.so.1` failure mode reported in the mediapipe issue tracker does **not** apply
+on this machine.
+
+This is a **trap for `pip install -r requirements.txt`**: pip treats
+`opencv-contrib-python` and `opencv-contrib-python-headless` as unrelated
+distributions, so it will happily install the GUI build alongside our pin and
+silently reintroduce the conflict. `scripts/setup.sh` now encodes the correct order
+and runs the M0 gate as its last step.
+
+### §5.3 What M0 actually verified
+
+`tests/test_m0_window.py` — 6 tests, all passing:
+
+| Test | Result |
+|---|---|
+| PySide6 `Qt/plugins` + `libqxcb.so` resolve | pass |
+| `cv2/qt` does not exist (the §2.2 hazard, asserted not assumed) | pass |
+| all six dependencies import | pass |
+| `QT_PLUGIN_PATH` resolves to PySide6's plugins | pass |
+| real `QApplication` + `QPainter` pass, `offscreen` | pass |
+| real `QApplication` + `QPainter` pass, `xcb` on `:1` | pass |
+
+The window tests run in **subprocesses**, because `QApplication` is a process-wide
+singleton whose platform is fixed at construction. Testing two platforms in one
+process silently reuses the first application. This was found the hard way: an
+earlier version of the test appeared to pass both because the instance happened to be
+garbage-collected between tests, and only surfaced once the render assertion got
+stricter. Each test also asserts the `QPainter` pass produced **more than one
+colour**, so a blank surface cannot pass as success.
+
+`scripts/m0_visual_proof.py` captured the X root on `:1` (5360x1802) and
+**29,591 pixels match `#1b6b3a` exactly** — the stylesheet colour set on the test
+widget. The window is genuinely mapped and rasterised on a real display, not merely
+constructed.
+
+### §5.4 §2.1's API claims verified
+
+```
+HandLandmarker created OK (VIDEO mode, num_hands=2)
+detect_for_video OK
+fields: ['hand_landmarks', 'hand_world_landmarks', 'handedness']
+mp.solutions present: False
+```
+
+Every field §2.1 named exists with the documented type, and the legacy API is
+confirmed gone. `handedness` returns `[]` on a blank frame, consistent with the
+index-parallel structure §2.1 describes.
+
+`assets/hand_landmarker.task` downloaded: **7,819,105 bytes**, matching the
+Content-Length verified in §2.1 exactly.
+
+### Not done — §5
+
+- **Still no `.gp5` and no audio file in the repo.** M1 cannot be verified end to end
+  until real files are dropped into `songs/`. This is unchanged from §1 and §3 and
+  remains the only blocker, and the only one I cannot clear myself.
+- **No camera was opened.** `cv2` imports and the class exists; no device was
+  enumerated and no frame was read. The §4.1 30–100ms latency figure is still
+  unmeasured on this hardware.
+- **No audio device was opened.** `sounddevice` imports; PortAudio was never
+  initialised, no stream created, and `stream.latency` never read. §1.5's bias
+  estimate is still documentation-derived, not measured.
+- **M0 proves the stack runs, not that it performs.** Nothing here measures frame
+  rate, inference latency, or audio underflow. Those need M3/M5 on real hardware.
+- Only the `xcb` backend was exercised. Wayland (`libqwayland.so` is present) and
+  the `offscreen` path pass, but Wayland itself was not tested.
+- §1.6's open questions remain open: hammer-ons, tempo changes, camera mirroring,
+  difficulty filtering.
+- Nothing has been committed. The working tree holds the new files uncommitted.
+
+---
+
+## §6 — Song import system (2026-09-26)
+
+M1's code, minus the parts that need real files. Everything below is unit-tested and
+passing; nothing has been run against a real tab.
+
+```
+93 passed in 1.58s
+```
+
+### §6.1 Housekeeping
+
+`main.py`, `business/`, `data/`, `presentation/` removed. All four were empty and
+untracked — git does not track empty directories, so this was a no-op for version
+control and no data was lost (verified with `find` and `git ls-files` first).
+
+### §6.2 Requirements: curated, not frozen
+
+Three files, deliberately:
+
+| File | Contents |
+|---|---|
+| `requirements.txt` | 9 direct deps, curated, with the §2.2 opencv warning as a comment |
+| `requirements-dev.txt` | pytest only |
+| `requirements-lock.txt` | `pip freeze`, 31 packages, header-marked generated |
+
+`pip freeze` was **not** used to replace the curated list. It would have locked in
+`matplotlib` plus six packages nothing in this project imports (contourpy, cycler,
+fonttools, kiwisolver, pillow, pyparsing), mixed pytest into the runtime set, and —
+the real cost — overwritten the one comment that documents the opencv workaround.
+The lock file records the same caveats in its header so nobody installs from it by
+accident.
+
+Note the freeze confirms `opencv-contrib-python` (GUI) is **absent**, so the §2.2
+fix is currently holding in the environment.
+
+### §6.3 The `.gpx` wall
+
+`PyGuitarPro 0.11` recognises exactly ten version strings, all GP3/GP4/GP5
+(`guitarpro/io.py:11-24`). Anything else raises
+`GPException: unsupported version`. **Guitar Pro 7 and 8 save `.gpx` by default**,
+so most tabs downloaded today are unreadable by our parser. `.gpx` is a compressed
+XML format; supporting it means a new parser, not a config change.
+
+The user has confirmed their library is `.gp5`, so this is a documented wall rather
+than a blocker. It is surfaced as its own `Status.UNSUPPORTED_VERSION` so the reason
+is visible per file, and `songs/README.md` tells anyone dropping files in to
+convert first.
+
+### §6.4 Repeat unrolling
+
+Chosen over linear playback, and it is the least verifiable code in the repo.
+
+Semantics re-derived from source rather than assumed. `gp5.py:327-328` does
+`if header.repeatClose > -1: header.repeatClose -= 1`, so the attribute holds the
+file's pass count **minus one**, and `-1` is both the "no close" sentinel and what a
+file byte of `0` decodes to:
+
+| file byte | stored | passes |
+|---|---|---|
+| 0 | -1 | no repeat |
+| 1 | 0 | 1 (degenerate) |
+| 2 | 1 | 2 (standard double repeat) |
+| 3 | 2 | 3 |
+
+`passes = stored + 1`. **This mapping is derived from the reader, not confirmed
+against a real tab.** `test_stored_to_pass_mapping` pins it, and
+`repeats._repeat_passes` names itself as the line to flip if reality disagrees.
+
+A section is handled at its **opening** measure with the walk looking forward for
+the close. The first implementation handled it at the close, which double-emitted
+the opening measure — the plain walk had already passed through it on the way. Two
+regressions are pinned by name in `tests/test_repeats.py`:
+
+- `test_two_independent_sections` — a backward scan without a floor binds the second
+  section to the *first* section's opening measure, swallowing everything between.
+- `test_two_endings_last_one_wins` — endings sit after the close barline, so without
+  absorbing them into the section every ending plays in sequence.
+
+Note times are recomputed against a running offset, because repeated measures reuse
+their written ticks:
+
+```python
+seconds = (offset + (beat.start - header.start)) / 960 * (60 / tempo)
+offset += header.length        # follows time-signature changes
+```
+
+Guards: `MAX_REPEAT_DEPTH` and `MAX_EMITTED_MEASURES = 10_000` raise rather than
+loop. An unpaired close plays its measure once — there is nothing to repeat back to,
+and inventing a repeat is more surprising than ignoring a stray barline.
+
+### §6.5 Chart model
+
+`guitaroids/model/chart.py`, L1, no Qt and no device I/O. `Chart.from_gp5` converts
+every failure into `ChartError`, so one bad file cannot take the app down.
+
+Track selection prefers non-percussion, non-bass, unmuted, visible, 6-string, lowest
+number. `clefTranspose == 12` identifies bass, so bass is excluded deliberately
+rather than by accident.
+
+A `Beat.start` is an **absolute** tick. A beat landing before its own measure's
+start means a malformed file; such beats are skipped with a warning rather than
+played at a negative offset.
+
+Tuning to 4/4 at 120bpm, all asserted in `tests/test_chart.py` with a synthetic
+in-memory `Song`: a quarter note is 960 ticks = 0.5s, a 4/4 bar is 3840 ticks =
+2.0s, a 3/4 bar is 1.5s, and a repeated bar's second pass lands 2.0s after the
+first.
+
+Tempo changes are rejected outright, per §1.6. A mix-table change that leaves tempo
+alone is explicitly *not* a rejection — that distinction has its own test.
+
+### §6.6 Library scanning
+
+`guitaroids/songlib.py` turns every candidate into a `SongEntry` with a `Status`
+rather than raising: `OK`, `NO_AUDIO`, `UNSUPPORTED_VERSION`, `PARSE_ERROR`,
+`TEMPO_CHANGE`, `NOT_GUITAR`, `EMPTY`. Only `OK` and `NO_AUDIO` are playable; the
+rest are surfaced in a collapsed problems list.
+
+`classify()` matches on `ChartError` message substrings. This is fragile and it is
+known to be — PyGuitarPro raises one `GPException` type for every version problem,
+and the alternatives (sniffing magic bytes, duplicating its version table) are
+worse. `test_classify` pins the current mapping so drift is caught rather than
+discovered in the UI.
+
+`scripts/import_songs.py` prints a human report or `--json`, and exits non-zero when
+anything is unplayable — in **both** modes, so it works as a CI check on a library.
+(The JSON branch originally hardcoded `return 0`; a test caught the inconsistency.)
+
+### §6.7 Structure
+
+```
+guitaroids/
+  qtenv.py             Qt plugin bootstrap (import before PySide6/cv2)
+  songlib.py           library scan, pairing, status
+  model/               chart.py  repeats.py                  (L1, pure)
+  devices/             empty — Transport, HandTracker        (§4.2 M3)
+  session/             empty — GameSession, Judge             (§4.2 M3)
+  ui/  ui/widgets/     empty — screens, highway              (§4.2 M2-M3)
+  audio/               empty — decode, mix                   (§4.2 M2)
+tests/                 93 tests
+scripts/               setup.sh  fetch_model.sh  import_songs.py  m0_visual_proof.py
+songs/                 README.md  ATTRIBUTION.md
+```
+
+### Not done — §6
+
+- **Still no `.gp5` file and no audio in `songs/`.** Every test uses synthetic
+  objects. §6.3's format support, §6.4's pass-count mapping, and §6.6's status
+  classification are all unverified against real Guitar Pro output. This remains the
+  only blocker, and the only one I cannot clear.
+- **No audio decode has run.** `soundfile` is installed and imports; no file has been
+  decoded, so §3.1's mp3 claims are untested.
+- **Difficulty banding is naive** — notes per second, fixed thresholds
+  (2.0 / 4.5 / 7.0). It ignores tempo and phrasing, so two songs at the same density
+  can feel very different. Replace with something real, or expose the raw number.
+- **D.C./D.S. codas and nested repeats are not handled at all.** Those constructs
+  live in `LineBreak`/`Marker`, which this importer ignores.
+- **The §1.6 open questions are all still open:** hammer-ons/pull-offs, camera
+  mirroring, difficulty filtering. (Tempo changes are now *rejected* rather than
+  silently misplayed, which is arguably an answer to that one.)
+- No UI has been written. The library scanner has no consumer yet; song select does
+  not exist.
+- Nothing committed.
+
+---
+
+## §7 — Real tab, track choice, and generated audio (2026-09-26)
+
+The first real `.gp5` arrived (Hotel California, 9 tracks, 121 measures), which
+finally exercised §3–§6 against reality. It found three things, and the audio
+question turned into a dependency investigation with a measured answer.
+
+### §7.1 Python version — settled at 3.12, after a wrong turn
+
+This is the third time the interpreter version has bitten this project (§5.1 was the
+first). The reasoning:
+
+`tinysoundfont` — the chosen synth, §7.4 — publishes wheels for **cp310 and cp312
+only**. Verified by asking pip to resolve rather than by reading filename tags,
+which is what caused the §5.1 error:
+
+| | PySide6 | mediapipe | soundfile | **tinysoundfont** | pyaudio |
+|---|---|---|---|---|---|
+| 3.10 | wheel | wheel | wheel | **wheel** | source only |
+| 3.12 | wheel | wheel | wheel | **wheel** | source only |
+| 3.13 | wheel | wheel | wheel | **source** | source only |
+| 3.14 | wheel | wheel | wheel | **source** | source only |
+
+`pyaudio` never has a wheel, but that is irrelevant: it is a **lazy import**
+(`tinysoundfont/synth.py:371`) used only by `start()` for real-time playback. We
+render offline with `generate_simple()`, so it is installed `--no-deps` and never
+entered.
+
+Staying on 3.14 was tested, not assumed, and **fails**:
+
+```
+pip install tinysoundfont --no-deps
+  -> FAILED: CMake Error: Imported target "pybind11::module"
+     includes non-existent path
+```
+
+Cause: no `Python.h`. `python3.14-dev` and `python3.12-dev` were both **missing**,
+so compiling needs `sudo apt install` — a package manager operation, which is the
+thing being avoided. `python3.12` was not installed either; it has since been
+installed by the user.
+
+Result: **`.venv` rebuilt from scratch on Python 3.12.14**, deliberately *not* an
+in-place change. The old venv carried two orphaned site-packages trees
+(`python3.10` *and* `python3.14`, per §5.1) and a clean rebuild is the only honest
+fix.
+
+```
+93 passed in 1.58s          # full suite on 3.12
+6 passed in 1.00s           # M0 gate
+```
+
+Cost of 3.12: numpy is capped at **2.2.6** (2.5.3 needs `>=3.12`; it was available
+on 3.14). Everything else is unchanged.
+
+### §7.2 The §2.2 install-order bug, found the hard way
+
+`setup.sh` had the opencv swap in an order that broke the build, and the M0 test
+caught it:
+
+```
+$ scripts/setup.sh
+  ModuleNotFoundError: No module named 'cv2'
+```
+
+Mechanism: the GUI build is uninstalled *after* headless is installed. Both write to
+the same `cv2/` directory, so removing the GUI build **deletes the headless files**.
+headless's `dist-info` survives, so pip then reports "already satisfied" on the
+reinstall and restores nothing. `cv2/` was gone but pip believed otherwise.
+
+Fix: uninstall **both**, then install headless cleanly. This is now documented in
+`requirements.txt` and `setup.sh`, and the M0 test is the regression guard.
+
+### §7.3 Track selection was picking the Vocals
+
+`_score_track` from §6.5 chose **"Vocals"** — not a guitar part. Its tiebreak was
+"6 strings, then lowest number", but guitarpro gives *every* track 6 strings by
+default, so the tiebreak just picked track #1.
+
+`track.channel.instrument` is a General MIDI program number and discriminates
+cleanly. Verified on all 9 tracks of the real file:
+
+| # | name | GM | class | notes |
+|---|---|---|---|---|
+| 1 | Vocals | 87 | other | 420 |
+| 3 | 12-stg Guitar (1) | 25 | **guitar** | **4099** |
+| 4 | Acoustic Guitar (2) | 24 | guitar | 134 |
+| 6 | Solo Guitar 1 | 29 | guitar | 539 |
+| 8 | Bass | 35 | bass | 885 |
+| 9 | Drums | — | percussion | 1546 |
+
+Decision: the **user chooses the track** in song select. `classify_track()` uses GM
+24–31 / 32–39 to filter bass and drums out of the list, and `suggest_track()`
+(densest guitar) provides the default. Both plausible tiebreaks independently
+select track 3, so the default is not fragile. GM classification is what makes the
+list trustworthy, so it stays even though the user picks.
+
+### §7.4 The audio problem: 90% of notes are chords
+
+```
+4099 notes over 380.5s, 1108 distinct onsets
+simultaneous-note histogram: {1: 406,  2: 12,  4: 2,  5: 467,  6: 221}
+```
+
+**688 of 1108 onsets are 5- or 6-note chords.** This invalidates the input model in
+§1.4: a fretting hand's x-position selects *one* lane and cannot hold a 6-fret
+barre, so the most common event in the song is unplayable as designed.
+
+Decision: **collapse to one note per onset** (default: highest pitch), with a
+per-song toggle to keep full chords for keyboard play. Result: 1108 notes instead of
+4099, and density drops 10.77 → 2.91 n/s, which also makes the §6.7 difficulty
+banding honest — its current "Easy" reading came from the Vocals track.
+
+Deliberate mismatch: the rendered audio keeps full chords while the gameplay chart
+is simplified. That is what a beginner chart *is*, but the player will hear chords
+they are not being asked to hit.
+
+### §7.5 Synth: tinysoundfont, not fluidsynth
+
+PyGuitarPro **cannot generate audio** — it is a file-format library only. Every
+"MIDI" reference in it is `MidiChannel`, a settings container inside the file. The
+summary is "Read, write, and manipulate GP3, GP4 and GP5 files."
+
+Generating audio from the parsed tab is nonetheless straightforward: `Chart` has note
+times, frets and strings, and `track.strings[n].value` has the tuning, so
+pitch = tuning + fret.
+
+`fluidsynth` was chosen first and then **rejected on measurement**. Debian's build
+links against **60 shared libraries** — glib, X11, Wayland, PipeWire, PulseAudio,
+ALSA, SDL2, FLAC, opus, and systemd's whole tree — because it is built with every
+audio driver enabled. Vendoring "just libfluidsynth" is not possible; the only
+self-contained route is compiling a minimal build, which is *more* setup than
+`apt install`. It is also LGPL-2.1+.
+
+`tinysoundfont` is the opposite: a 187KB wheel whose `.so` links only
+`libstdc++`, `libm`, `libgcc_s`, `libpthread`, `libc`. **MIT licensed**, header-only
+C++, and its API is exactly the offline-render shape we want — `sfload`,
+`program_select`, `noteon`, `noteoff`, `generate_simple`.
+
+Measured on the real setup:
+
+```
+sfload(assets/soundfont.sf3) -> 0
+rendered 1.0s in 0.0018s (558x realtime)
+```
+
+558× realtime means 6:21 of audio renders in ~0.7s. **The render-time risk
+previously flagged as "must measure" is eliminated**, which makes a render cache
+unnecessary for correctness — still worth having for repeat loads.
+
+#### Soundfont licensing forced the choice
+
+The soundfont installed on a typical Linux desktop is `TimGM6mb.sf2`, which is
+**GPL-2** — vendoring it would impose GPL-2 on this project. Chosen instead:
+**FluidR3 mono** (Frank Wen, **MIT**), fetched by `scripts/fetch_soundfont.sh`.
+The mono build is ~23MB versus ~114MB for the full stereo `FluidR3_GM`, and mono is
+ample for a backing track.
+
+One surprise: the packaged file is `FluidR3Mono_GM.sf3`, an **SF3** (RIFF-wrapped
+SF2), not a plain `.sf2`. `tinysoundfont` handles `sf2/sf3/sfo`, so this works, but
+the fetch script originally globbed only `*.sf2` and silently found nothing.
+
+#### Soundfonts clip, and `sfload(gain=...)` does not help
+
+A 6-note chord renders **hot**:
+
+| gain passed to `sfload` | peak | rms | clipped samples |
+|---|---|---|---|
+| 1.0 | 1.000 | 0.539 | 166 |
+| 0.3 | 1.000 | 0.540 | 206 |
+| 0.1 | 1.000 | 0.540 | 176 |
+
+`sfload`'s `gain` argument has **no effect on level** — the numbers are identical
+across a 10× range. Gain must therefore be applied to the **rendered buffer**:
+
+```
+raw  peak 1.000
+x0.25 peak 0.250   clipped 0
+tanh(a*0.9) peak 0.716   clipped 0
+```
+
+Both linear scaling and soft-clipping verified. This is a real implementation
+requirement, now recorded in `AGENTS.md` so it is not rediscovered.
+
+#### Layering
+
+```
+audio/soundfont.py            discovery: assets/ -> $GUITAROIDS_SOUNDFONT -> system
+audio/synth.py                interface: render(chart) -> np.ndarray
+audio/synth_tinysoundfont.py  SF2/SF3 sampled      preferred
+audio/synth_numpy.py          Karplus-Strong       always available
+audio/midi.py                 chart -> .mid         optional export via mido
+```
+
+`mido` drops to **optional**: the numpy synth reads the `Chart` directly, so MIDI
+is only needed to export `.mid` files as a practice extra.
+
+### Not done — §7
+
+- **§7.3 and §7.4 are analysed but not implemented.** Track selection still uses the
+  broken `_score_track`, and `chart_from_song` still emits all 4099 notes. Both are
+  written up here precisely so the next session does not re-derive them.
+- **`audio/` is still empty.** None of §7.5 exists as code; it is a design plus the
+  measurements that justify it. The synth interface, the Karplus-Strong
+  implementation, soundfont discovery and the gain/limiting stage are all unwritten.
+- **Karplus-Strong has never been heard.** The fallback synth is untested even
+  informally; it has no code at all.
+- **No MIDI export.** `mido` is neither installed nor exercised.
+- **This tab has zero repeat barlines**, so §6.4's unroller is *still* unverified
+  against real Guitar Pro notation. A tab that actually uses `|:` and `:|` is still
+  wanted.
+- **D.C./D.S. codas remain unhandled** — they live in `LineBreak`/`Marker`, which
+  the importer ignores.
+- **Rendered audio has never been listened to.** It renders and is numerically
+  sane, but nobody has heard whether FluidR3 mono at 558× realtime sounds right for
+  a rhythm-game backing track, or whether the post-render gain value is right in
+  practice alongside the click track.
+- **The 12-string part is stored as 6 strings**, so pitch uses standard tuning and
+  the render will not match the real 12-string sound. Cosmetic, but audible.
+- `GUITAROIDS_SOUNDFONT` is read by the fetch script but nothing reads it at
+  runtime yet, because `audio/soundfont.py` does not exist.
+- Nothing committed.
+
+---
+
+## §8 — Track choice and chord collapse implemented (2026-09-26)
+
+§7.3 and §7.4 were analysed but not built. Both are now code, verified against the
+real tab. Suite is **127 tests**, up from 93.
+
+### §8.1 Track selection — the Vocals bug is fixed
+
+`_score_track` is gone. Replaced by classification plus a separate default:
+
+```python
+classify_track(track) -> TrackKind        # GUITAR | BASS | DRUMS | OTHER
+playable_tracks(song) -> list             # GUITAR only
+suggest_track(song) -> track              # densest guitar, with notes
+```
+
+`classify_track` reads `channel.instrument`: GM 24–31 is guitar, 32–39 is bass.
+Two signals override it, because hand-written tabs get the programme number wrong:
+
+- `isPercussionTrack` → `DRUMS`
+- `clefTranspose == 12` → `BASS` (independent of the programme)
+
+Density is now only a tiebreak *among tracks already classified as guitar*, so it
+can no longer promote a vocal line — which was the §7.3 bug exactly.
+
+Verified on the real file, all 9 tracks:
+
+```
+#3 12-stg Guitar (1)     GM 25  guitar   4099 notes  <- default
+#4 Acoustic Guitar (2)   GM 24  guitar    134 notes
+#6 Solo Guitar 1         GM 29  guitar    539 notes
+#7 Solo Guitar 2         GM 29  guitar    347 notes
+#1 Vocals                GM 87  other     <- filtered out
+#8 Bass                  GM 35  bass     <- filtered out
+#9 Drums                 percussion       <- filtered out
+```
+
+Five guitar tracks in the tab; **#5 "Electric Guitar mute" has 0 notes and is now
+omitted from the list entirely**, because offering a track that cannot be charted is
+a dead end in a UI.
+
+`songlib.SongEntry` gained `tracks: tuple[TrackInfo, ...]`, `default_track`, and
+`chart_for(track_number)` which builds a chart on demand. The tab's parsed song is
+retained on the entry, so switching tracks in song select does not re-parse the
+file. `Status.NOT_GUITAR` now fires only when a tab has genuinely no guitar track;
+a tab full of guitar tracks that all chart to nothing is `EMPTY` instead.
+
+### §8.2 Chord collapse
+
+`Note` gained `pitch` (`tuning[string] + fret`) and `chord_size`. Three rules:
+
+| Rule | Picks |
+|---|---|
+| `HIGHEST` (default) | highest pitch — most melodic, and what beginner charts do |
+| `LOWEST` | the chord's bass note |
+| `COMMON` | the most-used string across the chart, pitch breaking ties |
+
+The property that matters, and the one tested hardest:
+
+```python
+assert len(collapsed.notes) == len({n.time for n in full.notes})
+```
+
+**Every onset survives.** Collapsing changes only which pitch is asked for, never
+the rhythm, so the game still has exactly the same number of things to hit. That is
+tested for all three rules against both synthetic fixtures and the real tab.
+
+Measured on Hotel California, track 3:
+
+| | notes | n/s | difficulty | max chord |
+|---|---|---|---|---|
+| full chords | 4099 | 10.77 | Expert | 6 |
+| collapsed (default) | **1108** | **2.91** | **Medium** | 6 |
+
+`chord_size` is reported on the kept note even when collapsed, so the UI can label
+a six-note onset and the per-song toggle can render full chords. All six lanes
+survive collapsing — a test asserts this, because a rule that sterilised the
+highway would be worse than the problem it solved.
+
+Note the difficulty band moved *Medium* on the corrected data. The earlier "Easy"
+reading came from the Vocals track, so it was never a real measurement.
+
+### §8.3 CLI
+
+`scripts/import_songs.py` now shows the track list, max chord size, and the
+collapse warning, and takes `--full-chords` and `--rule {highest,lowest,common}`.
+It uses `argparse` rather than hand-rolled `startswith('--')` parsing.
+
+### Not done — §8
+
+- **The full-chord toggle is exposed but not wired to storage.** `chart_from_song`
+  and `load_tab` take `collapse=` and `scan_library` passes it through, so the CLI
+  can exercise both paths, but no per-song *setting* persists it. The session
+  settings object does not exist yet (§4.2 M2).
+- **The song-select UI does not exist**, so `SongEntry.tracks` and
+  `chart_for()` have no consumer. The track choice is currently CLI-and-API only.
+- **§6.4's repeat unroller is still unexercised by a real tab.** This one is
+  linear. The 3 `assumed` rows in `DECISIONS.md` are unchanged by this section.
+- **Difficulty banding is still naive** — notes per second with fixed thresholds,
+  now on corrected data, but it still ignores tempo and phrasing. Medium for this
+  part is not a judgement about the part's difficulty.
+- **`pitch` assumes standard tuning** for 12-string parts, since guitarpro stores
+  them as 6 strings. Fine for lane play, wrong for MIDI export of a 12-string part.
+- No audio has been rendered or heard (§7.5); `audio/` is still empty.
+- **Nothing committed.** 13 untracked items.
+
+---
+
+## §9 — MIDI removed; the dependency set is now complete (2026-09-26)
+
+### §9.1 The MIDI question, answered by measurement
+
+`tinysoundfont` does support Standard MIDI natively — `midi.load()` /
+`load_memory()` return `Event` objects whose `t` is **already in seconds**, and
+`Sequencer.process()` drives a synth with no audio device and no pyaudio. A
+hand-built SMF fed to `load_memory()` parsed correctly, with a one-beat note at
+120bpm landing at `t=0.5000`.
+
+The round trip would also have been lossless, which is the genuinely elegant part:
+
+```
+gp_tick   = seconds x 960  x tempo/60      # guitarpro Duration.quarterTime
+midi_tick = seconds x PPQ  x tempo/60
+```
+
+At **PPQ = 960** those are the same number at any tempo, so a `.mid` would be a
+byte-faithful copy of the tab's own tick grid with no quantization.
+
+**Decision: no MIDI.** `mido` is off the table and `.mid` export is dropped. The
+synth reads the `Chart` directly, so there is one code path and one fewer
+dependency. For a practice app the `.mid` was arguably the most useful artifact a
+tab could produce, so this is recorded as a real cost rather than a free win — but
+it was not worth a second library and a serialize/deserialize hop in the audio
+path.
+
+Bypassing MIDI does create one gap that MIDI would have papered over: there are no
+explicit note-off events, so **we** must decide when notes stop, and `Note` has no
+duration. The proposed rule is to hold each onset's notes until the next onset,
+capped at 2 beats, which gives every note exactly one on and one off and stops a
+repeated pitch overlapping itself. That is a pure function over the `Chart`, so it
+is testable without hardware — which matters more now that it is our
+responsibility.
+
+### §9.2 `tinysoundfont` must be `--no-deps`, and that is not fixable in a file
+
+The question behind the requirements rewrite: can `tinysoundfont` just be a normal
+`requirements.txt` entry? **No.** Its only declared dependency is `pyaudio`, which
+has **no Linux wheel in any release** (checked 0.2.12 through 0.2.14) and cannot be
+built here either — `libportaudio2` is installed but `portaudio.h` is not:
+
+```
+$ pip install tinysoundfont
+src/pyaudio/device_api.c:9:10: fatal error: portaudio.h: No such file or directory
+ERROR: Failed building installable wheels for pyaudio
+```
+
+`pip install --dry-run` **exits 0** on this and reports "Would install PyAudio" —
+a false positive, because it only prepares metadata. Worth remembering before
+trusting a dry run here.
+
+`pyaudio` is a lazy import inside `tinysoundfont`, used only by `Synth.start()` for
+real-time playback. Offline rendering never reaches it, so `--no-deps` is free.
+
+### §9.3 Three requirement files, one supported install path
+
+```
+requirements.txt            installable as-is; every package pip can resolve
+requirements-optional.txt   must use --no-deps (tinysoundfont), with the why
+requirements-dev.txt        pytest, layered on requirements.txt
+```
+
+`requirements.txt` is the complete inventory the user asked for, including the
+rejected packages and why they lost (`mido`, `pyfluidsynth`, `pyaudio`, `av`,
+`pydub`) so the file is a record and not just a list. `tinysoundfont` is named
+there but kept in `requirements-optional.txt`, because listing it in the main file
+would make `pip install -r requirements.txt` **fail** rather than merely omit it.
+
+`scripts/setup.sh` reads all three and is the only supported path.
+
+### §9.4 The decision is now locked by tests
+
+`tests/test_audio_deps.py` fails if this ever stops being true:
+
+- `pyaudio` is **not installed** (so nobody reintroduced it)
+- `tinysoundfont` imports without it
+- a fetched soundfont loads and renders something non-silent
+- the render is hot enough to require post-gain, documenting §7.5
+- `Sequencer` exposes `process` / `midi_load`, i.e. no device needed
+
+### §9.5 Verified from an empty venv
+
+```
+$ rm -rf .venv && scripts/setup.sh
+Python 3.12.14
+    known-good: every dependency including tinysoundfont has a wheel
+==> Installing headless OpenCV build (GUI build 5.0.0.93 removed)
+==> Installing optional packages that need --no-deps (requirements-optional.txt)
+    ok - 1 package(s)
+...
+6 passed in 1.06s        # M0 gate
+127 passed in 3.52s      # full suite
+```
+
+`pyaudio` confirmed absent afterwards; `tinysoundfont` still imports and renders
+(peak 1.000, rms 0.543).
+
+### Not done — §9
+
+- **`audio/` is still empty.** This section decided the dependency set and
+  answered the MIDI question; it built no synthesis code. `schedule.py`,
+  `soundfont.py`, `synth.py`, `synth_numpy.py` and `synth_tinysoundfont.py` are all
+  still unwritten.
+- **The note-duration rule is proposed, not implemented or tested.** It is the
+  main new design surface created by dropping MIDI.
+- **The FFT pitch test for Karplus-Strong is not written** — that was going to be
+  the strongest available check that the fallback synth produces the right note.
+- **No audio has been rendered end to end or heard.** We have rendered single
+  chords in isolation; nothing has been listened to.
+- `.mid` export is gone. If it is ever wanted, it is a self-contained
+  `audio/midi.py` plus `mido` in `requirements-optional.txt`, and §9.1's PPQ=960
+  argument is the design note to start from.
+- `requirements-lock.txt` was generated back when the venv was on Python 3.14 and
+  had gone stale; it has been **regenerated** from the Python 3.12 environment and
+  now records `tinysoundfont` separately as a `--no-deps` install.
+- **Nothing committed.** 13 untracked items.
+
+
