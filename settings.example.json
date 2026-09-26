@@ -1,0 +1,12 @@
+{
+  "audio_device": null,
+  "camera_device": 0,
+  "click_volume": 0.5,
+  "collapse_chords": true,
+  "count_in_bars": 1,
+  "input_latency_ms": 0.0,
+  "input_mode": "keyboard",
+  "master_volume": 0.8,
+  "song_offsets_ms": {},
+  "version": 1
+}

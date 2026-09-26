@@ -2,6 +2,11 @@
 .venv/
 venv/
 
+# Runtime settings — machine-specific, written by the preferences screen.
+# The committed copy of the schema is settings.example.json.
+settings.json
+.settings-*.tmp
+
 # Python bytecode
 __pycache__/
 *.py[cod]
