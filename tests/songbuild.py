@@ -123,3 +123,58 @@ def broken_tab(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"definitely not a guitar pro file")
     return path
+
+
+def make_chart(
+    notes: list[tuple[float, int, int]] | None = None,
+    *,
+    tempo: int = 60,
+    beats: int = 32,
+    title: str = "Synthetic",
+    collapse: bool = True,
+    path: Path | str = Path("songs/synthetic.gp5"),
+) -> "Chart":
+    """A chart holding exactly the given ``(seconds, lane, fret)`` notes.
+
+    ``tempo=60`` makes one beat exactly one second and one quarter note 960 ticks, so
+    a note asked for at ``2.5`` lands at ``2.5`` -- which is the property tests of the
+    highway geometry and the judge windows both need. guitarpro is tick-based, so
+    exact seconds are not available at an arbitrary tempo.
+
+    ``lane`` is 0-5 and maps to string ``lane + 1``; guitarpro has no notion of a
+    lane, so the string is derived from it.
+
+    Pass ``collapse=False`` to keep several notes that share an onset -- chord
+    collapse merges them into one, so a six-lane fixture has to opt out.
+    """
+    import guitarpro
+
+    from guitaroids.model.chart import chart_from_song, suggest_track
+
+    requested = notes if notes is not None else [(0.0, 0, 0)]
+    measures = max(1, -(-beats // 4))
+    headers = []
+    for number in range(1, measures + 1):
+        header = guitarpro.MeasureHeader(number=number, start=(number - 1) * 4 * TICK)
+        header.timeSignature.numerator = 4
+        header.timeSignature.denominator.value = 4
+        headers.append(header)
+
+    song = guitarpro.Song(measureHeaders=headers, tempo=tempo, title=title)
+    track = guitarpro.Track(song, number=1, name="Guitar")
+    track.channel.instrument = GUITAR_PROGRAM
+    track.measures = [guitarpro.Measure(track, header) for header in headers]
+    song.tracks = [track]
+
+    for seconds, lane, fret in requested:
+        tick = int(round(seconds * 960 / (60 / tempo)))
+        measure_index = min(len(track.measures) - 1, tick // (4 * TICK))
+        measure = track.measures[measure_index]
+        voice = measure.voices[0]
+        beat = guitarpro.Beat(voice, start=tick)
+        note = guitarpro.Note(beat, value=fret, string=lane + 1)
+        note.type = guitarpro.NoteType.normal
+        beat.notes.append(note)
+        voice.beats.append(beat)
+
+    return chart_from_song(song, path, track=suggest_track(song), collapse=collapse)

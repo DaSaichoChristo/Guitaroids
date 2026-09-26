@@ -18,6 +18,7 @@ from collections.abc import Callable
 from PySide6 import QtCore, QtWidgets
 
 from ..context import AppContext
+from .game import Game
 from .import_gp import ImportGp
 from .main_menu import MainMenu
 from .preferences import Preferences
@@ -95,7 +96,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._factories: dict[Screen, Callable[[], ScreenBase]] = {
             Screen.MAIN: lambda: MainMenu(self, self.context),
             Screen.SONG_SELECT: lambda: SongSelect(self, self.context),
-            Screen.GAME: self._make_placeholder(Screen.GAME),
+            Screen.GAME: lambda: Game(self, self.context),
             Screen.RESULTS: self._make_placeholder(Screen.RESULTS),
             Screen.PREFERENCES: lambda: Preferences(self, self.context),
             Screen.IMPORT_GP: lambda: ImportGp(self, self.context),

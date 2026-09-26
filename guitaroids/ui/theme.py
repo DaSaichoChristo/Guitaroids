@@ -106,6 +106,29 @@ COLORS: dict[str, str] = {
     "focus": "#2a9c68",
 }
 
+#: One colour per highway lane, indexed by ``Note.lane``.
+#:
+#: Separate from :data:`COLORS` because these are not used in the stylesheet, and
+#: ``test_stylesheet_mentions_every_colour_token`` asserts the reverse for everything
+#: in there.
+#:
+#: A blue-to-red hue ramp: adjacent lanes are maximally far apart at the bottom of
+#: the highway, where a hand-tracking player's error is most likely to be a
+#: neighbouring-lane slip. Deliberately *not* monotonic in brightness, because two
+#: lanes of similar luminance are exactly the pair a player confuses.
+LANE_COLORS: tuple[str, ...] = (
+    "#4aa3df",  # lane 0 - high E, the busiest lane once chords collapse
+    "#35b8a0",
+    "#7bc043",
+    "#d9c33b",
+    "#e08a3c",
+    "#d9534f",  # lane 5 - low E
+)
+
+#: The highway's lane count is a property of the data model (lane = string - 1 over
+#: six strings), not a theme choice. Asserted against the model by a test.
+LANE_COUNT = 6
+
 def build_stylesheet(f: float | None = None) -> str:
     """The stylesheet, with every length scaled from its 1080p design value.
 
@@ -253,6 +276,30 @@ QFrame#card {{
     border-radius: {radius(8, f)}px;
 }}
 QFrame#divider {{ background: {COLORS["border"]}; max-height: 1px; border: none; }}
+
+/* --- the highway ---------------------------------------------------------- */
+/* Painted in QPainter rather than assembled from widgets, so its text cannot be
+   styled by the stylesheet -- it is styled here instead, which keeps typography in
+   one place per the rule above. */
+QWidget#highway {{
+    font-family: "Monospace";
+    font-size: {px(14, f)}px;
+    background: {COLORS["bg"]};
+}}
+
+/* --- the game HUD ---------------------------------------------------------- */
+/* An overlay floated over the highway, not a layout above it: the playfield keeps
+   the whole window, because a rhythm game that shrinks its highway to make room for
+   a score is worse than one with no score.
+
+   Every one of these needs `background: transparent`. They float over the highway,
+   and the default QWidget background would paint an opaque `bg` rectangle over the
+   alternating lane bands -- which reads as a rendering glitch, not as a panel. */
+QLabel#gameTitle   {{ font-size: {px(22, f)}px; font-weight: 600; background: transparent; }}
+QLabel#gameTally   {{ font-family: "Monospace"; font-size: {px(15, f)}px; background: transparent; }}
+QLabel#gameBanner  {{ color: {COLORS["text_dim"]}; background: transparent; }}
+QLabel#gameLegend  {{ color: {COLORS["text_dim"]}; font-size: {px(12, f)}px; background: transparent; }}
+QLabel#gameFlash   {{ font-size: {px(30, f)}px; font-weight: 700; color: {COLORS["text"]}; background: transparent; }}
 """
 
 

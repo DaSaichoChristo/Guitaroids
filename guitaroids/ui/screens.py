@@ -209,9 +209,19 @@ def content_column(
     return column
 
 
-def heading(text: str, *, kind: str = "heading") -> QtWidgets.QLabel:
-    """A themed heading or subtitle label."""
-    label = QtWidgets.QLabel(text)
+def heading(
+    text: str,
+    *,
+    kind: str = "heading",
+    parent: QtWidgets.QWidget | None = None,
+) -> QtWidgets.QLabel:
+    """A themed heading or subtitle label.
+
+    ``parent`` matters for the game HUD, which floats labels over the highway: a
+    parentless QLabel is a *top-level window*, so ``show()`` on one would open a
+    second window floating over the game rather than drawing into it.
+    """
+    label = QtWidgets.QLabel(text, parent)
     label.setObjectName(kind)
     label.setWordWrap(True)
     return label
@@ -222,6 +232,7 @@ def constrained_button(
     *,
     object_name: str = "",
     width: int = 240,
+    parent: QtWidgets.QWidget | None = None,
     scale_factor: float | None = None,
 ) -> QtWidgets.QPushButton:
     """A button that will not stretch across the window.
@@ -230,7 +241,7 @@ def constrained_button(
     """
     f = theme.scale() if scale_factor is None else scale_factor
     width = px(width, f)
-    button = QtWidgets.QPushButton(text)
+    button = QtWidgets.QPushButton(text, parent)
     if object_name:
         button.setObjectName(object_name)
     button.setMaximumWidth(width)
