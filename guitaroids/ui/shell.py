@@ -4,6 +4,11 @@ Screens are registered as **factories, not instances**, so each is built the fir
 time it is shown. That matters as soon as a screen owns something expensive: once
 the game screen opens an audio device and the calibration screen a camera, building
 every screen at startup would open both just to display the main menu.
+
+The shell also **owns the :class:`~guitaroids.context.AppContext`**. That is what
+makes the context outlive every screen: a screen can borrow the library, but
+navigating away cannot lose it. See ``context.py`` for why the shared state is not
+simply a wider shell.
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ from collections.abc import Callable
 
 from PySide6 import QtCore, QtWidgets
 
+from ..context import AppContext
 from .main_menu import MainMenu
 from .screens import Screen, ScreenBase, constrained_button, content_column, heading
 
@@ -39,10 +45,11 @@ class PlaceholderScreen(ScreenBase):
     def __init__(
         self,
         shell,
+        context: AppContext,
         label: str,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
-        super().__init__(shell, parent)
+        super().__init__(shell, context, parent)
         self.screen_label = label
         column = content_column(self)
 
@@ -63,18 +70,23 @@ class PlaceholderScreen(ScreenBase):
 
 
 class MainWindow(QtWidgets.QMainWindow):
-    """Top-level window. Owns the stack, the history, and the play request."""
+    """Top-level window. Owns the stack, the history, and the context."""
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self,
+        context: AppContext,
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Guitaroids")
         self.setMinimumSize(720, 480)
 
+        self.context = context
         self._stack = QtWidgets.QStackedWidget()
         self.setCentralWidget(self._stack)
 
         self._factories: dict[Screen, Callable[[], ScreenBase]] = {
-            Screen.MAIN: lambda: MainMenu(self),
+            Screen.MAIN: lambda: MainMenu(self, self.context),
             Screen.SONG_SELECT: self._make_placeholder(Screen.SONG_SELECT),
             Screen.GAME: self._make_placeholder(Screen.GAME),
             Screen.RESULTS: self._make_placeholder(Screen.RESULTS),
@@ -90,7 +102,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _make_placeholder(self, screen: Screen) -> Callable[[], ScreenBase]:
         def build() -> ScreenBase:
-            return PlaceholderScreen(self, screen.label)
+            return PlaceholderScreen(self, self.context, screen.label)
 
         return build
 

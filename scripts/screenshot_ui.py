@@ -43,11 +43,16 @@ def main(argv: list[str]) -> int:
     qtenv.apply()
 
     from guitaroids.app import build_application
+    from guitaroids.context import AppContext
     from guitaroids.ui.screens import Screen
     from guitaroids.ui.shell import MainWindow
 
     app = build_application([sys.argv[0]])
-    shell = MainWindow()
+    # A real context, unlike the test suite's. The point of this script is to look
+    # at what the user will actually see, and a real song list is most of it.
+    context = AppContext.create()
+    print(f"songs: {len(context.library.entries)} found in {context.songs_dir}")
+    shell = MainWindow(context)
     shell.resize(960, 640)
     shell.show()
 

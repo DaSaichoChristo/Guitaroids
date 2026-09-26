@@ -9,8 +9,12 @@ it.
 from __future__ import annotations
 
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from PySide6 import QtCore, QtWidgets
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle avoidance, types only
+    from ..context import AppContext
 
 #: Human-facing names, declared rather than derived from the enum value.
 #:
@@ -59,19 +63,33 @@ class Screen(Enum):
 
 
 class ScreenBase(QtWidgets.QWidget):
-    """Common behaviour: Escape goes back, and the shell is reachable.
+    """Common behaviour: Escape goes back, and the shared state is reachable.
 
     Subclasses build their widgets in ``__init__``. They should not call
     ``show``/``hide`` on themselves; the shell does that.
+
+    Takes the ``context`` explicitly rather than reading it off ``self.shell``.
+    A screen can then be built against a context with no window behind it, which
+    is what makes a screen unit-testable; reaching through the shell would make
+    every screen test construct a whole ``MainWindow`` first.
+
+    The shell is still passed, because navigation is the shell's job and a screen
+    has no business knowing the ``Screen`` enum's history rules.
     """
 
     TITLE: str = ""
 
     def __init__(
-        self, shell: "ShellBase", parent: QtWidgets.QWidget | None = None
+        self,
+        shell: "ShellBase",
+        context: "AppContext",
+        parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.shell = shell
+        #: Shared, long-lived state. Outlives this widget: the shell owns it, so
+        #: navigating away from a screen must not lose the library or the request.
+        self.context = context
 
     def keyPressEvent(self, event: QtCore.QKeyEvent) -> None:  # noqa: N802 - Qt naming
         if event.key() == QtCore.Qt.Key.Key_Escape:

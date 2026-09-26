@@ -28,6 +28,10 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from guitaroids.context import AppContext  # noqa: E402 - needs the sys.path fix above
+from guitaroids.settings import Settings  # noqa: E402
+from guitaroids.songlib import Library  # noqa: E402
+
 
 @pytest.fixture(scope="session")
 def qapp():
@@ -46,11 +50,34 @@ def qapp():
 
 
 @pytest.fixture()
-def shell(qapp):
+def context() -> AppContext:
+    """A context with an empty library and nowhere to write.
+
+    Deliberately does **not** call ``AppContext.create()``. That scans the real
+    ``songs/`` directory at ~0.2s a tab, and every widget test would pay for it --
+    on a library of fifty songs, minutes per suite run. A test that needs entries
+    builds a ``Library`` in memory instead, which is also why this can assert a
+    song list without depending on what tabs the machine happens to have.
+
+    ``settings_path`` points into a directory that does not exist so a test that
+    calls ``save_settings`` fails loudly rather than quietly writing the
+    developer's real config.
+    """
+    missing = Path("/nonexistent/guitaroids-tests")
+    return AppContext(
+        library=Library(root=missing / "songs"),
+        settings=Settings(),
+        songs_dir=missing / "songs",
+        settings_path=missing / "settings.json",
+    )
+
+
+@pytest.fixture()
+def shell(qapp, context):
     """A fresh MainWindow, unloaded afterwards so tests cannot leak state."""
     from guitaroids.ui.shell import MainWindow
 
-    window = MainWindow()
+    window = MainWindow(context)
     yield window
     window.unload_all()
     window.close()

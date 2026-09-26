@@ -17,6 +17,7 @@ import sys
 from PySide6 import QtWidgets
 
 from guitaroids import qtenv
+from guitaroids.context import AppContext
 from guitaroids.ui.shell import MainWindow
 from guitaroids.ui.theme import STYLESHEET
 
@@ -57,6 +58,15 @@ def build_application(argv: list[str]) -> QtWidgets.QApplication:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="guitaroids", description=APPLICATION_NAME)
     parser.add_argument(
+        "--songs",
+        metavar="DIR",
+        default=None,
+        help=(
+            "directory to scan for Guitar Pro tabs and backing audio. Defaults to "
+            "the repository's songs/ directory."
+        ),
+    )
+    parser.add_argument(
         "--self-test",
         action="store_true",
         help=(
@@ -78,7 +88,15 @@ def run(argv: list[str] | None = None) -> int:
     qtenv.apply()
 
     app = build_application([sys.argv[0]])
-    shell = MainWindow()
+
+    # create() rather than AppContext(): this is the one place a real scan belongs.
+    # It happens before the window exists, so the ~0.2s a tab costs delays the
+    # first frame rather than freezing a visible one, and it means the first
+    # screen drawn already has the library. Rescans go through the background
+    # loader instead.
+    context = AppContext.create(songs_dir=args.songs)
+
+    shell = MainWindow(context)
     shell.resize(*DEFAULT_SIZE)
     shell.show()
 
@@ -90,7 +108,8 @@ def run(argv: list[str] | None = None) -> int:
         print(
             f"self-test ok: platform={app.platformName()} "
             f"size={shell.width()}x{shell.height()} "
-            f"screen={shell.current.value} history={len(shell.history)}"
+            f"screen={shell.current.value} history={len(shell.history)} "
+            f"songs={len(context.library.entries)}"
         )
         return 0
 

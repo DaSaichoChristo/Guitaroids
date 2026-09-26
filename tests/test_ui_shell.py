@@ -71,6 +71,35 @@ def test_argv_is_forwarded_to_run() -> None:
     assert parse_args([]).self_test is False
 
 
+def test_songs_flag_is_forwarded() -> None:
+    """--songs must reach AppContext.create, or it silently does nothing."""
+    from guitaroids.app import parse_args
+
+    assert parse_args(["--songs", "/tmp/tabs"]).songs == "/tmp/tabs"
+    assert parse_args([]).songs is None, "absent means 'use the default', not an empty path"
+
+
+def test_self_test_reports_the_song_count() -> None:
+    """The count is the only evidence in the self-test that the scan ran.
+
+    Without it, a context wired to the wrong directory would still print a
+    cheerful "self-test ok" and look fine.
+    """
+    result = _self_test("--self-test")
+    assert result.returncode == 0, result.stderr
+    assert "songs=" in result.stdout
+
+
+def test_self_test_with_an_empty_songs_dir_finds_nothing() -> None:
+    """An empty library is a valid first run, not a failure."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as empty:
+        result = _self_test("--self-test", "--songs", empty)
+    assert result.returncode == 0, result.stderr
+    assert "songs=0" in result.stdout
+
+
 def test_unknown_flag_is_rejected() -> None:
     result = _self_test("--definitely-not-a-flag")
     assert result.returncode != 0
@@ -218,6 +247,72 @@ def test_escape_goes_back(shell, qapp) -> None:
     )
     QtWidgets.QApplication.sendEvent(shell.current_screen, event)
     assert shell.current is Screen.MAIN
+
+
+# --- context wiring -----------------------------------------------------------
+
+
+@pytest.mark.parametrize("screen", list(Screen))
+def test_every_screen_receives_the_shells_context(shell, context, screen: Screen) -> None:
+    """The whole point of the refactor: a screen can reach the shared state.
+
+    Identity, not equality: a screen that quietly built its own context would have
+    an empty library while the shell had fifty songs, and every read would return
+    nothing without any error.
+    """
+    shell.navigate(screen)
+    assert shell.current_screen.context is context
+    assert shell.context is context
+
+
+def test_the_context_outlives_every_screen(shell, context) -> None:
+    """Popping screens must not take the library or the play request with them.
+
+    This is "screens never own game objects" (DESIGN.md §1.7) applied to the
+    context: navigate through everything, unload it all, and the shared state is
+    still there. A screen holding the only reference would fail here.
+    """
+    context.request_play("some_song", 3)
+    for screen in Screen:
+        shell.navigate(screen)
+
+    shell.unload_all()
+
+    assert shell._built == {}, "unload_all should have dropped every screen"
+    assert shell.context is context
+    assert context.play_request is not None
+    assert context.play_request.slug == "some_song"
+    assert context.play_request.track_number == 3
+
+
+def test_a_screen_can_be_built_without_a_window(shell, context) -> None:
+    """The reason context is a constructor argument and not shell.context.
+
+    If a screen could only get the context by reaching through the shell, every
+    screen test would need a whole MainWindow; this is the cheaper shape.
+    """
+    from guitaroids.ui.main_menu import MainMenu
+
+    menu = MainMenu(shell, context)
+    try:
+        assert menu.context is context
+        assert menu.shell is shell
+    finally:
+        menu.deleteLater()
+
+
+def test_screen_base_requires_a_context() -> None:
+    """Guards the signature.
+
+    A screen constructed without one would fail deep inside its own __init__ with
+    an AttributeError on a library access, a long way from the mistake.
+    """
+    import inspect
+
+    from guitaroids.ui.screens import ScreenBase
+
+    parameters = list(inspect.signature(ScreenBase.__init__).parameters)
+    assert parameters == ["self", "shell", "context", "parent"]
 
 
 # --- rendering ---------------------------------------------------------------

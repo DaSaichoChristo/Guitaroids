@@ -8,9 +8,14 @@ fixed-width controls, not a full-bleed form.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from PySide6 import QtCore, QtWidgets
 
 from .screens import Screen, ScreenBase, constrained_button, content_column, heading
+
+if TYPE_CHECKING:  # pragma: no cover - types only
+    from ..context import AppContext
 
 _CENTRED = QtCore.Qt.AlignmentFlag.AlignHCenter
 
@@ -20,8 +25,16 @@ class MainMenu(ScreenBase):
 
     TITLE = "main"
 
-    def __init__(self, shell, parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__(shell, parent)
+    def __init__(
+        self,
+        shell,
+        context: "AppContext",
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
+        # context is unused here -- the menu needs no library -- but it is part of
+        # the base signature, so every screen takes it. A menu that grew a "your
+        # library has 3 unplayable tabs" warning would have it to hand.
+        super().__init__(shell, context, parent)
         # A title screen, so it sits in the middle of the window rather than
         # hugging the top.
         column = content_column(self, margin=56, vertical_centred=True)
