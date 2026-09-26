@@ -468,3 +468,130 @@ def test_a_song_with_no_tracks_does_not_crash_the_pane(shell, context) -> None:
     screen._play.click()
     assert context.play_request is None
     assert shell.current is Screen.SONG_SELECT, "must not navigate on an unplayable pick"
+
+
+# --- practice tempo ----------------------------------------------------------
+#
+# The control moved here from the game screen in §19.1. These are the tests that
+# moved with it, plus the ones the move made necessary: a value that has to
+# survive a screen boundary, and a stored 0 that has to mean "as written" rather
+# than than a 20 BPM song.
+
+
+def test_the_tempo_starts_at_the_written_tempo(screen: SongSelect) -> None:
+    """Untouched means as written, which is 120 for the fixture's synthetic tabs."""
+    assert screen._written_bpm() == 120
+    assert screen._bpm.value() == 120
+    assert screen._bpm_label.text() == "as written"
+
+
+def test_the_tempo_cannot_exceed_the_written_tempo(screen: SongSelect) -> None:
+    """A tab played faster than written is a different piece of music.
+
+    The range is clamped rather than the value being checked afterwards, so the
+    control cannot *express* the tempo either -- there is no state in which the box
+    reads a number the game will refuse.
+    """
+    assert screen._bpm.maximum() == 120
+    screen._bpm.setValue(145)
+    assert screen._bpm.value() == 120
+
+
+def test_the_tempo_floors_at_the_minimum(screen: SongSelect) -> None:
+    from guitaroids.settings import MIN_BPM
+
+    screen._bpm.setValue(1)
+    assert screen._bpm.value() == int(MIN_BPM)
+
+
+def test_the_label_says_how_much_slower(screen: SongSelect) -> None:
+    """An absolute number next to a "Tempo 120" fact does not say *slower*.
+
+    The stored value is absolute (§18.3) and stays that way; the percentage is a
+    display of it, not the thing being saved.
+    """
+    screen._bpm.setValue(60)
+    assert screen._bpm_label.text() == "50% of written"
+
+
+def test_play_carries_the_tempo(screen: SongSelect, context) -> None:
+    screen._bpm.setValue(60)
+    screen._play.click()
+    assert context.play_request.bpm == pytest.approx(60.0)
+
+
+def test_playing_at_the_written_tempo_sends_no_tempo(screen: SongSelect, context) -> None:
+    """0 is the "as written" sentinel, and the request says so.
+
+    Storing 120 in the file would pin the song at 120 after the tab is re-exported
+    at 84, which is a stale value pretending to be a remembered choice.
+    """
+    screen._play.click()
+    assert context.play_request.bpm == 0.0
+    assert context.settings.song_bpm["alpha"] == 0.0
+
+
+def test_playing_persists_the_tempo(screen: SongSelect, context) -> None:
+    screen._bpm.setValue(72)
+    screen._play.click()
+    assert context.settings.bpm_for("alpha") == 72.0
+    assert context.settings_path.is_file(), "the tempo must reach disk, not just memory"
+    assert Settings.load(context.settings_path).bpm_for("alpha") == 72.0
+
+
+def test_a_remembered_tempo_is_loaded_when_the_song_is_selected(shell, context) -> None:
+    context.settings.set_bpm_for("alpha", 80.0)
+    shell.navigate(Screen.SONG_SELECT)
+    screen = shell.current_screen
+    screen._select_slug("alpha")
+    assert screen._bpm.value() == 80
+
+
+def test_tempos_are_remembered_per_song(screen: SongSelect) -> None:
+    screen._select_slug("alpha")
+    screen._bpm.setValue(60)
+    screen._play.click()
+    screen._select_slug("beta")
+    assert screen._bpm.value() == 120, "one song's tempo must not leak into another's"
+
+
+def test_a_stored_tempo_above_the_written_one_is_clamped_in(shell, context) -> None:
+    """A settings file is hand-editable, and a tab's tempo can change under it.
+
+    Clamped on load, not honoured: a stored 160 on a 120 BPM tab would be a rate
+    above 1.0, which the game refuses anyway (§18.3) -- so the control would show
+    160 and the game would play 120.
+    """
+    context.settings.set_bpm_for("alpha", 160.0)
+    shell.navigate(Screen.SONG_SELECT)
+    screen = shell.current_screen
+    screen._select_slug("alpha")
+    assert screen._bpm.value() == 120
+    assert screen._bpm_label.text() == "as written"
+
+
+def test_the_tempo_is_disabled_with_nothing_playable(shell, context) -> None:
+    context.set_library(library_of())
+    shell.navigate(Screen.SONG_SELECT)
+    screen = shell.current_screen
+    assert not screen._bpm.isEnabled()
+    assert not screen._bpm_label.isEnabled()
+    assert screen._bpm_label.text() == ""
+
+
+def test_the_tempo_control_is_inside_the_detail_card(screen: SongSelect) -> None:
+    """A parentless widget is a top-level window and renders nowhere.
+
+    The same bug the game screen's spin box had (§18.5), in the screen it moved
+    to. Checked by walking up to the card rather than by testing the immediate
+    parent, because the details now live on a scroll area's widget (§19.2) and the
+    immediate parent is that, not the card.
+    """
+    from PySide6 import QtWidgets
+
+    widget = screen._bpm
+    while widget is not None and widget.objectName() != "card":
+        widget = widget.parent()
+    assert widget is not None, "the tempo control is not inside the detail card"
+    assert widget is not screen, "a parentless spin box is its own top-level window"
+    assert screen._bpm.isVisibleTo(screen), "present in the tree but not on screen"

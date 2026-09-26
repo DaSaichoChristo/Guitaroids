@@ -16,6 +16,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+#: The tempo bounds are owned by ``settings``, so there is one pair of numbers and
+#: not two that can drift. Importing it is safe for the purity test: settings is
+#: plain data and file handling, no Qt, no OpenCV, no audio.
+from ..settings import MAX_BPM
+
 #: Matched to settings.count_in_bars; a count-in outside this is not a thing.
 MIN_COUNT_IN_BARS = 0
 MAX_COUNT_IN_BARS = 2
@@ -36,6 +41,19 @@ class PlayRequest:
 
     offset_seconds: float = 0.0
     """Manual audio alignment. Positive means the audio is *ahead* of the tab."""
+
+    bpm: float = 0.0
+    """Practice tempo in BPM, or 0.0 for "as written".
+
+    Absolute rather than a percentage, and frozen for the attempt like everything
+    else here: a rate is song-relative, so one "80%" cannot mean "slower" across a
+    library (DESIGN.md §18.3). It is also the value an audio transport needs
+    directly -- "play this at 50", not "play this at 0.66 of whatever the tab says".
+
+    Set on the song-select screen, before the song starts, rather than during it:
+    the offset has the same shape, and a control you reach by leaving the song is a
+    control for next time, which is what practice tempo is for.
+    """
 
     count_in_bars: int = 1
     """0-2 bars of clicks before the music starts."""
@@ -63,6 +81,8 @@ class PlayRequest:
                 f"offset_seconds must be within +/-{MAX_OFFSET_SECONDS}s, "
                 f"got {self.offset_seconds}"
             )
+        if self.bpm < 0.0:
+            raise ValueError(f"bpm must be 0 (as written) or positive, got {self.bpm}")
 
     # --- construction -------------------------------------------------------
 
@@ -74,16 +94,18 @@ class PlayRequest:
         settings,
         *,
         offset_ms: float | None = None,
+        bpm: float | None = None,
     ) -> "PlayRequest":
         """Build a request from the user's preferences.
 
         ``offset_ms`` overrides the remembered per-song offset for this attempt,
         which is what dragging the slider in song select does. Omit it and the
-        stored value for that slug is used, so a tweak persists.
+        stored value for that slug is used, so a tweak persists. ``bpm`` works the
+        same way against ``bpm_for``.
 
         Clamps here rather than in ``__post_init__``, because these values come
-        from a slider and from a hand-editable settings file, both of which can
-        legitimately be out of range. Nothing is written back: a clamped value
+        from a slider, a spin box and a hand-editable settings file, all of which
+        can legitimately be out of range. Nothing is written back: a clamped value
         affects only this request, not the live settings.
         """
         count_in_bars = _clamp(
@@ -92,10 +114,15 @@ class PlayRequest:
         raw_offset = settings.offset_for(slug) if offset_ms is None else offset_ms
         offset_seconds = _clamp(float(raw_offset), -1000.0, 1000.0) / 1000.0
 
+        if bpm is None:
+            bpm = settings.bpm_for(slug)
+        practice_bpm = _clamp(bpm, 0.0, MAX_BPM)
+
         return cls(
             slug=slug,
             track_number=track_number,
             offset_seconds=offset_seconds,
+            bpm=practice_bpm,
             count_in_bars=count_in_bars,
             collapse_chords=bool(settings.collapse_chords),
         )
@@ -108,6 +135,7 @@ class PlayRequest:
             slug=self.slug,
             track_number=self.track_number,
             offset_seconds=_clamp(float(offset_ms), -1000.0, 1000.0) / 1000.0,
+            bpm=self.bpm,
             count_in_bars=self.count_in_bars,
             collapse_chords=self.collapse_chords,
         )
@@ -115,9 +143,11 @@ class PlayRequest:
     def describe(self) -> str:
         """One line, for a status bar or a log."""
         sign = "+" if self.offset_seconds >= 0 else ""
+        tempo = "as written" if self.bpm <= 0.0 else f"{self.bpm:.0f} BPM"
         return (
             f"{self.slug} track {self.track_number}, "
             f"offset {sign}{self.offset_seconds * 1000:.0f}ms, "
+            f"tempo {tempo}, "
             f"count-in {self.count_in_bars} bar(s), "
             f"chords {'collapsed' if self.collapse_chords else 'full'}"
         )

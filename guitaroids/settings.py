@@ -134,7 +134,9 @@ class Settings:
     tempi, so one global number could not mean "play it slower" for a whole library.
     A per-song BPM can, and it is also the value an audio transport needs directly.
 
-    Absent means the tab's own written tempo, so an untouched song is unaffected.
+    Absent -- and an explicit 0 -- both mean the tab's own written tempo, so an
+    untouched song is unaffected *and* a stored 0 does not pin a tab whose tempo is
+    later edited. Set from song select, before the song starts (§19.1).
     """
 
     version: int = SETTINGS_VERSION
@@ -200,8 +202,11 @@ class Settings:
                         if not isinstance(slug, str):
                             continue
                         number = _parse_number(bpm)
-                        if number is None:
-                            continue  # drop, do not invent a tempo for a song
+                        if number is None or number <= 0.0:
+                            # 0 and below are the "as written" sentinel or plain
+                            # nonsense; neither is a tempo to remember, and an
+                            # absent key already means "as written".
+                            continue
                         tempos[slug] = max(MIN_BPM, min(MAX_BPM, number))
                 values[name] = tempos
             elif name == "version":
@@ -273,8 +278,19 @@ class Settings:
         ``default`` is the caller's fallback -- the tab's own written tempo -- and is
         returned when nothing is stored. Returning the caller's default rather than a
         constant is what keeps "no stored value" from being a lie about tempo.
+
+        A stored **0 means the written tempo**, deliberately not a floor value: the
+        control in song select writes 0 when it is at the written tempo, so a tab
+        whose tempo is later edited in Guitar Pro is not held at the old one.
         """
-        return self.song_bpm.get(slug, default)
+        stored = self.song_bpm.get(slug, 0.0)
+        return default if stored <= 0.0 else stored
 
     def set_bpm_for(self, slug: str, bpm: float) -> None:
-        self.song_bpm[slug] = _clamp_float(bpm, MIN_BPM, MAX_BPM, MIN_BPM)
+        """Remember a practice tempo.
+
+        Zero or less is stored as 0, the "as written" sentinel, rather than being
+        pulled up to ``MIN_BPM``: a caller that means "no practice tempo" must not
+        get a 20 BPM song, and the clamp is for *positive* nonsense (1 BPM, 9999).
+        """
+        self.song_bpm[slug] = 0.0 if bpm <= 0.0 else _clamp_float(bpm, MIN_BPM, MAX_BPM, MIN_BPM)

@@ -284,9 +284,34 @@ def test_bpm_is_clamped_on_both_sides() -> None:
 
 
 def test_bpm_from_a_hand_edited_file_is_clamped() -> None:
-    loaded = Settings.from_dict({"song_bpm": {"a": -5, "b": 9999}})
+    loaded = Settings.from_dict({"song_bpm": {"a": 1, "b": 9999}})
     assert loaded.bpm_for("a") == MIN_BPM
     assert loaded.bpm_for("b") == MAX_BPM
+
+
+def test_a_non_positive_stored_bpm_means_as_written() -> None:
+    """Zero is a sentinel, not a tempo -- and not clamped up to MIN_BPM.
+
+    Song select writes 0 when the control is at the written tempo (§19.1), so a
+    stored 0 must resolve to the caller's default. Clamping it to 20 would turn
+    "play it as written" into a 20 BPM song for every tab it happened to.
+    """
+    s = Settings()
+    s.set_bpm_for("a", 0.0)
+    assert s.bpm_for("a", default=76.0) == 76.0
+    assert s.set_bpm_for("a", -5.0) is None
+    assert s.bpm_for("a", default=76.0) == 76.0, "a negative is nonsense, not a tempo"
+
+
+def test_a_non_positive_bpm_in_a_file_is_dropped_not_clamped() -> None:
+    """A hand-typed -5 is dropped rather than stored as 20.
+
+    An absent key already means "as written" (§19.1), so there is nothing to gain
+    by inventing an entry -- and 20 BPM would be an actively wrong claim.
+    """
+    loaded = Settings.from_dict({"song_bpm": {"a": -5, "b": 0, "c": 62}})
+    assert loaded.song_bpm == {"c": 62.0}
+    assert loaded.bpm_for("a", default=76.0) == 76.0
 
 
 def test_unparseable_bpm_values_are_dropped_not_invented() -> None:

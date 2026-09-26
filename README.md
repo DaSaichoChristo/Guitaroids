@@ -144,7 +144,7 @@ guitaroids/
   settings.py user preferences                  pure, no Qt
   qtenv.py   Qt plugin bootstrap
 scripts/     setup, asset fetchers, import report, screenshots
-tests/       618 tests
+tests/       639 tests
 songs/       your tabs and audio (gitignored)
 ```
 

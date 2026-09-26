@@ -93,14 +93,19 @@ class AppContext:
         track_number: int,
         *,
         offset_ms: float | None = None,
+        bpm: float | None = None,
     ) -> PlayRequest:
         """Record what the player asked for, and return it.
 
         The screen then navigates; the game screen later resolves this into a
         chart. Storing it here rather than passing it down the navigation path
         means it survives the song-select screen being destroyed.
+
+        ``bpm`` is the practice tempo chosen there, 0 meaning as written (§19.1).
         """
-        request = PlayRequest.from_settings(slug, track_number, self.settings, offset_ms=offset_ms)
+        request = PlayRequest.from_settings(
+            slug, track_number, self.settings, offset_ms=offset_ms, bpm=bpm
+        )
         self.play_request = request
         return request
 

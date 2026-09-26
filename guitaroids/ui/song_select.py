@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from ..settings import MAX_BPM, MIN_BPM
 from ..songlib import SongEntry, Status, format_duration
 from .library_loader import LibraryLoader
 from .screens import Screen, ScreenBase, constrained_button, content_column, heading
@@ -138,13 +139,54 @@ class SongSelect(ScreenBase):
         return panel
 
     def _build_detail_column(self) -> QtWidgets.QWidget:
+        """The card on the right, with its contents on a scroll area.
+
+        This column is a fixed 340px and its content is now tall enough to
+        exceed a 640px-tall window: a QVBoxLayout that does not fit does not clip,
+        it **compresses**, and the six fact rows were drawn on top of each other
+        (the §13 failure, reached again from the other direction). A scroll area
+        is the answer the project already uses for tall forms, and it degrades to
+        exactly the old layout when there is room.
+        """
         panel = QtWidgets.QFrame()
         panel.setObjectName("card")
         panel.setFixedWidth(px(340))
-        layout = QtWidgets.QVBoxLayout(panel)
-        layout.setContentsMargins(px(16), px(16), px(16), px(16))
-        layout.setSpacing(px(10))
+        outer = QtWidgets.QVBoxLayout(panel)
+        outer.setContentsMargins(px(12), px(12), px(12), px(12))
 
+        scroll = QtWidgets.QScrollArea(panel)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        # Transparent, so the card's own background shows through rather than the
+        # scroll area painting a second, slightly different rectangle inside it.
+        scroll.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
+        scroll.viewport().setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TranslucentBackground
+        )
+        outer.addWidget(scroll)
+
+        content = QtWidgets.QWidget()
+        content.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
+        scroll.setWidget(content)
+        layout = QtWidgets.QVBoxLayout(content)
+        # A right margin, because the vertical scrollbar sits over the right edge
+        # of the viewport and a word-wrapped label painted flush against it loses
+        # its last glyph: "Tune once" rendered as "Tune onc".
+        layout.setContentsMargins(0, 0, px(6), 0)
+        # 8 rather than 10: at 960x640 this column does not fit without the tempo
+        # control sitting on the fold, half drawn, which reads as a broken widget
+        # rather than as something to scroll. Every gap here is px()'d like the
+        # rest, so this tightens with the scale.
+        layout.setSpacing(px(8))
+        # Returns the *card*. Handing the layout the scroll area's own widget
+        # would reparent it out of the scroll area, which then deletes it.
+        self._build_detail_content(content, layout)
+        return panel
+
+    def _build_detail_content(
+        self, content: QtWidgets.QWidget, layout: QtWidgets.QVBoxLayout
+    ) -> None:
+        """Fill ``layout`` with the details. The caller owns the widgets' geometry."""
         self._detail_title = heading("", kind="heading")
         self._detail_artist = heading("", kind="subtitle")
         layout.addWidget(self._detail_title)
@@ -183,8 +225,33 @@ class SongSelect(ScreenBase):
             )
         )
 
+        layout.addWidget(_divider())
+
+        layout.addWidget(heading("Practice tempo", kind="dim"))
+        tempo_row = QtWidgets.QHBoxLayout()
+        self._bpm = QtWidgets.QSpinBox(content)
+        self._bpm.setRange(int(MIN_BPM), int(MAX_BPM))
+        self._bpm.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self._bpm.setToolTip(
+            "Practise this tab slower. It cannot go above the tempo it is written "
+            "at, because playing a tab faster than written breaks the music."
+        )
+        self._bpm.valueChanged.connect(self._on_bpm_changed)
+        self._bpm_label = heading("", kind="stat")
+        tempo_row.addWidget(self._bpm)
+        tempo_row.addWidget(self._bpm_label)
+        layout.addLayout(tempo_row)
+        layout.addWidget(
+            heading(
+                # One line on purpose. This card is 340px wide and its content is
+                # already taller than a 640px window, so every extra line of prose
+                # here is a line the player has to scroll to read (§19.2).
+                "Slower than written, and remembered per song.",
+                kind="dim",
+            )
+        )
+
         layout.addStretch(1)
-        return panel
 
     def _build_problems_box(self) -> QtWidgets.QGroupBox:
         box = QtWidgets.QGroupBox("Problems")
@@ -299,17 +366,21 @@ class SongSelect(ScreenBase):
         self._tracks.clear()
         self._offset.setEnabled(playable)
         self._offset_label.setEnabled(playable)
+        self._bpm.setEnabled(playable)
+        self._bpm_label.setEnabled(playable)
         self._tracks.setEnabled(playable)
         self._play.setEnabled(playable)
 
         if not playable:
             self._clear_facts()
+            self._bpm_label.setText("")
             return
 
         self._offset.blockSignals(True)
         self._offset.setValue(int(self.context.settings.offset_for(entry.slug)))
         self._offset.blockSignals(False)
         self._on_offset_changed(self._offset.value())
+        self._load_bpm(entry)
 
         for track in entry.tracks:
             self._tracks.addItem(track.label, track.number)
@@ -350,6 +421,60 @@ class SongSelect(ScreenBase):
     def _on_offset_changed(self, ms: int) -> None:
         self._offset_label.setText(format_offset(ms))
 
+    # --- practice tempo ------------------------------------------------------
+
+    def _written_bpm(self) -> int:
+        """The tempo the selected tab is written at, or 0 when it has no chart.
+
+        Read from the *entry* rather than a resolved chart, so the control can be
+        set up before a track is chosen -- the tempo belongs to the song, not to
+        the track.
+        """
+        entry = self._selected_entry()
+        if entry is None or entry.chart is None:
+            return 0
+        return int(round(entry.chart.tempo))
+
+    def _load_bpm(self, entry: SongEntry) -> None:
+        """Point the tempo control at the newly selected song.
+
+        The range is clamped to the tab's own tempo, so the control **cannot
+        express a value that would break the music** (§18.3): the maximum is the
+        written tempo, never above it. The remembered value is clamped into that
+        range rather than trusted, because a settings file is hand-editable and a
+        tab's tempo can change under a stored value.
+        """
+        written = max(1, self._written_bpm())
+        self._bpm.blockSignals(True)
+        try:
+            self._bpm.setRange(int(MIN_BPM), written)
+            stored = self.context.settings.bpm_for(entry.slug, float(written))
+            self._bpm.setValue(max(int(MIN_BPM), min(written, round(stored))))
+        finally:
+            self._bpm.blockSignals(False)
+        self._refresh_bpm_label()
+
+    def _on_bpm_changed(self, value: int) -> None:
+        self._refresh_bpm_label()
+
+    def _refresh_bpm_label(self) -> None:
+        """Say in words what the number is doing.
+
+        The box holds an absolute tempo, which is the stored value (§18.3), but
+        "50" next to a Tempo fact reading 76 does not say whether that is slower or
+        a different song. The percentage is a *display* of an absolute choice, not
+        the thing being stored.
+        """
+        written = self._written_bpm()
+        if written <= 0:
+            self._bpm_label.setText("")
+            return
+        chosen = self._bpm.value()
+        if chosen >= written:
+            self._bpm_label.setText("as written")
+        else:
+            self._bpm_label.setText(f"{chosen / written * 100:.0f}% of written")
+
     # --- actions -------------------------------------------------------------
 
     def _play_selected(self) -> None:
@@ -366,16 +491,24 @@ class SongSelect(ScreenBase):
             track_number = default.number
 
         offset_ms = float(self._offset.value())
-        # Remembered only on Play: a settings save is an fsync, and a drag emits
-        # valueChanged continuously.
+        chosen_bpm = self._bpm.value()
+        # The written tempo is stored as 0, not as its own number: "as written" and
+        # "no entry" mean the same thing, and pinning 76 into a file would hold the
+        # song at 76 after the tab is re-exported at 84.
+        bpm = 0.0 if chosen_bpm >= self._written_bpm() else float(chosen_bpm)
+        # Remembered only on Play: a settings save is an fsync, and a drag or a
+        # spin emits valueChanged continuously.
         self.context.settings.set_offset_for(entry.slug, offset_ms)
+        self.context.settings.set_bpm_for(entry.slug, bpm)
         try:
             self.context.save_settings()
         except OSError as exc:
             # A read-only config directory must not stop the song being played.
             self._set_status(f"could not save the offset: {exc}")
 
-        self.context.request_play(entry.slug, int(track_number), offset_ms=offset_ms)
+        self.context.request_play(
+            entry.slug, int(track_number), offset_ms=offset_ms, bpm=bpm
+        )
         self.shell.navigate(Screen.GAME)
 
     def _rescan_library(self) -> None:

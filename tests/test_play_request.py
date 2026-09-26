@@ -176,3 +176,57 @@ def test_module_imports_nothing_heavy() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "clean"
+
+
+# --- practice tempo (§19.1) -------------------------------------------------
+
+
+def test_bpm_defaults_to_as_written() -> None:
+    """0 is the sentinel, not a tempo: it must not read as a rate of zero."""
+    assert PlayRequest("a", 1).bpm == 0.0
+    assert "as written" in PlayRequest("a", 1).describe()
+
+
+def test_a_negative_bpm_is_a_bug_not_a_setting() -> None:
+    with pytest.raises(ValueError, match="bpm"):
+        PlayRequest("a", 1, bpm=-1.0)
+
+
+def test_from_settings_uses_the_stored_tempo() -> None:
+    settings = Settings()
+    settings.set_bpm_for("a", 55.0)
+    assert PlayRequest.from_settings("a", 1, settings).bpm == 55.0
+
+
+def test_a_stored_zero_falls_back_to_the_written_tempo() -> None:
+    """A 0 in the file is "as written", so the request says 0 too."""
+    settings = Settings()
+    settings.set_bpm_for("a", 0.0)
+    assert PlayRequest.from_settings("a", 1, settings).bpm == 0.0
+
+
+def test_an_explicit_bpm_overrides_the_stored_one() -> None:
+    """Which is what the spin box in song select does."""
+    settings = Settings()
+    settings.set_bpm_for("a", 55.0)
+    assert PlayRequest.from_settings("a", 1, settings, bpm=80.0).bpm == 80.0
+
+
+def test_a_hand_edited_bpm_is_clamped_not_rejected() -> None:
+    """The user-facing clamp lives here, as it does for the offset."""
+    settings = Settings()
+    assert PlayRequest.from_settings("a", 1, settings, bpm=99_999).bpm == 400.0
+    assert PlayRequest.from_settings("a", 1, settings, bpm=-30).bpm == 0.0
+    assert PlayRequest.from_settings("a", 1, settings, bpm="nonsense").bpm == 0.0
+
+
+def test_with_offset_ms_keeps_the_tempo() -> None:
+    """The copy helper is used while dragging the offset; the tempo must survive."""
+    settings = Settings()
+    request = PlayRequest.from_settings("a", 1, settings, bpm=64.0)
+    assert request.with_offset_ms(-20.0).bpm == 64.0
+
+
+def test_describe_names_the_tempo() -> None:
+    request = PlayRequest.from_settings("a", 1, Settings(), bpm=64.0)
+    assert "64 BPM" in request.describe()

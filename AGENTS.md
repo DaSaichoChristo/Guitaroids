@@ -62,11 +62,12 @@ says what ran.
 
 ## Current state
 
-`tests/` is 618 tests, all passing. **Five of the six screens are real:** the main
-menu, song select (tab + track + audio offset), import GP, preferences, and **game** —
-three bars of tab notation with a left-to-right beat line, `E A D G B E` down the
-left, a six-key keyboard test mode, PERFECT/GOOD/MISS judging, and a **per-song
-practice tempo** (`BPM n of m`, remembered per song, never above the written tempo).
+`tests/` is 639 tests, all passing. **Five of the six screens are real:** the main
+menu, song select (tab + track + audio offset + **per-song practice tempo**), import
+GP, preferences, and **game** — three bars of tab notation with a left-to-right beat
+line, `E A D G B E` down the left, a six-key keyboard test mode and PERFECT/GOOD/MISS
+judging. The practice tempo is chosen on song select and travels in `PlayRequest`,
+so a run cannot be re-timed while it plays.
 **Results is still a placeholder**; counts are shown in the HUD and go nowhere.
 
 `model/chart.py`, `model/repeats.py`, `songlib.py`, `settings.py`, `importer.py`,
@@ -99,8 +100,13 @@ All five cost real time, and all five are now enforced by tests.
 
 - **A layout that does not fit does not clip — it compresses.** Children get squeezed
   below their minimum height and end up drawn on top of each other. This shipped a
-  preferences screen with three combo boxes overlapping. Tall forms go in a
-  `QScrollArea`, and `test_ui_shell.py` fails if any screen compresses a group box.
+  preferences screen with three combo boxes overlapping, and later a song-select
+  detail card whose six fact rows were drawn on top of each other (§19.2). Tall forms
+  go in a `QScrollArea`, and `test_ui_shell.py` fails if any screen squeezes a widget
+  a layout owns — **not** just a group box, which is all the guard used to check and
+  which is why the card got through. `QScrollArea.setWidget()` also takes ownership:
+  return the *container*, never the scroll area's widget, or it is deleted out from
+  under the layout.
 - **A vertical layout with no stretch item shares surplus height *equally*.** Both
   `QLabel` and `QGroupBox` can grow, so on a tall window every one of them gets the
   same slice of the extra and the page opens holes between its own paragraphs. A

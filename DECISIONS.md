@@ -77,6 +77,7 @@ is where the "why" belongs.
 | Preferences edits a **draft** and commits on Save; live-apply would leave half-changes in effect | live | §11 |
 | Preferences **never writes `song_offsets_ms`** — song select owns that field | live | §11 |
 | A form too tall for the window **scrolls**; a layout that cannot fit compresses instead, and overlaps | live | §11 |
+| The compression guard covers **every widget a layout owns**, not just group boxes — the narrow version missed a `QFrame` card entirely | live | §19.2 |
 | Disabled controls **say they are not ready** rather than looking live | live | §11 |
 | Import is a **copy**, and **never overwrites without asking** | live | §11 |
 | Import copies via temp-file-and-rename, so a failure cannot leave a half-written tab | live | §11 |
@@ -202,6 +203,10 @@ superseded or gone with the widget.
 | The rate is a **single multiplication at the clock**; notes keep their times, expiry slows down for free | live | §18.2 |
 | The **audio offset is applied after the rate** — it is a property of the song, not of the practice speed | live | §18.2 |
 | Judgement windows stay in **milliseconds**, so scores are comparable across speeds | live | §18.3 |
-| Changing tempo **re-anchors the clock origin**; the position is preserved, the song does not jump | live | §18.4 |
-| The control lives on the **game screen**, and tempo is saved **once on hide** | live | §18.5 |
+| The control lives on **song select**, with the track and the offset — it is a choice about the next attempt, not during one | live | §19.1 |
+| The tempo travels in **`PlayRequest.bpm`**, where `0` means "as written" | live | §19.1 |
+| The rate is **fixed for the run**; nothing can re-time a song that is playing | live | §19.1 |
+| ~~Changing tempo re-anchors the clock origin~~ — **deleted with the mid-song control**; the game is a plain `QElapsedTimer` again | live | §19.1 |
+| **0 is stored** for "as written", not the written tempo, so a re-exported tab is not held at the old one | live | §19.1 |
+| Both song-select controls save on **Play** — one write per attempt | live | §19.1 |
 | A **generated** backing track that follows the practice tempo | planned | §1.5 |

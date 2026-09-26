@@ -2265,3 +2265,139 @@ and stepping 76 down to 60 one notch at a time would otherwise be sixteen of the
   letters at the moment it arrives.
 - **Nothing was tested with hand tracking running**, so §15.2's correction (lane
   comes from hand *y*, not x) is still unexercised.
+
+## §19 — The practice tempo moves to song select (2026-09-26)
+
+Supersedes §18.2–§18.5, which put the control on the game screen. §18.1 (the string
+names) and §18.3's *reasoning* for an absolute BPM both stand.
+
+**Tests: 639, all passing. Verified by render on `xcb` at scale 1.0 and 1.5, at
+960x640 and 1440x960 — the layout bug in §19.2 was only ever visible in a picture.**
+
+### 19.1 The control belongs with the other per-attempt choices
+
+The tempo is a choice about the **next attempt**, made in the same place as the
+track and the alignment. The offset has always been there (§ song select), and the
+tempo is the same kind of thing: something you tune once and then play several
+times. Putting it on the game screen made it a thing you reach by *leaving the song
+you are trying to learn* — which is a control for next time, wearing the costume of
+a control for now.
+
+So the control moved, and everything downstream followed it:
+
+| | §18 (game screen) | §19 (song select) |
+|---|---|---|
+| chosen | during play | before play |
+| stored | `Game._bpm` → settings on hide | settings on Play |
+| travels | a widget on the screen | `PlayRequest.bpm` |
+| applied | `_reanchor()` on every change | once, at load |
+| can change mid-song | yes | **no** |
+
+`PlayRequest` gained `bpm: float = 0.0`, where **0 means "as written"** — the same
+shape as the offset's default and the reason the field needs no `None`. It is
+validated (negative is a bug) and clamped in `from_settings` (400 is the ceiling),
+mirroring `offset_seconds` exactly. `context.request_play` takes `bpm=` and
+`with_offset_ms` carries it, which is the copy helper song select uses while
+dragging the offset.
+
+**The rate is now read once, at load, and cannot change while the song plays.** That
+deletes §18.4's `_reanchor` outright, and with it `_t0_ms` — the clock is a plain
+`QElapsedTimer` again. This is the honest consequence of moving the control: a
+feature that can be changed mid-song *needs* a re-anchor, and one that cannot does
+not. §18.4's bug is not repeated, it is removed along with the code that had it,
+and the test that justified it is replaced by one that asserts the rate is *fixed*
+for the run.
+
+The stored value is **0 when the control is at the written tempo**, not the written
+tempo itself. "No entry" and "as written" mean the same thing, and pinning `76` into
+a file would hold a song at 76 after the tab is re-exported at 84. `from_dict`
+therefore *drops* a non-positive entry rather than clamping it to `MIN_BPM`: an
+absent key already means "as written", so there is nothing to gain by inventing
+one, and 20 BPM would be an actively wrong claim.
+
+Both screens save on **Play**, which is one write per attempt — the game screen's
+flush-on-hide existed only because the spin box wrote to settings on every step.
+
+### 19.2 The bug the move caused: a card that stopped fitting
+
+Adding a fourth control to a fixed-width 340px card made its content taller than a
+640px window, and **a `QVBoxLayout` that does not fit does not clip — it compresses**
+(§13). The six fact rows were drawn on top of each other:
+
+```
+Tempo  76 BPM
+Length 6:20
+Notes  1108          <- all six, overlapping
+Density 2.91 nps
+Difficulty Medium
+Audio  none (click only)
+```
+
+The existing guard did not catch it: `test_no_screen_compresses_its_content` walks
+`QGroupBox` children, and this card is a `QFrame`. **The test was measuring the
+wrong widget**, which is worse than having no test.
+
+Fixed in two places, because either alone is half an answer:
+
+- **A `QScrollArea` inside the card**, `setWidgetResizable(True)`, frameless and
+  translucent so the card's own background shows through. This is the answer the
+  project already uses for tall forms (§13), and it degrades to the old layout
+  exactly when there is room.
+- **`test_no_layout_child_is_squeezed_below_its_minimum`**, a general version of the
+  guard over every widget a layout actually owns, skipping anything inside a scroll
+  area — scrolling past content that does not fit is the documented answer, not a
+  fault. Verified to *fail* on the pre-fix layout
+  (`Song Select squeezes its content: ['column: 592px < 597px', ...]`), which is the
+  only evidence that it is a test and not a decoration.
+
+Two smaller things the render caught, both invisible to assertions:
+
+- **Spacing 10 → 8 and margins 16 → 12** on the card. The tempo control was landing
+  exactly on the fold, half drawn, which reads as a broken widget rather than as
+  something to scroll. It is now fully visible at 960x640 with only the one-line
+  explanation below the fold. All of it goes through `px()`, so it tightens with the
+  scale like everything else.
+- **A word-wrapped label lost its last glyph.** "Tune once per song" rendered as
+  "Tune onc": the vertical scrollbar sits over the right edge of the viewport and
+  the label was painted flush against it. A `px(6)` right margin on the scroll
+  content fixes it. This one is scale-dependent — invisible at 1.5, present at 1.0
+  — which is an argument for rendering at 1.0 as well as enlarged.
+
+One Qt trap worth recording, because it produced a wall of
+`Internal C++ object already deleted`: **`QScrollArea.setWidget()` takes ownership.**
+Returning the scroll area's *widget* from the builder, so the caller could add it to
+a layout, reparents it straight back out and the scroll area then deletes it. The
+builder returns the **card**; the content widget is never handed out.
+
+### 19.3 The test that moved with the control, and the ones the move made
+
+Moved to `test_song_select.py`: the range clamp to the written tempo, the `MIN_BPM`
+floor, the remembered-per-song behaviour, persistence to disk, and disabled-with-
+nothing-playable. The spin box's parenting test is now expressed as *walk up to the
+card*, because the immediate parent is the scroll area's widget and asserting on that
+would pin an implementation detail that §19.2 had just changed.
+
+New, and only possible because the value crosses a screen boundary: **the game
+screen cannot change the tempo.** Asserted negatively — no `_bpm`, no `set_bpm`, no
+`_t0_ms` — because a control that is *meant* not to exist is easy to re-add by
+accident, and a second place to set the tempo is two answers to one question. Same
+reasoning as the key legend in §18.1.
+
+### Not done — §19
+
+- **The tempo still makes no sound.** Unchanged and still the blocker: it slows the
+  chart and nothing else, because there is no audio. §1.5.
+- **The tempo is still per song, not per track.** Choosing a different track reuses
+  the tempo, which is usually right.
+- **The card scrolls at 960x640.** It has to, and the control is visible, but a
+  340px fixed-width column in a 960px window is a lot of unused width. Widening it
+  would remove the scrollbar entirely on a normal window; not done because it moves
+  every row in the card.
+- **No double-click to reset to the written tempo**, and the control is a spin box
+  rather than a slider — a slider cannot express "exactly as written" as easily.
+- **`test_no_screen_compresses_its_content` was left in place** alongside the new
+  general guard. It is now redundant; it was not deleted because it is not wrong,
+  only narrow.
+- **The offset and the tempo are two controls doing one job** (both are per-attempt
+  alignment of the player to the song). They are not merged, and the reason is that
+  they answer different questions — one is "when", the other is "how fast".

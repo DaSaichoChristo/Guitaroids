@@ -381,6 +381,48 @@ def test_no_screen_compresses_its_content(shell, qapp, screen: Screen) -> None:
 
 
 @pytest.mark.parametrize("screen", list(Screen))
+def test_no_layout_child_is_squeezed_below_its_minimum(shell, qapp, screen: Screen) -> None:
+    """The same failure as above, for the screens that use no group box.
+
+    The group-box version missed song select entirely, and song select shipped a
+    detail card whose six fact rows were drawn on top of each other the moment a
+    fourth control was added to it (§19.2). The card is a QFrame, so there was no
+    group box for the old test to measure. Checked here over every widget a layout
+    actually owns, skipping anything inside a QScrollArea -- a scroll area is the
+    documented answer to content that does not fit, so scrolling past it is not a
+    fault.
+    """
+    from PySide6 import QtWidgets
+
+    shell.resize(960, 640)
+    shell.show()
+    qapp.processEvents()
+    shell.navigate(screen)
+    qapp.processEvents()
+
+    def in_scroll_area(widget: QtWidgets.QWidget) -> bool:
+        parent = widget.parent()
+        while parent is not None:
+            if isinstance(parent, QtWidgets.QScrollArea):
+                return True
+            parent = parent.parent()
+        return False
+
+    squeezed = []
+    for widget in shell.current_screen.findChildren(QtWidgets.QWidget):
+        if not widget.isVisible() or in_scroll_area(widget):
+            continue
+        if widget.parent() is None or widget.parent().layout() is None:
+            continue  # not owned by a layout, so nothing can squeeze it
+        needed = widget.minimumSizeHint().height()
+        if needed > 0 and widget.height() < needed - 2:
+            name = widget.objectName() or type(widget).__name__
+            squeezed.append(f"{name}: {widget.height()}px < {needed}px")
+
+    assert not squeezed, f"{screen.label} squeezes its content: {squeezed}"
+
+
+@pytest.mark.parametrize("screen", list(Screen))
 def test_every_screen_fits_inside_the_window(shell, qapp, screen: Screen) -> None:
     """A child wider than the screen is clipped, i.e. invisible.
 
