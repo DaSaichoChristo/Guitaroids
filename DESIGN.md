@@ -2019,3 +2019,111 @@ of what §1.4's append-only record is for.
 - **Beat divisions are drawn from the time signature, not from the notation.** A
   chart with a written tuplet or an odd meter will show a 4/4 grid over it, because
   `Chart` carries one `time_signature` and no per-measure changes.
+
+---
+
+## §17 — Fret numbers, back inside the mark (2026-09-26)
+
+Supersedes §16.2, which removed them. §16.2's reasoning is kept below because it is
+what makes this a *different* thing from what §15.4 did wrong.
+
+**Tests: 581, all passing. Verified on `xcb` at scale 1.0 and 1.33, at 960x640 and
+1600x900.**
+
+### 17.1 The hierarchy is the whole point
+
+| | §15.4 highway | §16 tab | §17 |
+|---|---|---|---|
+| primary read | the number | the string line | **the string line** |
+| the number | the only information | absent | **confirmation, inside the mark** |
+| where | a block | — | all three bars |
+
+§15.4 drew the fret in a block and that number was the *only* thing you could read,
+so it asked the player to decode a chord and a pitch out of one glyph. That is what
+made the number system "weird". Here the line still answers first; the number is
+there for a player who wants the fret. §16.2 was right that a fret number is only
+meaningful *given* a string, and this keeps that: the number never stands alone.
+
+Measured on the real tab: frets 0–5 only, 694 of 1108 open strings, so every number
+is a single digit. 24 is the highest fret on most guitars, so the two-digit case is
+the one that has to fit, and it is built synthetically because the real library
+never produces one.
+
+### 17.2 The trap: two independent scales
+
+The marker is derived from the **widget's height**; the stylesheet's font is derived
+from the **UI scale**. Nothing relates them. Sizing the number from the stylesheet
+works on a large display and overflows the mark on a small one — at scale 1.33 in a
+960x640 window, 19px of font in a 17.4px circle.
+
+So the size comes from `marker_radius * 2 * 0.57`, which holds two digits to about
+70% of the diameter at every size measured:
+
+| window | marker ⌀ | font | 2 digits |
+|---|---|---|---|
+| 960x640 | 17.4px | 10px | 12px |
+| 1600x900 | 24.5px | 14px | 17px |
+| 1920x1080 | 29.4px | 16px | 19px |
+| 3440x1440 | 39.2px | 22px | 26px |
+
+Verified **identical at UI scale 1.0 and 1.33** for a given window size, and there is
+a test that fails if it ever starts following the scale again.
+
+### 17.3 `ensurePolished`, which was not obvious
+
+`QWidget.font()` returns the **application default** — 9pt Sans — until the widget has
+been polished, not the style-resolved font. So `marker_font()` was handing back a
+Sans family, not the QSS's Monospace, and the module docstring's claim that the family
+comes from the stylesheet was false.
+
+Painting implies polishing, so a real paint was correct and only a caller asking
+*before* the widget was shown got the wrong answer — which is to say the tests found
+it and the app may not have. `marker_font()` now calls `self.ensurePolished()`,
+which is a no-op once painted and correct before.
+
+### 17.4 The pixel tests, and what the control caught
+
+Detecting a digit by sampling one pixel does not work: whether a glyph's centre lands
+on a stroke or in its counter depends on the digit. So the count is **relative to the
+marker's own measured tone** rather than to a fixed colour, which is also what makes
+it mean the same thing in a dimmed bar as a bright one — the previous and next bars
+draw their marker *and* their ink at reduced alpha, so neither colour is present at
+face value.
+
+Three contaminants had to be excluded, and the **bare-marker control caught each one
+in turn**:
+
+1. The marker's own rim, drawn as a 1px pen in a darkened lane colour. On a small
+   marker that rim is a large share of the radius, and a box at 0.7 of the radius
+   counted it as a number.
+2. The **staff line** through the middle of every marker. The current bar's marker is
+   opaque so it is covered, but a dimmed bar's marker is translucent and the line
+   shows through — which would report a number on every note and prove nothing.
+3. The **beat line** down the middle of the marker in the current bar. Avoided by
+   parking the play position *between* notes rather than on one.
+
+The control is a window short enough to suppress the numbers (under 580px tall) in
+the same chart at the same position, where the count must be exactly zero. That is
+what makes the positive assertion mean something: it cannot be passing on the rim,
+the line, or the background.
+
+### 17.5 Legibility floor
+
+Numbers are dropped below a 9px derived size rather than drawn as an unreadable
+smudge. A number too small to read is worse than no number, because it looks like a
+rendering fault. Same rule as §15.4's highway, for the same reason.
+
+### Not done — §17
+
+- **Hit feedback is still absent**, as agreed for this pass. `GameState.by_note` and
+  `verdict_at` are unread, so a missed note in the bar above looks identical to one
+  you never saw. This is the most obvious next thing.
+- **No setting to turn the numbers off.** Given they were removed once already, a
+  preference is a reasonable thing to want and was not asked for.
+- **The ink is fixed dark** (`#101216`), which has ~7:1 against every lane colour,
+  but it was not measured against the *dimmed* rendering of a lane colour at 150
+  alpha. It reads correctly in the render; the number was not computed.
+- **Two-digit frets are untested against real notation.** The path exists and is
+  tested synthetically, but no tab in the library produces one.
+- **Beat divisions are still drawn from the time signature**, not from the notation
+  (§16), so a tuplet or an odd meter will show a 4/4 grid over it.

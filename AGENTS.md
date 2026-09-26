@@ -62,7 +62,7 @@ says what ran.
 
 ## Current state
 
-`tests/` is 572 tests, all passing. **Five of the six screens are real:** the main
+`tests/` is 581 tests, all passing. **Five of the six screens are real:** the main
 menu, song select (tab + track + audio offset), import GP, preferences, and **game** —
 three bars of tab notation with a left-to-right beat line, a six-key keyboard test
 mode, and PERFECT/GOOD/MISS judging. **Results is still a placeholder**; counts are

@@ -177,7 +177,10 @@ superseded or gone with the widget.
 | Progression **down the page**, one bar at a time — discrete, not a continuous scroll | live | §16.1 |
 | Within a bar the beat line sweeps **left to right**, reset at each bar line | live | §16.1 |
 | Each bar is a **six-line staff**; **lane 0 is the top line**, as in printed tab | live | §16.1 |
-| Notes are **marks on a string line with no number** — the line is the pitch | live | §16.2 |
+| The string line is the **primary read**; the fret number is confirmation inside the mark | live | §17.1 |
+| Fret numbers appear in **all three bars**, sized from `marker_radius`, never the stylesheet | live | §17.2 |
+| Numbers are **dropped below a 9px derived size** rather than drawn as a smudge | live | §17.5 |
+| `marker_font()` calls `ensurePolished()` — `QWidget.font()` is the app default until then | live | §17.3 |
 | The previous and next bars are **dimmed**; the current one is full weight | live | §16.4 |
 | The widget is **pure render**: `(chart, position)` → pixels, no clock | live | §15.1, §16.5 |
 | The judgement tolerance is drawn as **two window edges**, from `GOOD_SECONDS` itself | live | §16.4 |
