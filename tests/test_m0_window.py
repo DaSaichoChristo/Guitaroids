@@ -73,6 +73,7 @@ def test_qt_plugin_path_points_at_pyside6() -> None:
 # --- window checks, one platform per subprocess --------------------------------
 
 CHILD = """
+import os
 import sys
 sys.path.insert(0, {root!r})
 from guitaroids import qtenv
@@ -109,7 +110,16 @@ label.repaint()
 app.processEvents()
 assert label.isVisible(), "widget never became visible"
 
-print(app.platformName())
+# Report, then leave immediately.
+#
+# Without this the interpreter tears a live QApplication down at exit, and Qt
+# sometimes aborts there (SIGABRT) depending on GC timing. That showed up as an
+# intermittent failure of the whole gate when run from setup.sh, and was not
+# reproducible by running the tests repeatedly on their own. os._exit skips static
+# destructors entirely, which removes the race rather than papering over it.
+sys.stdout.write(app.platformName() + "\\n")
+sys.stdout.flush()
+os._exit(0)
 """
 
 
