@@ -22,6 +22,7 @@ from guitaroids.ui.widgets.tabview import (
     INK,
     MEASURES_SHOWN,
     MIN_FONT_PIXELS,
+    STRING_NAMES,
     TabView,
 )
 
@@ -316,6 +317,96 @@ def test_the_font_keeps_the_stylesheet_family(view: TabView, chart) -> None:
     assert "Mono" in view.marker_font().family(), (
         f"the QSS monospace rule is not reaching the widget: {view.marker_font().family()}"
     )
+
+
+# --- string names -------------------------------------------------------------
+
+
+def test_the_string_names_run_from_low_e_at_the_bottom() -> None:
+    """Read bottom to top, a tab is written E A D G B E.
+
+    Lane 0 is the high E string and is drawn on the *top* line, so the tuple as
+    stored is the reverse of the reading order. Both are asserted: the stored one
+    because that is what the widget draws, the reversed one because that is the
+    thing the notation means.
+    """
+    assert STRING_NAMES == ("E", "B", "G", "D", "A", "E")
+    assert tuple(reversed(STRING_NAMES)) == ("E", "A", "D", "G", "B", "E")
+
+
+def test_the_string_names_lane_up_with_the_lines(view: TabView, chart) -> None:
+    """Lane 0's name is drawn on lane 0's line, or the labels are upside down."""
+    view.set_chart(chart)
+    view.set_position(0.5 * BEAT)
+    seen = []
+    image = render(view)
+    for lane in range(LANE_COUNT):
+        y = int(view.y_for_lane(lane, 1))
+        right = int(view.string_label_right())
+        # In the left margin, at this lane's height: there is a glyph here.
+        lit = sum(
+            1
+            for x in range(max(0, right - 24), right - 1)
+            if sum(_rgb(image, x, y)) > 120
+        )
+        seen.append(lit > 0)
+    assert all(seen), f"no string name drawn for lanes {seen}"
+
+
+def test_the_string_names_sit_left_of_the_bar_line(view: TabView, chart) -> None:
+    """Inside the existing margin, not on top of the music."""
+    view.set_chart(chart)
+    assert 0 < view.string_label_right() < view.measure_left()
+
+
+def test_the_margin_is_wide_enough_for_a_letter(view: TabView) -> None:
+    """The margin was already reserved; this is why nothing had to move.
+
+    The label is right-aligned to ``string_label_right()``, so the room available
+    is everything from the widget's left edge to there -- not the 6px of padding
+    between the label and the bar line.
+    """
+    from PySide6 import QtGui
+
+    view.resize(1600, 900)
+    metrics = QtGui.QFontMetrics(view.font())
+    room = view.string_label_right()
+    for name in STRING_NAMES:
+        assert metrics.horizontalAdvance(name) < room, (
+            f"{name!r} needs {metrics.horizontalAdvance(name)}px of {room:.0f}px"
+        )
+
+
+def test_every_staff_gets_its_own_names(view: TabView, chart) -> None:
+    """Each bar is a separate staff, so each is labelled -- not just the current one."""
+    view.set_chart(chart)
+    view.set_position(BAR + MID_BAR)
+    previous, current, following = view.visible_measures()
+    assert previous is not None and following is not None
+    image = render(view)
+    for slot, measure in enumerate((previous, current, following)):
+        y = int(view.y_for_lane(2, slot))
+        right = int(view.string_label_right())
+        lit = sum(
+            1
+            for x in range(max(0, right - 24), right - 1)
+            if sum(_rgb(image, x, y)) > 120
+        )
+        assert lit > 0, f"bar {measure} has no string names"
+
+
+def test_a_chart_with_no_notes_still_draws_its_names(view: TabView) -> None:
+    """An empty library is a state the screen must render, not skip."""
+    from songbuild import make_chart
+
+    view.resize(1400, 800)
+    view.set_chart(make_chart([(0.5, 0, 0)], tempo=60, beats=20))
+    view.set_position(0.5)
+    image = render(view)
+    y = int(view.y_for_lane(0, 1))
+    right = int(view.string_label_right())
+    lit = sum(1 for x in range(max(0, right - 24), right - 1) if sum(_rgb(image, x, y)) > 120)
+    assert lit > 0
 
 
 # --- which measure ------------------------------------------------------------

@@ -36,6 +36,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..model.chart import Chart
 from ..session.judge import GameState, Verdict
+from ..settings import MIN_BPM
 from .screens import ScreenBase, constrained_button, content_column, heading
 from .theme import COLORS, px
 from .widgets.tabview import TabView
@@ -80,6 +81,12 @@ class Game(ScreenBase):
         self._finished = False
         self._last_verdict: tuple[Verdict, float] | None = None
 
+        #: Playback rate, and the clock's origin. See :meth:`position` and
+        #: :meth:`_reanchor`; the pair is what lets the speed change mid-song.
+        self._rate = 1.0
+        self._t0_ms = 0
+        self._bpm_dirty = False
+
         self._view = TabView(self)
         self._build_hud()
 
@@ -118,25 +125,26 @@ class Game(ScreenBase):
         self._banner.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self._banner.setWordWrap(True)
 
-        self._legend = self._build_legend()
+        self._bpm_label = heading("BPM", kind="dim", parent=self)
+        # Parented, like every other HUD widget. A parentless widget is a
+        # *top-level window*: it does not appear in the game at all, because nothing
+        # ever shows it, and the control is simply missing.
+        self._bpm = QtWidgets.QSpinBox(self)
+        self._bpm.setRange(int(MIN_BPM), 400)
+        self._bpm.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self._bpm.setToolTip(
+            "Practise this tab slower. It cannot go above the tempo it is written "
+            "at, because playing a tab faster than written breaks the music."
+        )
+        self._bpm.valueChanged.connect(self._on_bpm_changed)
+        self._bpm_readout = heading("", kind="dim", parent=self)
+
         self._quit = constrained_button("Back to menu", width=200, parent=self)
         self._quit.clicked.connect(self._leave)
         # Deliberately no setFocus here. The shell focuses the screen after building
         # it, and that is what should hold focus -- a key press goes to the focused
         # widget, so focus on this screen is what makes the six keys work at all.
         # Escape already navigates back, so the button does not need the keyboard.
-
-    def _build_legend(self) -> QtWidgets.QLabel:
-        from .theme import LANE_COUNT
-
-        names = ["high E", "B", "G", "D", "A", "low E"][:LANE_COUNT]
-        label = heading(
-            "   ".join(f"{i + 1} = {name}" for i, name in enumerate(names)),
-            kind="dim",
-            parent=self,
-        )
-        label.setObjectName("gameLegend")
-        return label
 
     def _place_hud(self) -> None:
         """Float the HUD, and make the tab view fill the window.
@@ -156,12 +164,17 @@ class Game(ScreenBase):
         self._tally.setGeometry(width // 2, px(12), width // 2 - pad, px(40))
         self._flash.setGeometry(0, height // 5, width, px(80))
         self._banner.setGeometry(pad, height // 2 - px(40), width - pad * 2, px(80))
-        # The legend starts clear of the button rather than under it. Both are on
-        # the bottom row, and the button is opaque, so sharing a left edge hides
-        # the first four entries behind it.
-        button_right = pad + px(200) + px(16)
-        self._legend.setGeometry(button_right, height - px(56), width - button_right - pad, px(24))
-        self._quit.setGeometry(pad, height - px(30) - px(28), px(200), px(28))
+        # The bottom row: Back, then the tempo control. The key legend used to sit
+        # here and was removed when the string names moved onto the cords (§18), so
+        # the row has room without shrinking anything.
+        row_y = height - px(34) - px(28)
+        self._quit.setGeometry(pad, row_y, px(200), px(28))
+        cursor = pad + px(200) + px(20)
+        self._bpm_label.setGeometry(cursor, row_y, px(34), px(28))
+        cursor += px(34) + px(6)
+        self._bpm.setGeometry(cursor, row_y, px(90), px(28))
+        cursor += px(90) + px(10)
+        self._bpm_readout.setGeometry(cursor, row_y, px(220), px(28))
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802 - Qt naming
         super().resizeEvent(event)
@@ -194,10 +207,15 @@ class Game(ScreenBase):
         self._offset = float(self.context.play_request.offset_seconds)
         self._finished = False
         self._last_verdict = None
+        self._bpm_dirty = False
         self._view.set_chart(chart)
         self._title.setText(chart.title or chart.track_name)
         self._banner.setText("")
         self._flash.setText("")
+        # The tempo before the clock starts, so the first frame is already at the
+        # right rate rather than snapping to it on the next tick.
+        self._load_bpm()
+        self._t0_ms = 0
         self._clock.start()
         self._timer.start()
         self._refresh_tally()
@@ -205,10 +223,113 @@ class Game(ScreenBase):
     # --- the clock -----------------------------------------------------------
 
     def position(self) -> float:
-        """Chart position, in seconds. The one number everything else reads."""
+        """Chart position, in seconds. The one number everything else reads.
+
+        ``chart_time = elapsed_real * rate``, with the offset subtracted in *chart*
+        time -- the offset aligns the music to the tab, which is a property of the
+        song, not of how fast you are playing it. That is also why changing the rate
+        never disturbs the stored offset.
+
+        Everything downstream works in chart time, which is why the rate is a single
+        multiplication here rather than a rescale of the chart.
+        """
         if not self._clock.isValid():
             return 0.0
-        return self._clock.elapsed() / 1000.0 - self._offset
+        return (self._t0_ms + self._clock.elapsed()) / 1000.0 * self._rate - self._offset
+
+    def _reanchor(self, new_rate: float) -> None:
+        """Move to a new rate **without moving the music**.
+
+        A rate applied to a *running* clock would teleport: dropping 1.0 to 0.8 on a
+        five-minute song would move the position back by a full minute, and every
+        note with it. So the clock is restarted and its origin moved instead.
+
+        The origin is derived from the *current position*, not from the raw elapsed
+        time. Those differ once a re-anchor has already happened -- the elapsed time
+        is measured from the last restart, and the position carries everything before
+        that. Using elapsed alone was correct only on the first change, and wrong on
+        every one after it: with ``t0 = 0`` and rate 1.0, halving the rate of a clock
+        read 4s put the position at 6s instead of 4s.
+        """
+        if new_rate <= 0:
+            raise ValueError(f"rate must be positive, got {new_rate}")
+        elapsed = self._clock.elapsed() if self._clock.isValid() else 0
+        now_ms = (self._t0_ms + elapsed) * self._rate
+        self._t0_ms = int(now_ms / new_rate)
+        self._rate = new_rate
+        self._clock.restart()
+
+    def target_bpm(self) -> int:
+        """The tempo this tab is being played at: the spin box, or the written one."""
+        return self._bpm.value()
+
+    def written_bpm(self) -> int:
+        """The tempo the tab is written at, or 0 when it has no chart."""
+        return self._chart.tempo if self._chart is not None else 0
+
+    def rate_for(self, bpm: float) -> float:
+        """The playback rate for a requested tempo.
+
+        Never above 1.0: a tab cannot be practised *faster* than it is written
+        without breaking the music, and "slower, for beginners" is the whole point of
+        the control. A chart with no usable tempo plays at 1.0 rather than raising --
+        a missing tempo should not stop a song being playable.
+        """
+        written = self.written_bpm()
+        if written <= 0 or bpm <= 0:
+            return 1.0
+        return min(1.0, bpm / written)
+
+    def set_bpm(self, bpm: int, *, persist: bool = True) -> None:
+        """Play at ``bpm``, re-anchoring the clock so the song does not jump.
+
+        The spin box is the user-facing control and this is the programmatic one, so
+        they have to agree: without the update below, a caller could put the game at
+        50 BPM while the box still read 76, and the control would be lying about the
+        tempo in use. Signals are blocked because setting the box is what would
+        otherwise re-enter here.
+        """
+        self._bpm.blockSignals(True)
+        try:
+            self._bpm.setValue(int(bpm))
+        finally:
+            self._bpm.blockSignals(False)
+        self._reanchor(self.rate_for(self._bpm.value()))
+        self._refresh_bpm_readout()
+        if persist and self._chart is not None:
+            self.context.settings.set_bpm_for(self._slug, float(self._bpm.value()))
+            self._bpm_dirty = True
+
+    @property
+    def _slug(self) -> str:
+        return self.context.play_request.slug if self.context.play_request else ""
+
+    def _on_bpm_changed(self, value: int) -> None:
+        self._reanchor(self.rate_for(value))
+        self._refresh_bpm_readout()
+        if self._chart is not None:
+            self.context.settings.set_bpm_for(self._slug, float(value))
+            self._bpm_dirty = True
+
+    def _load_bpm(self) -> None:
+        """Put the stored tempo in the spin box, clamped to what this tab allows."""
+        written = max(1, self.written_bpm())
+        self._bpm.blockSignals(True)
+        try:
+            self._bpm.setRange(int(MIN_BPM), max(int(MIN_BPM), written))
+            stored = self.context.settings.bpm_for(self._slug, float(written))
+            self._bpm.setValue(max(int(MIN_BPM), min(written, round(stored))))
+        finally:
+            self._bpm.blockSignals(False)
+        self._reanchor(self.rate_for(self._bpm.value()))
+        self._refresh_bpm_readout()
+
+    def _refresh_bpm_readout(self) -> None:
+        written = self.written_bpm()
+        if written <= 0:
+            self._bpm_readout.setText("")
+            return
+        self._bpm_readout.setText(f"of {written} · {self._rate * 100:.0f}%")
 
     def _tick(self) -> None:
         position = self.position()
@@ -300,6 +421,23 @@ class Game(ScreenBase):
         self._timer.stop()
         self._clock.invalidate()
 
+    def _flush_settings(self) -> None:
+        """Write the practice tempo to disk, once, on the way out.
+
+        The spin box writes to the in-memory settings on every step, but a save is a
+        temp-file-and-fsync: stepping 76 down to 60 would otherwise be sixteen of
+        them. Batched here because hiding is already a lifecycle hook.
+        """
+        if not self._bpm_dirty:
+            return
+        self._bpm_dirty = False
+        try:
+            self.context.save_settings()
+        except OSError:
+            # A read-only config directory must not stop the song being played. The
+            # tempo still applies for this run; only the remembering is lost.
+            pass
+
     def hideEvent(self, event: QtGui.QHideEvent) -> None:  # noqa: N802 - Qt naming
         """Stop the clock and uninstall the key filter when navigated away from.
 
@@ -309,6 +447,7 @@ class Game(ScreenBase):
         """
         self._stop()
         self._stop_filter()
+        self._flush_settings()
         super().hideEvent(event)
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # noqa: N802 - Qt naming

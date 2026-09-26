@@ -30,6 +30,12 @@ from pathlib import Path
 #: ignored, never fatal.
 SETTINGS_VERSION = 1
 
+#: Practice-tempo bounds. The floor is where the beat line stops being readable as a
+#: moving thing; the ceiling is far above any real tab, and a song's *own* written
+#: tempo is the real ceiling (see :meth:`Settings.set_bpm_for`), clamped at use.
+MIN_BPM = 20.0
+MAX_BPM = 400.0
+
 
 class InputMode(Enum):
     """How the player controls the highway."""
@@ -120,6 +126,17 @@ class Settings:
     song_offsets_ms: dict[str, float] = field(default_factory=dict)
     """Per-tab audio alignment, keyed by slug, so a manual tweak sticks."""
 
+    song_bpm: dict[str, float] = field(default_factory=dict)
+    """Per-tab practice tempo, keyed by slug.
+
+    Absolute BPM rather than a percentage, because a percentage is a *rate* and a
+    rate is song-relative: "80%" of a 76 BPM tab and of a 50 BPM tab are different
+    tempi, so one global number could not mean "play it slower" for a whole library.
+    A per-song BPM can, and it is also the value an audio transport needs directly.
+
+    Absent means the tab's own written tempo, so an untouched song is unaffected.
+    """
+
     version: int = SETTINGS_VERSION
 
     # --- serialisation ----------------------------------------------------
@@ -176,6 +193,17 @@ class Settings:
                             continue  # drop, do not invent a 0.0 alignment
                         offsets[slug] = max(-5000.0, min(5000.0, number))
                 values[name] = offsets
+            elif name == "song_bpm":
+                tempos: dict[str, float] = {}
+                if isinstance(given, dict):
+                    for slug, bpm in given.items():
+                        if not isinstance(slug, str):
+                            continue
+                        number = _parse_number(bpm)
+                        if number is None:
+                            continue  # drop, do not invent a tempo for a song
+                        tempos[slug] = max(MIN_BPM, min(MAX_BPM, number))
+                values[name] = tempos
             elif name == "version":
                 values[name] = _clamp_int(given, 0, 999, SETTINGS_VERSION)
             # version: keep the file's value if sane, else current
@@ -238,3 +266,15 @@ class Settings:
 
     def set_offset_for(self, slug: str, offset_ms: float) -> None:
         self.song_offsets_ms[slug] = _clamp_float(offset_ms, -5000.0, 5000.0, 0.0)
+
+    def bpm_for(self, slug: str, default: float = 0.0) -> float:
+        """The remembered practice tempo for one tab, in BPM.
+
+        ``default`` is the caller's fallback -- the tab's own written tempo -- and is
+        returned when nothing is stored. Returning the caller's default rather than a
+        constant is what keeps "no stored value" from being a lie about tempo.
+        """
+        return self.song_bpm.get(slug, default)
+
+    def set_bpm_for(self, slug: str, bpm: float) -> None:
+        self.song_bpm[slug] = _clamp_float(bpm, MIN_BPM, MAX_BPM, MIN_BPM)

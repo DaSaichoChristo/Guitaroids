@@ -14,6 +14,8 @@ from pathlib import Path
 import pytest
 
 from guitaroids.settings import (
+    MAX_BPM,
+    MIN_BPM,
     SETTINGS_VERSION,
     InputMode,
     Settings,
@@ -247,7 +249,99 @@ def test_offsets_survive_a_round_trip(tmp_path: Path) -> None:
     assert Settings.load(path).song_offsets_ms == {"a": 1.5, "b": -2.5}
 
 
-# --- staying pure ------------------------------------------------------------
+# --- per-song practice tempo -------------------------------------------------
+
+
+def test_bpm_defaults_to_the_callers_default() -> None:
+    """No stored value means "as written", not a fixed tempo.
+
+    The fallback is the caller's because only the caller knows the tab's written
+    tempo; a constant here would be a claim about tempo this module cannot make.
+    """
+    s = Settings()
+    assert s.bpm_for("any_song", 76.0) == 76.0
+    assert s.bpm_for("any_song") == 0.0
+
+
+def test_bpm_round_trips_through_disk(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    Settings().save(path)
+    raw = json.loads(path.read_text())
+    raw["song_bpm"] = {"alpha": 60.0}
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    loaded = Settings.load(path)
+    assert loaded.bpm_for("alpha") == 60.0
+    assert loaded.bpm_for("beta") == 0.0, "one song's tempo must not leak to another"
+
+
+def test_bpm_is_clamped_on_both_sides() -> None:
+    s = Settings()
+    s.set_bpm_for("a", 1.0)
+    assert s.bpm_for("a") == MIN_BPM
+    s.set_bpm_for("a", 10_000.0)
+    assert s.bpm_for("a") == MAX_BPM
+
+
+def test_bpm_from_a_hand_edited_file_is_clamped() -> None:
+    loaded = Settings.from_dict({"song_bpm": {"a": -5, "b": 9999}})
+    assert loaded.bpm_for("a") == MIN_BPM
+    assert loaded.bpm_for("b") == MAX_BPM
+
+
+def test_unparseable_bpm_values_are_dropped_not_invented() -> None:
+    """Same rule as song_offsets_ms: do not fabricate a tempo for a song.
+
+    Writing 0.0 would be an actively wrong claim -- "play this at zero" -- where
+    dropping the entry leaves the tab at its written tempo, which is true.
+    """
+    loaded = Settings.from_dict(
+        {"song_bpm": {"good": 62, "text": "fast", "null": None, "list": [60], "bad": True}}
+    )
+    assert loaded.bpm_for("good") == 62.0
+    for slug in ("text", "null", "list", "bad"):
+        assert slug not in loaded.song_bpm, f"{slug} should have been dropped"
+
+
+def test_a_non_string_slug_is_ignored() -> None:
+    loaded = Settings.from_dict({"song_bpm": {7: 60.0, "ok": 60.0}})
+    assert loaded.song_bpm == {"ok": 60.0}
+
+
+def test_a_song_bpm_that_is_not_a_mapping_is_ignored() -> None:
+    for junk in ("nope", 60.0, [60], None):
+        assert Settings.from_dict({"song_bpm": junk}).song_bpm == {}
+
+
+def test_a_missing_song_bpm_key_falls_back_to_empty() -> None:
+    """The migration case: a settings file written before this field existed.
+
+    ``from_dict`` only reads keys that are present, so an older file is neither an
+    error nor a reason to invent a tempo.
+    """
+    loaded = Settings.from_dict({"master_volume": 0.5, "version": 1})
+    assert loaded.song_bpm == {}
+    assert loaded.bpm_for("hotel", 76.0) == 76.0
+
+
+def test_song_bpm_does_not_disturb_the_offsets() -> None:
+    """Two per-song dicts on one record; one must not cost the other."""
+    s = Settings()
+    s.set_bpm_for("alpha", 55.0)
+    s.set_offset_for("alpha", -120.0)
+    assert s.bpm_for("alpha") == 55.0
+    assert s.offset_for("alpha") == -120.0
+    assert s.bpm_for("beta", 76.0) == 76.0
+    assert s.offset_for("beta") == 0.0
+
+
+def test_a_corrupt_file_still_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text("{ broken", encoding="utf-8")
+    assert Settings.load(path).song_bpm == {}
+
+
+# --- staying pure ---------------------------------------------------------------------------------------------------------------------
 
 
 def test_module_imports_nothing_heavy() -> None:

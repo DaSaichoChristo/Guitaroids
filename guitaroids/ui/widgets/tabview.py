@@ -77,6 +77,18 @@ MIN_FONT_PIXELS = 9
 #: the fill is the lane colour at partial alpha over a near-black background.
 INK = "#101216"
 
+#: String names, indexed by lane -- so **lane 0 is the high E string**, matching
+#: :meth:`TabView.y_for_lane` putting lane 0 on the top line.
+#:
+#: Read bottom to top that is ``E A D G B E``, which is the order a tab is written
+#: in and the order printed tab puts them down the left of a staff. Written top to
+#: bottom, as the widget draws them, it is ``E B G D A E``.
+#:
+#: Uppercase, because that is the universal tab convention. The game's key legend
+#: used to sit along the bottom of the screen; these replace it, on the cords
+#: themselves, which is where the notation puts them.
+STRING_NAMES: tuple[str, ...] = ("E", "B", "G", "D", "A", "E")
+
 
 @dataclass(frozen=True, slots=True)
 class MeasureSpan:
@@ -222,8 +234,17 @@ class TabView(QtWidgets.QWidget):
         return self.block_top(slot) + (self.block_height - self.line_spacing * (LANE_COUNT - 1)) / 2 + lane * self.line_spacing
 
     def measure_left(self) -> float:
-        """Left edge of a staff, leaving a margin so the bar line is not on the edge."""
+        """Left edge of a staff, leaving a margin for the string names.
+
+        The margin is not padding: it is where :data:`STRING_NAMES` is written, which
+        is where printed tab puts them. It is 7-10x wider than a single letter at
+        every scale, so nothing here had to move to make room.
+        """
         return px(56)
+
+    def string_label_right(self) -> float:
+        """Right edge of the string names: just left of the opening bar line."""
+        return self.measure_left() - px(6)
 
     def measure_width(self) -> float:
         return max(1.0, self.width() - self.measure_left() - px(24))
@@ -305,11 +326,6 @@ class TabView(QtWidgets.QWidget):
         if not self._spans:
             return
 
-        # The note font, set once for the whole paint rather than per note. Only the
-        # markers draw text; the staff and the beat line do not, so leaving it set is
-        # harmless and rebuilding a QFont inside the note loop would not be.
-        painter.setFont(self.marker_font())
-
         for slot, index in enumerate(self.visible_measures()):
             if index is None:
                 continue
@@ -369,6 +385,28 @@ class TabView(QtWidgets.QWidget):
             QtCore.QPointF(left + width, self.y_for_lane(LANE_COUNT - 1, slot) + self.line_spacing / 2),
         )
 
+        self._paint_string_names(painter, slot, current, lines)
+
+    def _paint_string_names(
+        self, painter: QtGui.QPainter, slot: int, current: bool, staff: QtGui.QColor
+    ) -> None:
+        """The string names, down the left of the staff.
+
+        Drawn with ``self.font()`` rather than the fret font: the fret font is sized
+        to fit *inside* a note, and that constraint has no bearing on a label that
+        has the whole margin to itself.
+        """
+        painter.setFont(self.font())
+        painter.setPen(QtGui.QPen(staff))
+        right = self.string_label_right()
+        for lane in range(LANE_COUNT):
+            painter.drawText(
+                QtCore.QRectF(0, self.y_for_lane(lane, slot) - self.line_spacing, right, self.line_spacing * 2),
+                QtCore.Qt.AlignmentFlag.AlignRight
+                | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                STRING_NAMES[lane],
+            )
+
     def _paint_measure_notes(
         self, painter: QtGui.QPainter, slot: int, index: int, current: bool
     ) -> None:
@@ -382,7 +420,12 @@ class TabView(QtWidgets.QWidget):
 
         A note at the very start or end of a measure would be half-clipped by the bar
         line, so it is nudged inward.
+
+        Sets its own font: the fret number is sized to the marker, while the string
+        names beside the staff are sized to the margin. Each painter method declaring
+        its own font is what keeps the two from silently trading sizes.
         """
+        painter.setFont(self.marker_font())
         span = self._spans[index]
         left = self.measure_left()
         width = self.measure_width()

@@ -298,7 +298,6 @@ QWidget#highway {{
 QLabel#gameTitle   {{ font-size: {px(22, f)}px; font-weight: 600; background: transparent; }}
 QLabel#gameTally   {{ font-family: "Monospace"; font-size: {px(15, f)}px; background: transparent; }}
 QLabel#gameBanner  {{ color: {COLORS["text_dim"]}; background: transparent; }}
-QLabel#gameLegend  {{ color: {COLORS["text_dim"]}; font-size: {px(12, f)}px; background: transparent; }}
 QLabel#gameFlash   {{ font-size: {px(30, f)}px; font-weight: 700; color: {COLORS["text"]}; background: transparent; }}
 """
 
