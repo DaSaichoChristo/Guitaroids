@@ -1299,3 +1299,176 @@ correct on its own terms.
 - Nothing committed since §8.
 
 
+## §11 — The menu screens, built (2026-09-26)
+
+Six screens exist; four are real. `GAME` and `RESULTS` are still placeholders, and
+that is the whole of what is left before the highway and the judging.
+
+**Tests: 422, all passing. M0 gate: 6/6. Verified on `xcb` with the real library
+(`Hotel California`, 1 tab, 4 selectable tracks, default track 3).**
+
+### 11.1 Why `AppContext` exists, and why it is not on the shell
+
+`ScreenBase` gave a screen nothing but the shell, and `ShellBase` deliberately
+declares only `navigate`, `go_back` and `current` — the shell's job is navigation.
+So there was nowhere for song select to get the library. Widening the shell into a
+holder for everything would have worked and would have been the wrong shape, so the
+shared state moved to `AppContext`, which the shell owns and hands to each screen.
+
+That is §1.7's "screens never own game objects" applied one level up: a screen may
+borrow the library, but navigating away must not lose it. Tested by navigating
+through all six screens, calling `unload_all()`, and asserting the play request
+survives.
+
+`context` is a **constructor argument** rather than read off `self.shell.context`.
+Reaching through the shell would have needed no signature change at all, but then
+every screen test has to construct a whole `MainWindow` first. There is a test that
+builds `MainMenu` against a context with no window behind it.
+
+`MainWindow` requires a context rather than defaulting to one. Three call sites had
+to change, which is the point: `AppContext()` with default fields is cheap and would
+have silently produced an empty library at a real call site.
+
+### 11.2 The background scan
+
+A rescan triggered from a button is ~0.2s a tab, so 50 songs is ten seconds of
+frozen window. `AppContext.create()` still scans synchronously, before the window
+exists, so the first screen drawn already has the library; only *rescans* go through
+`LibraryLoader`.
+
+- **Cancellation is checked at file boundaries**, not by abandoning the result.
+  Discarding a finished scan still burns ten seconds of CPU after the user navigated
+  away, on a machine also trying to run a webcam preview.
+- **`start()` clears the cancel flag.** A screen that cancels on hide and rescans on
+  show must not come back to a scan that reports cancelled and populates nothing.
+- **A second concurrent scan is refused**, not queued. Two scans of one directory
+  race to write the library and the loser's result gets shown.
+- **Exactly one terminal signal** fires per scan, on every path. A screen waiting on
+  "scan finished" and never woken is worse than one woken with bad news.
+- **A reference to the `QRunnable` is held.** One with no Python reference can be
+  collected mid-`run()`, and the symptom is a pool thread that silently never
+  finishes.
+
+`find_tabs()` was lifted out of `scan_library` so both paths share discovery. A
+loader that globbed separately would rescan a different set than a restart does, and
+only on a library with a nested directory or an oddly cased extension. There is a
+test asserting the two agree exactly.
+
+**A `QRunnable` was chosen over a bare `threading.Thread`** because the thread pool
+is bounded and the signal delivery is the same either way. This is a preference, not
+a finding.
+
+### 11.3 The loader is owned by a screen, not by the context
+
+`AppContext` is pinned free of Qt, `cv2` and `sounddevice` by a subprocess test.
+Putting a `QObject` there would have made every context test a Qt test. So the
+loader is parented to the screen that needs it, and cancelled in `hideEvent`.
+
+`hideEvent` rather than `closeEvent`: the shell keeps built screens in a stack and
+only ever hides them, so a `closeEvent` handler would never run. A scan that outlived
+its screen would emit into a destroyed widget.
+
+### 11.4 Song select
+
+Two columns. It fills the page, so it is top-aligned and wider than the menu's
+column, reusing `content_column` with a larger `max_width` rather than growing a
+second layout convention.
+
+- **Playable and unplayable are separate lists.** A problem row in the main list
+  would be selectable and would need a "no" path out of it. The problems list
+  appears only when non-empty — the collapsed section §6.6 asks for.
+- **The whole `SongEntry` is stashed in `UserRole`**, not the slug. One object, no
+  second lookup, and the detail pane cannot disagree with the row. The list is
+  rebuilt on every rescan, so a stale entry cannot outlive a scan.
+- **The offset writes settings on Play, not on every slider move.** `save()` is
+  temp-file-and-fsync, and a drag emits `valueChanged` continuously.
+
+The test that matters most is the one a screenshot cannot make: that Play records a
+request the game screen can actually resolve, and that the chosen track is what
+comes back out of `context.chart_for()`.
+
+### 11.5 A real bug: preferences wiped the per-song offsets
+
+`song_offsets_ms` belongs to song select. Preferences has no control for it — but
+`save()` was writing the draft's *copy* back. Since the draft is built when the
+screen is first constructed, opening preferences after tuning an offset in song
+select and pressing Save silently discarded the tuning. `save()` now never touches
+the field. This is the class of bug a draft introduces, and it is why the test
+exists rather than the assertion being obvious.
+
+### 11.6 Layouts compress; they do not clip
+
+Preferences on first build had **three combo boxes 19px apart when each needed 34**,
+drawn on top of each other. A `QVBoxLayout` that cannot fit its children does not
+clip them — it compresses them below their minimum. Measured, not guessed: the Input
+group wanted 198px and was given 125.
+
+Two fixes, and the second matters as much as the first:
+
+- The form **scrolls**. Scrolling degrades honestly; compressing lies about what is
+  on screen.
+- The Save/Reset/Back row sits **outside** the scroll area. A Save button below the
+  fold means you move a slider, go hunting for Save, and cannot tell whether the
+  change stuck.
+
+`test_ui_shell.py` now checks every screen for compressed group boxes and for
+children wider than the window. The bug was found by looking at a screenshot, so the
+check belongs in the shared screen tests where the next screen inherits it.
+
+### 11.7 Import is a copy, and the decisions are pure
+
+`guitaroids/importer.py` decides *whether* to import; the screen only asks the
+questions that module reports. The split is because "must this ask before
+overwriting?" is the interesting behaviour and a `QMessageBox` cannot be asserted
+against. Both dialogs are injectable attributes — `QFileDialog.getOpenFileName` is a
+blocking static call that would hang a test outright.
+
+- **Never overwrites without asking.** Tested for both answers.
+- **Copies via temp-file-and-rename.** A failure part-way through cannot leave a
+  truncated `.gp5` that scans as corrupt and sits in the problems list forever,
+  blaming the user for a failure that was ours.
+- **`.gpx` is refused at import** with a reason, rather than copied in to fail at
+  scan time. The problems list exists for files that were already there; filling it
+  with something predictable is clutter.
+- **The destination extension is lowercased.** `songlib` matches with
+  `suffix.lower()` so it would find `song.GP5` — but a library that accumulates
+  mixed-case extensions is a nuisance to look at and to script against.
+
+### 11.8 PySide6 notes worth keeping
+
+- `QFormLayout.itemAt(row, role)` takes an **`ItemRole` enum, not an int**. Passing
+  an int is a `TypeError` at runtime, not a parse error.
+- A word-wrapped `QLabel` in a tight vertical stack reports a height for the width it
+  happens to have, and the text then spills over whatever is below it. Long
+  explanations belong in tooltips; §11.6 is what that cost.
+- `QScrollArea.viewport()` paints its own background by default and covers the
+  themed app background. `setAutoFillBackground(False)`.
+- A `QStackedWidget` cannot show a child of a hidden window, so `showEvent`-based
+  reloads do not fire in a test unless the window is shown first.
+
+### Not done — §11
+
+- **`GAME` and `RESULTS` are placeholders.** Nothing about note timing, judging, the
+  highway or scoring has been built or tested. The clock (§1.5) is still the
+  largest untested risk in the project and is untouched by this section.
+- **No audio has been played.** `AppContext.create()` and the loader both read
+  charts; nothing opens a device.
+- **The offset slider has never been validated against a real tab.** Its range
+  (±500ms) and step (5ms) are reasoned, not measured. The remembered per-song
+  offsets are stored and round-trip, but no human has confirmed a slider position
+  that actually sounds right.
+- **Song select has been seen with exactly one song.** Layout was checked at 960×640
+  and on `xcb`, but a 50-song list, a long title, and a non-ASCII title are untested.
+- **Difficulty bands are unvalidated** (§6.7). "Medium" for Hotel California at
+  2.91 nps is the formula agreeing with itself, not with a player.
+- **The 30s/15s rescan tests use small generated tabs.** They prove the mechanism,
+  not the timing at 50 real tabs, which is the number the design actually rests on.
+- **Device pickers are disabled placeholders.** Audio and camera enumeration needs
+  the `devices/` layer.
+- **No test renders a screen to a pixel and checks the pixels**, beyond "the grab is
+  not blank". The overlap bug in §11.6 was caught by eye, and an eye is not a
+  regression suite — the geometry assertions in `test_ui_shell.py` are the partial
+  mitigation, and they only check group boxes and direct children.
+- One crash-dump artifact appeared when the M0 gate was chained immediately after
+  the full suite. It did not reproduce in four attempts, and the gate passes 6/6
+  standalone and in-suite. Noted, not root-caused.

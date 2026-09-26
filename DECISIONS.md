@@ -59,7 +59,29 @@ is where the "why" belongs.
 | mediapipe **`VIDEO` mode**, not `LIVE_STREAM` — the latter silently drops frames | live | §1.4 |
 | `QApplication` is a process-wide singleton with a fixed platform — test platforms in **subprocesses** | live | §5.3 |
 | Screens never own game objects; `GameSession` outlives them | live | §1.7 |
+| `AppContext` holds shared state and **outlives every screen**; the shell owns one | live | §11 |
+| Screens take the `context` as a constructor argument, not `self.shell.context` | live | §11 |
+| Screens are registered as **factories, not instances** — built on first show | live | §11 |
 | One malformed file must not break the library — a status, never an exception | live | §6.6 |
+| The library is **rescanned in a background thread**; the GUI thread never blocks | live | §11 |
+| `find_tabs()` is shared by the sync and async scans so they cannot disagree | live | §11 |
+
+## Screens
+
+| Decision | Status | Ref |
+|---|---|---|
+| Playable and unplayable tabs are in **separate lists**; problems only appear when there are some | live | §11 |
+| A `SongEntry` is stashed whole in `UserRole`, not its slug — one object, no second lookup | live | §11 |
+| The **offset writes settings on Play**, not on every slider move (a save is an fsync) | live | §11 |
+| A screen **cancels its scan on `hideEvent`**, not `closeEvent` — the shell only ever hides | live | §11 |
+| Preferences edits a **draft** and commits on Save; live-apply would leave half-changes in effect | live | §11 |
+| Preferences **never writes `song_offsets_ms`** — song select owns that field | live | §11 |
+| A form too tall for the window **scrolls**; a layout that cannot fit compresses instead, and overlaps | live | §11 |
+| Disabled controls **say they are not ready** rather than looking live | live | §11 |
+| Import is a **copy**, and **never overwrites without asking** | live | §11 |
+| Import copies via temp-file-and-rename, so a failure cannot leave a half-written tab | live | §11 |
+| `.gpx` is refused **at import** with a reason, rather than copied in to fail at scan time | live | §11 |
+| `AppContext` stays **free of Qt**; a screen owns its own loader | live | §11 |
 
 ## The clock
 
@@ -76,8 +98,8 @@ broken in a way that is hard to diagnose.
 | Pre-render the click track before opening the stream; the RT callback must not allocate | live | §2.4 |
 | Hit windows: Perfect ±35ms, Good ±80ms, Miss past 140ms | live | §1.6 |
 | Apply gain **after** rendering — `sfload(gain=...)` is a no-op and soundfonts clip | live | §7.5 |
-| Count-in configurable, default 1 bar | planned | §3.4 |
-| Per-song audio offset via a manual slider | planned | §3.4 |
+| Count-in configurable, default 1 bar | live | §3.4, §11 |
+| Per-song audio offset via a manual slider | live | §3.4, §11 |
 
 Omitting `- stream.latency` biases every note 10–20ms early, systematically, which
 inside a ±35ms window reads as "the app is broken" rather than as an off-by-10ms.

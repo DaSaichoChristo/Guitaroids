@@ -4,8 +4,8 @@ A Guitar Hero-style app that tracks your hands through the webcam (mediapipe) an
 walks you through Guitar Pro tabs at tempo on a 6-lane note highway, counting
 misses.
 
-Hackathon project. In progress — the song import and audio rendering layers are
-built; the highway, judging and hand tracking are not yet.
+Hackathon project. In progress — the song import, audio rendering and menu layers
+are built; the note highway, judging and hand tracking are not yet.
 
 ## Quick start
 
@@ -35,9 +35,29 @@ Verify at any time:
 .venv/bin/python -m pytest tests/ -q
 ```
 
+## Running it
+
+```bash
+.venv/bin/python -m guitaroids                      # the app
+.venv/bin/python -m guitaroids --songs /path/tabs   # a different library
+.venv/bin/python -m guitaroids --self-test          # build the UI, render, exit
+```
+
+Four of the six screens are real: the main menu, **song select** (pick a tab, pick a
+track, tune the audio offset), **import GP** (copy a tab into the library) and
+**preferences**. **Game** and **Results** are placeholders — pressing Play gets you
+to a screen that says so.
+
+To look at a screen without launching the app:
+
+```bash
+.venv/bin/python scripts/screenshot_ui.py --all    # PNGs in /tmp/opencode/ui
+```
+
 ## Adding songs
 
-Drop a `.gp5` tab into `songs/`. Tabs and audio are gitignored — the library is
+Drop a `.gp5` tab into `songs/`, or use **Import GP** in the app, which copies one
+in from anywhere and rescans. Tabs and audio are gitignored — the library is
 personal, and `.gp5` files transcribe real copyrighted songs. See
 [`songs/README.md`](songs/README.md) for the format, the audio pairing convention,
 and which tabs this build rejects.
@@ -95,15 +115,23 @@ Both have bitten this project and both are enforced by tests:
 guitaroids/
   model/     Chart, Note, repeat unrolling      pure data, zero I/O
   devices/   Transport, HandTracker             (not built yet)
-  session/   GameSession, Judge, scoring        (not built yet)
-  ui/        screens, highway widget            (not built yet)
+  session/   PlayRequest                        what to play, not the game
+  ui/        screens, library loader, theme     menu screens are built
   audio/     synth, soundfont discovery         (not built yet)
+  context.py AppContext: shared state, outlives every screen
+  importer.py import decisions                  pure, no Qt
   songlib.py library scan, pairing, status
+  settings.py user preferences                  pure, no Qt
   qtenv.py   Qt plugin bootstrap
-scripts/     setup, asset fetchers, import report
-tests/       132 tests
+scripts/     setup, asset fetchers, import report, screenshots
+tests/       422 tests
 songs/       your tabs and audio (gitignored)
 ```
+
+`context.py`, `importer.py`, `settings.py` and all of `model/` are pinned free of
+Qt, OpenCV and sounddevice by subprocess tests. That is what keeps them testable in
+milliseconds with no display — and it is why the background library loader is owned
+by a screen rather than by the context.
 
 ## Attribution
 

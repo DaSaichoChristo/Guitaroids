@@ -62,10 +62,14 @@ says what ran.
 
 ## Current state
 
-`tests/` is 93 tests, all passing. `model/chart.py` and `model/repeats.py` exist and
-are pure; `songlib.py` scans and validates. **No UI, no audio, no devices yet** —
-`ui/`, `audio/`, `session/`, `devices/` are empty packages, awaiting the milestones
-in `DESIGN.md` §4.2 (M2 for song select and audio, M3 for the highway and judging).
+`tests/` is 422 tests, all passing. **Four of the six screens are real:** the main
+menu, song select (tab + track + audio offset), import GP, and preferences. **Game
+and Results are still placeholders** — the note highway, judging and scoring are the
+whole of what remains before the app does anything playable.
+
+`model/chart.py`, `model/repeats.py`, `songlib.py`, `settings.py`, `importer.py` and
+`session/play_request.py` are pure. `context.py` holds the shared state and is also
+pinned Qt-free. `ui/` holds the screens plus a background library loader.
 
 Check the song library without launching the GUI:
 
@@ -73,6 +77,24 @@ Check the song library without launching the GUI:
 .venv/bin/python scripts/import_songs.py          # human report
 .venv/bin/python scripts/import_songs.py --json   # exits 1 if anything is unplayable
 ```
+
+Look at a screen without launching the app:
+
+```
+.venv/bin/python scripts/screenshot_ui.py --all  # PNGs in /tmp/opencode/ui
+```
+
+## Two things that will bite you
+
+Both cost real time, and both are now enforced by tests.
+
+- **A layout that does not fit does not clip — it compresses.** Children get squeezed
+  below their minimum height and end up drawn on top of each other. This shipped a
+  preferences screen with three combo boxes overlapping. Tall forms go in a
+  `QScrollArea`, and `test_ui_shell.py` fails if any screen compresses a group box.
+- **`AppContext` must stay free of Qt.** It is pinned by a subprocess test, and it is
+  why the background library loader is owned by a screen rather than by the context.
+  Put a `QObject` on the context and every context test becomes a Qt test.
 
 ## Unblock this first
 
@@ -88,8 +110,10 @@ hijack is gone. Re-verify after any dependency change with
 
 ## The next blocker
 
-`DESIGN.md` §5.4: **there is still no `.gp5` and no audio file in `songs/`.** M1
-cannot be verified end to end until real files are dropped in.
+`DESIGN.md` §11's "Not done" list. **Nothing has ever played audio**, and the note
+clock (§1.5) is still the largest untested risk in the project — it is the thing
+most likely to make the app feel broken in a way that is hard to diagnose. There is
+a `.gp5` in `songs/` now, but still no backing audio file.
 
 ## Audio
 
