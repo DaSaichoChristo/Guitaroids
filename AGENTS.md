@@ -41,6 +41,8 @@ says what ran.
   Both OpenCV builds write the same `cv2/` directory, so the GUI build must be
   removed *before* headless is installed — otherwise pip sees headless as satisfied
   and `import cv2` breaks. This happened and is now covered by the M0 test.
+  `scripts/setup.ps1` is the PowerShell equivalent; `tests/test_setup_scripts.py`
+  keeps the two from drifting.
 - **Layers:** `ui/` → `session/` → `devices/` → `model/`, one-directional. `model/`
   is pure data with zero I/O. `devices/` never imports `session/` or `ui/`.
 - **The clock is the crux.** `song_pos = (stream.time - t0) - stream.latency`.

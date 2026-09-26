@@ -1199,4 +1199,103 @@ Python 3.12.14
   now records `tinysoundfont` separately as a `--no-deps` install.
 - **Nothing committed.** 13 untracked items.
 
+---
+
+## §10 — PowerShell port, and an intermittent test failure (2026-09-26)
+
+### §10.1 `scripts/setup.ps1`
+
+A Windows equivalent of `setup.sh`, for demoing on another machine. Two
+platform-specific problems had to be solved rather than translated.
+
+**Native exit codes.** `$ErrorActionPreference = 'Stop'` does *not* trap a
+non-zero exit from a native executable in Windows PowerShell 5.1. Without an
+explicit check, every failing `pip` call would pass silently and the script would
+report success having installed nothing. All external calls therefore go through an
+`Invoke-Native` wrapper that throws on a non-zero `$LASTEXITCODE`. The one
+exception is `pip show opencv-contrib-python`, which is a *probe* whose exit code
+is the signal being read, and which is guarded by `if ($LASTEXITCODE -eq 0)`.
+
+**Soundfont extraction.** The `.deb` is an `ar` archive containing `data.tar.xz` —
+verified: magic bytes `!<arch>`, members `debian-binary / control.tar.gz /
+data.tar.xz`, and the inner tar holds `./usr/share/sounds/sf3/FluidR3Mono_GM.sf3`.
+`dpkg-deb` is used where present; otherwise the two-stage fallback relies on the
+bsdtar that ships with Windows, which reads the `ar` layer directly, so
+`tar -xf file.deb` then `tar -xf data.tar.xz` extracts it. If neither works the
+step is skipped with an explanation rather than failing setup, because the numpy
+synth is the fallback.
+
+**Not verified.** There is no PowerShell on this machine, so the script has never
+been executed. It is checked structurally — braces, brackets and parens balance
+outside strings and comments — and by a test asserting it routes pip through the
+wrapper and uses the `Scripts/` venv layout. That is not the same as having run
+it. Treat the Windows path as untested.
+
+### §10.2 The two scripts are kept from drifting by a test
+
+Hand-maintained duplicates are the worst case: nothing fails when one is updated
+and the other is not, the install just quietly does the wrong thing on one
+platform. `tests/test_setup_scripts.py` pins what must agree — the headless
+OpenCV version, the model and soundfont URLs, the `--no-deps` install, the M0
+gate, the numpy fallback, and that each file mentions the other.
+
+Writing that test immediately found **five mismatches**, three of them real:
+
+- `setup.ps1` put the OpenCV version in a PowerShell variable, so the two could
+  not be compared. Now a literal in both.
+- `setup.sh` never said it was the only supported install path; that warning lived
+  only in `requirements.txt`. Added to both.
+- The `pip install --dry-run` trap was documented in `AGENTS.md` and §9 but not in
+  `setup.sh` — the one file a person is actually reading when they might
+  substitute a bare `pip install`. Added.
+
+Two more were the test's fault, not the scripts': it assumed the URLs lived in
+`setup.sh` (they are in the `fetch_*.sh` helpers, so the test now compares the
+`.ps1` against those), and it flagged the `pip show` probe as an unchecked
+invocation when reading its exit code is the entire point.
+
+### §10.3 An intermittent abort in the M0 gate, and its likely cause
+
+While re-running `setup.sh` after editing it, the M0 gate aborted once with
+SIGABRT (exit 134) and passed on every subsequent run — including 12 consecutive
+standalone runs. An intermittent failure of the one gate everything else depends
+on is worse than a consistent one, so it was worth chasing rather than re-running
+until green.
+
+The cause was most likely the subprocess in `test_m0_window.py`: it creates a
+`QApplication`, processes events, prints, and exits, so the interpreter tears a
+live `QApplication` down at shutdown. Whether that aborts depends on GC timing,
+which is exactly the kind of failure that hides during casual testing. The fix is
+`os._exit(0)` after flushing stdout, which skips static destructors entirely and
+removes the race rather than retrying around it.
+
+Verified after the fix: 40 consecutive gate runs, 5 consecutive full-suite runs,
+4 concurrent gate runs (contending for the same X display), and 3 full
+`rm -rf .venv && setup.sh` cycles — all clean, 143 passing each time.
+
+**Stated honestly:** the failing child's output was never captured, so the abort is
+*not proven* to have been that destructor. What is proven is that the mechanism
+was removed and the flake did not recur. Leaving a `QApplication` to be destroyed
+at interpreter exit is a known Qt anti-pattern regardless, so the change is
+correct on its own terms.
+
+### Not done — §10
+
+- **`setup.ps1` has never been run.** No PowerShell on this machine. The soundfont
+  extraction path in particular is untested, and it is the part most likely to
+  differ on Windows.
+- The structural check is a brace counter, not a parser. It cannot catch a wrong
+  cmdlet name, a bad parameter, or PowerShell 5.1 vs 7 semantic differences.
+  `-UseBasicParsing` and the TLS bump are written to work on both, but unverified.
+- **`setup.ps1` duplicates the version-check and opencv-swap logic in a third
+  place** (with `requirements.txt` and `setup.sh`). The consistency test covers the
+  scripts, not the requirements file.
+- `fetch_model.sh` / `fetch_soundfont.sh` still have no `.ps1` equivalents;
+  `setup.ps1` inlines that logic instead, so a change to the fetch scripts will
+  not reach the PowerShell path. The URL test covers that specific drift, nothing
+  more.
+- The §10.3 flake is fixed but not root-caused with certainty. If it recurs, the
+  child's stdout and exit code need capturing rather than guessing again.
+- Nothing committed since §8.
+
 

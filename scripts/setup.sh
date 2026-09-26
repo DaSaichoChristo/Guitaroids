@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # Reproducible setup. Installs dependencies in the one order that works.
+# This is the ONLY supported install path -- see requirements.txt for why a bare
+# `pip install -r requirements.txt` is not equivalent.
+#
+# PowerShell equivalent: scripts/setup.ps1
+# KEEP THE TWO IN SYNC -- tests/test_setup_scripts.py asserts they agree on the
+# critical pins (opencv version, the model URL, the soundfont URL).
 #
 # Why the order matters (DESIGN.md §2.2, §7.4):
 #   1. mediapipe depends on opencv-contrib-python, the GUI build. Its bundled Qt
@@ -8,9 +14,11 @@
 #      be uninstalled BEFORE the headless build is installed. The reverse order
 #      deletes the headless files and breaks `import cv2`. This bit us during
 #      testing and is now asserted by tests/test_m0_window.py.
-#   3. tinysoundfont is optional and installed with --no-deps, because pyaudio
-#      has no wheel and needs portaudio19-dev. We only render offline, and
-#      pyaudio is a lazy import used solely for real-time playback.
+#   3. tinysoundfont is installed with --no-deps, because pyaudio has no wheel and
+#      needs portaudio19-dev. We only render offline, and pyaudio is a lazy import
+#      used solely for real-time playback. Beware: `pip install --dry-run` exits 0
+#      on tinysoundfont even though a real install fails, so a dry run is not
+#      evidence either way.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

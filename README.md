@@ -9,13 +9,24 @@ built; the highway, judging and hand tracking are not yet.
 
 ## Quick start
 
+Linux / macOS:
+
 ```bash
 scripts/setup.sh          # the ONLY supported install path
 ```
 
-This creates `.venv` on Python 3.12, installs pinned dependencies, fetches the
-mediapipe model and a soundfont, and runs the M0 gate. See
-[`DECISIONS.md`](DECISIONS.md) for why each choice was made, and
+Windows (PowerShell):
+
+```powershell
+.\scripts\setup.ps1
+```
+
+Either script creates `.venv` on Python 3.12, installs pinned dependencies, fetches
+the mediapipe model and a soundfont, and runs the M0 gate. The two are kept in
+sync by `tests/test_setup_scripts.py`, which asserts they agree on the critical
+pins — so a change to one is not silently missing from the other.
+
+See [`DECISIONS.md`](DECISIONS.md) for why each choice was made, and
 [`DESIGN.md`](DESIGN.md) for the reasoning and measurements behind them.
 
 Verify at any time:
