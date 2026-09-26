@@ -1,0 +1,2 @@
+attrs==26.1.0
+PyGuitarPro==0.11
