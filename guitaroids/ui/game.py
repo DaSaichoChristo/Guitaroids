@@ -1,10 +1,10 @@
-"""The game screen: a highway, a clock, six keys, and a tally.
+"""The game screen: a tab view, a clock, six keys, and a tally.
 
 This is the first screen that needs a *position*, and therefore the first that needs
 a clock. The clock here is a **wall clock** (``QElapsedTimer``) and that is a
 deliberate limitation, not an oversight:
 
-- It is self-consistent. The number drawn on the highway and the number judged
+- It is self-consistent. The number drawn on the tab view and the number judged
   against come from the same source, so pressing a key exactly as a note crosses the
   playline scores PERFECT. That is enough to verify lane/key alignment, note
   timing, hit feedback and the whole judging path.
@@ -38,7 +38,7 @@ from ..model.chart import Chart
 from ..session.judge import GameState, Verdict
 from .screens import ScreenBase, constrained_button, content_column, heading
 from .theme import COLORS, px
-from .widgets.highway import Highway
+from .widgets.tabview import TabView
 
 if TYPE_CHECKING:  # pragma: no cover - types only
     from ..context import AppContext
@@ -80,7 +80,7 @@ class Game(ScreenBase):
         self._finished = False
         self._last_verdict: tuple[Verdict, float] | None = None
 
-        self._highway = Highway(self)
+        self._view = TabView(self)
         self._build_hud()
 
         self._timer = QtCore.QTimer(self)
@@ -93,10 +93,10 @@ class Game(ScreenBase):
     # --- construction --------------------------------------------------------
 
     def _build_hud(self) -> None:
-        """The score row, laid out over the top of the highway.
+        """The score row, laid out over the top of the tab view.
 
         Built as children of the screen and floated by ``resizeEvent``, so the
-        highway keeps the whole window -- a rhythm game that shrinks its playfield to
+        playfield keeps the whole window -- a rhythm game that shrinks it to
         make room for a score is worse than one with no score. Every label is
         **parented to the screen**: a parentless QLabel is a top-level window, and
         showing one opens a second window floating over the game.
@@ -139,17 +139,17 @@ class Game(ScreenBase):
         return label
 
     def _place_hud(self) -> None:
-        """Float the HUD, and make the highway fill the window.
+        """Float the HUD, and make the tab view fill the window.
 
         Manual geometry rather than a layout, because the HUD is an overlay: the
-        highway is the screen, and a QVBoxLayout holding both would shrink the
+        view is the screen, and a QVBoxLayout holding both would shrink the
         playfield to make room for a score.
 
         Called from ``resizeEvent`` *and* once at the end of ``__init__``, because a
         widget that has never been resized has not received a ``resizeEvent`` and
-        the highway would otherwise sit at its default 640x480 on first show.
+        the view would otherwise sit at its default 640x480 on first show.
         """
-        self._highway.setGeometry(self.rect())
+        self._view.setGeometry(self.rect())
         width, height = self.width(), self.height()
         pad = px(20)
         self._title.setGeometry(pad, px(12), width // 2, px(40))
@@ -180,7 +180,7 @@ class Game(ScreenBase):
         if chart is None or not chart.notes:
             self._chart = None
             self._state = None
-            self._highway.set_chart(None)
+            self._view.set_chart(None)
             self._title.setText("")
             self._tally.setText("")
             self._banner.setText(
@@ -194,7 +194,7 @@ class Game(ScreenBase):
         self._offset = float(self.context.play_request.offset_seconds)
         self._finished = False
         self._last_verdict = None
-        self._highway.set_chart(chart)
+        self._view.set_chart(chart)
         self._title.setText(chart.title or chart.track_name)
         self._banner.setText("")
         self._flash.setText("")
@@ -214,7 +214,7 @@ class Game(ScreenBase):
         position = self.position()
         if self._state is not None:
             self._state.update(position)
-        self._highway.set_position(position)
+        self._view.set_position(position)
         self._refresh_tally()
         if self._state is not None and not self._finished:
             if self._state.outstanding == 0:
@@ -225,7 +225,7 @@ class Game(ScreenBase):
         """Three states, one label: empty library, get ready, complete.
 
         The get-ready state exists because the real tab's first note is 3.16s in.
-        Three seconds of blank highway looks like a broken game rather than like a
+        Three seconds of empty notation looks like a broken game rather than like a
         song about to start, and there is nothing else on screen to explain it.
         """
         if self._chart is None or self._state is None:
@@ -334,8 +334,8 @@ class Game(ScreenBase):
     # --- accessors for tests --------------------------------------------------
 
     @property
-    def highway(self) -> Highway:
-        return self._highway
+    def view(self) -> TabView:
+        return self._view
 
     @property
     def state(self) -> GameState | None:

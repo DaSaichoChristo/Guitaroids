@@ -23,7 +23,7 @@ from guitaroids.session.judge import Verdict
 from guitaroids.songlib import Library, SongEntry, Status
 from guitaroids.ui.game import KEY_LANES, Game
 from guitaroids.ui.screens import Screen
-from guitaroids.ui.widgets.highway import Highway
+from guitaroids.ui.widgets.tabview import TabView
 
 #: Notes one per lane, all at t=2.0, so a press in one lane cannot be satisfied by
 #: another lane's note. collapse=False because six notes on one onset would be
@@ -95,7 +95,7 @@ def test_it_loads_the_request_from_the_context(shell, chart) -> None:
         assert screen.chart is not None
         assert screen.state is not None
         assert screen.state.note_count == len(chart.notes)
-        assert screen.highway.chart is chart
+        assert screen.view.chart is chart
     finally:
         screen._stop()
         screen.deleteLater()
@@ -108,7 +108,7 @@ def test_no_request_is_an_empty_state_not_a_crash(shell) -> None:
     try:
         assert screen.state is None
         assert screen.chart is None
-        assert screen.highway.chart is None
+        assert screen.view.chart is None
         assert "No song selected" in screen._banner.text()
     finally:
         screen._stop()
@@ -163,17 +163,17 @@ def test_the_position_advances(game: Game) -> None:
     assert game.position() > first
 
 
-def test_the_highway_follows_the_position(game: Game) -> None:
+def test_the_view_follows_the_position(game: Game) -> None:
     game._clock.restart()
     game._tick()
-    game._highway.set_position(game.position())
-    assert game.highway.position == pytest.approx(game.position(), abs=0.05)
+    game._view.set_position(game.position())
+    assert game.view.position == pytest.approx(game.position(), abs=0.05)
 
 
 def test_the_ticker_pushes_the_position_into_the_widget(game: Game) -> None:
     game._clock = _FrozenClock(2.0)
     game._tick()
-    assert game.highway.position == pytest.approx(2.0)
+    assert game.view.position == pytest.approx(2.0)
 
 
 # --- input -------------------------------------------------------------------
@@ -366,8 +366,8 @@ def test_revisiting_starts_a_fresh_run(shell, chart) -> None:
 # --- structure ---------------------------------------------------------------
 
 
-def test_the_screen_owns_a_highway(game: Game) -> None:
-    assert isinstance(game.highway, Highway)
+def test_the_screen_owns_a_tab_view(game: Game) -> None:
+    assert isinstance(game.view, TabView)
 
 
 def test_a_lane_key_works_even_when_it_does_not_reach_the_screen(
@@ -449,14 +449,14 @@ def test_keys_stop_driving_the_game_once_it_is_hidden(shell, chart) -> None:
 
 
 def test_the_hud_does_not_cover_the_playfield(shell, chart) -> None:
-    """The HUD is an overlay: the highway keeps the whole window.
+    """The HUD is an overlay: the tab view keeps the whole window.
 
-    A layout holding both would shrink the highway, and in a rhythm game the
+    A layout holding both would shrink the view, and in a rhythm game the
     playfield is the thing that must not move.
     """
     screen = game_via_shell(shell, chart)
-    assert screen.layout() is None, "nothing constrains the highway or the HUD"
-    assert screen.highway.geometry() == screen.rect(), "the highway fills the screen"
+    assert screen.layout() is None, "nothing constrains the view or the HUD"
+    assert screen.view.geometry() == screen.rect(), "the tab view fills the screen"
 
 
 def test_the_hud_labels_are_children_of_the_screen(shell, chart) -> None:
