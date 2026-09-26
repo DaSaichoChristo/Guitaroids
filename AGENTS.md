@@ -42,7 +42,10 @@ says what ran.
   removed *before* headless is installed — otherwise pip sees headless as satisfied
   and `import cv2` breaks. This happened and is now covered by the M0 test.
   `scripts/setup.ps1` is the PowerShell equivalent; `tests/test_setup_scripts.py`
-  keeps the two from drifting.
+  keeps the two from drifting. `requirements.txt` is **8 direct pins, all `==`**,
+  and `tests/test_requirements.py` keeps it honest: no transitive may be pinned
+  there, every pin must be imported today or carry a named milestone, every pin
+  must match the lock, and the three install caveats must all still be present.
 - **Layers:** `ui/` → `session/` → `devices/` → `model/`, one-directional. `model/`
   is pure data with zero I/O. `devices/` never imports `session/` or `ui/`.
 - **The clock is the crux.** `song_pos = (stream.time - t0) - stream.latency`.
@@ -67,7 +70,7 @@ says what ran.
 
 ## Current state
 
-`tests/` is 682 tests, all passing. **Five of the six screens are real:** the main
+`tests/` is 694 tests, all passing. **Five of the six screens are real:** the main
 menu, song select (tab + track + audio offset + **per-song practice tempo**), import
 GP (choose a file, then Add to library), preferences, and **game** — three bars
 of tab notation with a left-to-right beat line, `E A D G B E` down the left, a six-key keyboard test mode and PERFECT/GOOD/MISS
@@ -178,8 +181,11 @@ only for real-time playback, so offline rendering never needs it. Locked in by
 `tests/test_audio_deps.py`. Note `pip install --dry-run` gives a false positive here
 — it exits 0 on a package that will not actually build.
 
-**Soundfonts clip.** They render hot, and `sfload(gain=...)` has no effect — apply
-gain to the rendered buffer afterwards.
+**Soundfonts do not clip — §7.5 got that backwards.** A six-note chord peaks at
+**0.22**, not 1.0, because the buffer was read as int16 instead of float32 (§22).
+`sfload(gain=...)` really is useless, so apply gain to the rendered buffer — but
+**raise** it by 3-4x, do not tame it. `generate()` returns a `memoryview` of stereo
+float32; read it as anything else and you get NaN or a fake clip.
 
 ## Rules
 

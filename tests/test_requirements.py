@@ -1,0 +1,222 @@
+"""Keeps requirements.txt an accurate inventory rather than a wish list.
+
+The file is hand-maintained on purpose (§6.2): a `pip freeze` in disguise would
+overwrite the one comment documenting the OpenCV workaround, and an aspirational
+list would pin packages for features nobody has built. Both failure modes are
+silent — nothing fails when a pin stops being imported, the list just starts
+lying about what the app needs.
+
+So the facts are pinned here:
+
+  * every pin is `==` and parses as a real requirement line
+  * no pin is a **transitive** dependency, which is what the lock file is for
+    (`attrs` is PyGuitarPro's and was listed here until §22)
+  * every pin is either imported by the code today or has a milestone named in
+    the file's own comments -- nothing is pinned on principle alone
+  * the pins match the lock file, so the curated list and the frozen snapshot
+    cannot describe two different projects
+  * the three install caveats (OpenCV ordering, tinysoundfont --no-deps,
+    fetched assets) are still all present, because a silent deletion of one of
+    them reintroduces §2.2
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+REQUIREMENTS = ROOT / "requirements.txt"
+OPTIONAL = ROOT / "requirements-optional.txt"
+DEV = ROOT / "requirements-dev.txt"
+LOCK = ROOT / "requirements-lock.txt"
+
+PIN = re.compile(r"^([A-Za-z0-9_.\-]+)==([^\s#]+)")
+
+#: Distributions whose *module* name differs from the distribution name. Recorded
+#: rather than worked around with a fuzzy match, because the mismatch is a real
+#: fact about these packages and a reader of requirements.txt benefits from it.
+MODULE_NAME = {
+    "opencv-contrib-python-headless": "cv2",
+    "pyguitarpro": "guitarpro",
+    "py-side6": "PySide6",
+    "tinysoundfont": "tinysoundfont",
+}
+
+#: Pinned because another pin needs it, with nothing importing it directly.
+#: `shiboken6` is what turns PySide6's Python bindings into C++ calls, so PySide6
+#: declares it; the project gets it transitively and pins it to say so.
+COMPANION = {"shiboken6": "PySide6"}
+
+
+def parse(path: Path) -> dict[str, str]:
+    """The `name==version` pins in a requirements file, comments ignored."""
+    found: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", "-r ")):
+            continue
+        match = PIN.match(stripped)
+        if match:
+            found[match.group(1).lower().replace("_", "-")] = match.group(2)
+    return found
+
+
+@pytest.fixture(scope="module")
+def requirements() -> dict[str, str]:
+    return parse(REQUIREMENTS)
+
+
+@pytest.fixture(scope="module")
+def lock() -> dict[str, str]:
+    return parse(LOCK)
+
+
+# --- shape ---------------------------------------------------------------------
+
+
+def test_every_pin_is_exact(requirements: dict[str, str]) -> None:
+    """A `>=` or a bare name makes the curated list a suggestion."""
+    loose = [
+        line.strip()
+        for line in REQUIREMENTS.read_text().splitlines()
+        if line.strip() and not line.strip().startswith(("#", "-r ")) and "==" not in line
+    ]
+    assert not loose, f"unpinned lines in requirements.txt: {loose}"
+
+
+def test_the_file_is_not_empty(requirements: dict[str, str]) -> None:
+    assert len(requirements) >= 5, "the curated list has lost its contents"
+
+
+def test_the_three_install_caveats_are_still_there() -> None:
+    """Each one, deleted, reintroduces a real failure.
+
+    §2.2's OpenCV ordering is the one that costs an afternoon: pip reports the
+    headless build "already satisfied" and leaves `import cv2` broken.
+    """
+    text = REQUIREMENTS.read_text()
+    assert "opencv-contrib-python-headless" in text, "the OpenCV warning is gone"
+    assert "BEFORE the headless" in text, "the *order* is what matters, not the list"
+    assert "--no-deps" in text, "tinysoundfont's install caveat is gone"
+    assert "fetch_model.sh" in text or "fetch_soundfont.sh" in text, (
+        "soundfonts and the model are fetched, not installed; say so"
+    )
+
+
+# --- no transitives -------------------------------------------------------------
+
+
+def test_no_transitive_dependency_is_pinned_here(requirements: dict[str, str]) -> None:
+    """The lock file exists for these, and a curated list that grows them is a freeze.
+
+    `attrs` was here: nothing in the project imports it, and it is a dependency of
+    PyGuitarPro. It stayed out of the way only until somebody tidied a list without
+    checking what required what (§22).
+    """
+    transitive = {"attrs", "matplotlib", "pillow", "contourpy", "cycler", "fonttools",
+                  "kiwisolver", "pyparsing", "absl-py", "flatbuffers", "certifi", "cffi",
+                  "six", "packaging", "pluggy", "iniconfig", "typing-extensions",
+                  "python-dateutil", "pyside6-addons", "pyside6-essentials", "pycparser"}
+    listed = set(requirements)
+    assert not listed & transitive, (
+        f"{sorted(listed & transitive)} are transitive; they belong in the lock file"
+    )
+
+
+# --- every pin is justified -----------------------------------------------------
+
+
+def test_every_pin_is_imported_or_has_a_milestone(requirements: dict[str, str]) -> None:
+    """A pin with neither a use nor a plan is a version nobody chose.
+
+    The check is deliberately weak in one direction: a package whose *only* mention
+    is in a comment passes if that comment is a milestone heading or a
+    section reference, which is the weakest thing that still counts as a reason.
+    """
+    sources = "\n".join(
+        path.read_text()
+        for path in ROOT.rglob("*.py")
+        if ".venv" not in path.parts
+    )
+    text = REQUIREMENTS.read_text()
+    unjustified = []
+    for name in requirements:
+        needed_by = COMPANION.get(name)
+        if needed_by and any(
+            re.fullmatch(re.escape(needed_by), other, re.I) for other in requirements
+        ):
+            continue
+        # Case-insensitive, because a distribution name and a module name differ:
+        # `PyGuitarPro` in the file, `import guitarpro` in the code, and the pin
+        # compares lowercased against the lock.
+        module = re.escape(MODULE_NAME.get(name, name))
+        imported = re.search(rf"^\s*(?:import|from)\s+{module}\b", sources, re.M | re.I)
+        if imported:
+            continue
+        # Otherwise it must be named next to a §-reference in the file.
+        lines = [line for line in text.splitlines() if name in line and "§" in line]
+        if not lines:
+            unjustified.append(name)
+    assert not unjustified, (
+        f"{unjustified} are pinned but neither imported nor explained; "
+        "add a milestone reference or drop the pin"
+    )
+
+
+def test_every_module_name_alias_is_real() -> None:
+    """The alias table is documentation, so it has to be true.
+
+    A distribution renamed or replaced, and the map goes stale -- and then
+    `test_every_pin_is_imported_or_has_a_milestone` starts passing for the wrong
+    reason, which is the failure mode this whole file exists to prevent.
+    """
+    sources = "\n".join(
+        path.read_text() for path in ROOT.rglob("*.py") if ".venv" not in path.parts
+    )
+    for distribution, module in MODULE_NAME.items():
+        if distribution not in parse(REQUIREMENTS):
+            continue
+        assert re.search(
+            rf"^\s*(?:import|from)\s+{re.escape(module)}\b", sources, re.M
+        ), f"{distribution} is pinned as {module}, but nothing imports {module}"
+
+
+def test_the_audio_pins_are_marked_as_unbuilt(requirements: dict[str, str]) -> None:
+    """`sounddevice` and `soundfile` are for §1.5, and nothing plays audio yet.
+
+    Recorded because "the dependency is there" and "the feature is there" are
+    different claims, and only one of them is true.
+    """
+    text = REQUIREMENTS.read_text()
+    for name in ("sounddevice", "soundfile"):
+        if name in requirements:
+            assert f"audio milestone" in text, "the audio pins lost their milestone note"
+
+
+# --- the curated list and the lock agree ----------------------------------------
+
+
+def test_the_pins_are_all_in_the_lock(requirements: dict[str, str], lock: dict[str, str]) -> None:
+    """Otherwise the curated list and the frozen snapshot describe two projects."""
+    missing = sorted(set(requirements) - set(lock))
+    assert not missing, f"pinned here but absent from the lock: {missing}"
+
+
+def test_every_pin_matches_the_lock(requirements: dict[str, str], lock: dict[str, str]) -> None:
+    wrong = {
+        name: (version, lock[name])
+        for name, version in requirements.items()
+        if name in lock and lock[name] != version
+    }
+    assert not wrong, f"version drift between requirements.txt and the lock: {wrong}"
+
+
+def test_the_optional_and_dev_files_are_small_and_deliberate() -> None:
+    """One package each, both explained, both installed differently."""
+    assert set(parse(OPTIONAL)) == {"tinysoundfont"}
+    assert set(parse(DEV)) == {"pytest"}
+    assert "no-deps" in OPTIONAL.read_text()
+    assert "requirements.txt" in DEV.read_text(), "dev installs the runtime too"

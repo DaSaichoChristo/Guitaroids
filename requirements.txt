@@ -1,8 +1,9 @@
 # Guitaroids — runtime dependencies.
 #
-# This is the complete inventory of packages the project needs. Three of them
-# cannot be installed by a plain `pip install -r requirements.txt`, for reasons
-# that are not configuration mistakes and cannot be fixed by editing this file.
+# Eight direct dependencies, curated by hand. Read this file before changing it:
+# three of these packages cannot be installed by a plain
+# `pip install -r requirements.txt`, for reasons that are not configuration
+# mistakes and cannot be fixed by editing this file.
 #
 #   ==> Use `scripts/setup.sh`. It is the only supported install path.
 #
@@ -23,9 +24,9 @@
 #    Its declared dependency is pyaudio, which has NO Linux wheel in any release
 #    and cannot be built here (portaudio.h is absent; only the libportaudio2
 #    runtime is installed). Installing it normally therefore fails outright.
-#    We never need pyaudio: it is a lazy import used solely for real-time
-#    playback, and we render offline. So tinysoundfont goes in with --no-deps.
-#    It lives in requirements-optional.txt, which setup.sh installs that way.
+#    We never need pyaudio: it is imported in exactly one place in the package,
+#    `Synth.start()`, which is a convenience loader we do not use. It lives in
+#    requirements-optional.txt, which setup.sh installs with --no-deps.
 #
 # 3. Soundfont and model
 #    Not Python packages. Fetched by scripts/fetch_model.sh and
@@ -33,6 +34,32 @@
 #
 # The numpy Karplus-Strong synth is the fallback when tinysoundfont is absent, so
 # the app still makes sound with only this file installed.
+#
+#
+# WHY THIS FILE IS SHORTER THAN THE VENV
+#
+# Transitive dependencies are deliberately absent and live in
+# requirements-lock.txt, which is `pip freeze` of one working environment. The venv
+# has ~30 packages; this file has eight. The notable transitive pulls are
+# matplotlib, pillow, contourpy, cycler, fonttools, kiwisolver and pyparsing — all
+# of them mediapipe's, and none of them imported by this project. Use the lock file
+# to reproduce an environment; use this one to know what we actually depend on.
+#
+# WHY A PIN IS HERE
+#
+# "Imported today" means some module in guitaroids/ does `import <it>`. A pin
+# marked for a milestone is deliberate and named: it is the dependency the next
+# piece of work needs, pinned now so the version is decided before the code that
+# relies on it exists. Both kinds belong here, and pretending otherwise is how
+# requirements.txt becomes either a `pip freeze` in disguise or a wish list.
+#
+#   imported today      PySide6, shiboken6, numpy, opencv-contrib-python-headless,
+#                       PyGuitarPro
+#   audio milestone     sounddevice (§1.5, the master clock), soundfile (§3.1,
+#                       decoding) — neither is imported yet; no audio has ever
+#                       played
+#   hand tracking       mediapipe (§15) — not imported yet, and it is the package
+#                       that brings the OpenCV problem in point 1
 
 PySide6==6.11.2
 shiboken6==6.11.2
@@ -42,12 +69,14 @@ opencv-contrib-python-headless==5.0.0.93   # must match the version mediapipe pu
 soundfile==0.14.0
 sounddevice==0.5.6
 PyGuitarPro==0.11
-attrs==26.1.0
 
 # Runtime: installed with --no-deps by scripts/setup.sh, listed in
 # requirements-optional.txt rather than above, because a plain install fails.
 #   pip install -r requirements-optional.txt --no-deps
 #   tinysoundfont==0.3.7
+#
+# attrs is NOT listed: it is a transitive of PyGuitarPro, and pinning a
+# transitive here is what turns a curated list into a freeze. It is in the lock.
 #
 # Development-only (pytest) is in requirements-dev.txt.
 #
@@ -55,5 +84,6 @@ attrs==26.1.0
 #   mido             .mid export. Taken off the table (DESIGN.md §9) — the synth
 #                    reads the Chart directly, so there is no MIDI round trip.
 #   pyfluidsynth     rejected: libfluidsynth links 60 shared libraries (§7.5).
-#   pyaudio          never imported; only real-time playback would need it.
+#   pyaudio          never imported; only `Synth.start()` would need it, and we
+#                    load soundfonts with `sfload()` instead.
 #   av, pydub        rejected: need Python 3.11+ / an ffmpeg binary (§3.1).

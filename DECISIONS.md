@@ -47,6 +47,7 @@ is where the "why" belongs.
 | tinysoundfont 0.3.7, installed **`--no-deps`** from `requirements-optional.txt` | live | §7.5, §9 |
 | ~~mido~~ — **taken off the table**; no MIDI round trip, the synth reads the `Chart` | live | §9 |
 | FluidR3 mono soundfont, fetched rather than committed (MIT) | live | §7.5 |
+| Soundfonts **do not clip** — a six-note chord peaks at 0.22; `sfload(gain=…)` is not a level control, so boost the **rendered buffer** | live | §22.2 |
 
 ## Architecture
 

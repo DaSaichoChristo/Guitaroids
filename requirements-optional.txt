@@ -12,13 +12,28 @@
 #   absent, only the libportaudio2 runtime is installed. Installing it normally
 #   fails with "fatal error: portaudio.h: No such file or directory".
 #
-#   pyaudio is a *lazy* import inside tinysoundfont, used only by Synth.start()
-#   for real-time playback. We render offline via generate_simple(), which never
-#   touches it — so --no-deps costs us nothing and saves an unnecessary
-#   dependency. Locked in by tests/test_audio_deps.py, which asserts pyaudio is
-#   absent, that tinysoundfont imports without it, and that a soundfont renders.
+#   pyaudio is imported in exactly ONE place in the whole package:
+#   `Synth.start()`, which loads a soundfont and starts real-time playback
+#   through it. Nothing else touches it. This file previously said the way
+#   around pyaudio was "we render offline via generate_simple()", which is
+#   half a route: generate_simple() itself is clean, but you only reach a
+#   loaded soundfont by `start()` or `sfload()`, and `start()` is the one that
+#   explodes. The way around it is `sfload()`.
+#
+#   The working sequence, verified against 0.3.7:
+#       sfid = synth.sfload(path, gain=...)   # returns the id; no pyaudio
+#       synth.program_select(channel, sfid, bank, preset)
+#       synth.noteon(channel, midi_note, velocity)
+#       buffer = synth.generate(samples)      # or generate_simple(samples)
+#       synth.noteoff(channel, midi_note)
+#
+#   `generate*` returns a **memoryview of stereo float32** — four bytes per
+#   sample per channel. Reading it as float16, or reshaping it without dividing
+#   by the channel count, produces a buffer full of NaN and a peak above 1.0
+#   that never happened. Cost us a confusing afternoon once; worth writing down.
 #
 #   Optional in practice: the numpy Karplus-Strong synth needs nothing at all and
-#   takes over when this is absent.
+#   takes over when this is absent. Locked in by tests/test_audio_deps.py, which
+#   asserts pyaudio is absent and that tinysoundfont imports without it.
 
 tinysoundfont==0.3.7

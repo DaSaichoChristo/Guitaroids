@@ -606,9 +606,9 @@ Three files, deliberately:
 
 | File | Contents |
 |---|---|
-| `requirements.txt` | 9 direct deps, curated, with the §2.2 opencv warning as a comment |
+| `requirements.txt` | 8 direct deps, curated, with the §2.2 opencv warning as a comment and each pin marked imported-today or named-milestone (§22) |
 | `requirements-dev.txt` | pytest only |
-| `requirements-lock.txt` | `pip freeze`, 31 packages, header-marked generated |
+| `requirements-lock.txt` | `pip freeze`, 32 packages, header-marked generated |
 
 `pip freeze` was **not** used to replace the curated list. It would have locked in
 `matplotlib` plus six packages nothing in this project imports (contourpy, cycler,
@@ -2659,3 +2659,106 @@ that would disagree with the collapse.
   motivate on a chord.
 - **The preference is global, not per song**, and there is still no way to see the
   two shapes side by side before committing to one.
+
+## §22 — Soundfonts do not clip: §7.5's measurement read the buffer wrong (2026-09-26)
+
+Supersedes §7.5's **"Soundfonts clip"** half. Its other half — `sfload(gain=...)`
+is not a level control — is confirmed and re-measured below.
+
+Found while updating `requirements.txt` to describe what the project actually
+depends on, which meant checking the tinysoundfont claims in
+`requirements-optional.txt` against the installed 0.3.7. No code implements the
+post-gain step — `guitaroids/audio/` is still an empty package — so this is a
+correction to a document rather than to a running system. Which is exactly why it
+was still wrong after all this time.
+
+### 22.1 What the buffer actually is
+
+`Synth.generate()` and `generate_simple()` return a **`memoryview` of raw bytes**,
+and the dtype is whatever the caller assumes:
+
+| | value |
+|---|---|
+| layout | stereo, float32 |
+| size | 4 bytes × samples × 2 channels (44100 → 352800) |
+| read as float32 | a signal |
+| read as int16 | saturation at 1.000, everywhere |
+| read as float16 | NaN, everywhere |
+
+Both existing audio tests read it as **int16**. So did §7.5's table.
+
+### 22.2 The measurement, redone
+
+A six-note chord (E2 A2 D3 G3 B3 E4, GM 25 acoustic steel, velocity 100), FluidR3
+mono, 44100 Hz, read as float32:
+
+| `sfload(gain=…)` | peak | rms | samples ≥ 1.0 |
+|---|---|---|---|
+| 0.0 | 0.2122 | 0.0418 | 0 |
+| 0.05 | 0.2134 | 0.0421 | 0 |
+| 0.2 | 0.2172 | 0.0428 | 0 |
+| 0.5 | 0.2248 | 0.0443 | 0 |
+| 1.0 | 0.2381 | 0.0469 | 0 |
+
+§7.5 reported **peak 1.000, rms 0.539, 166 clipped samples** — identical across the
+same gain range, which is the signature of a saturated reinterpretation rather than
+of a measurement.
+
+So:
+
+- **Refuted: soundfonts clip.** Nothing reaches 1.0. The render is *quiet* — a
+  fifth of full scale.
+- **Confirmed: `sfload(gain=…)` does not work.** 0.0 is as loud as 1.0; the 12%
+  spread is the instrument's own volume. Gain has to be applied to the buffer.
+
+The consequence is a sign error in the guidance. §7.5 prescribed `x0.25` post-gain
+and `tanh(a*0.9)` soft-clipping. Both *attenuate*. Applied to a render that peaks
+at 0.22, `x0.25` produces 0.05 — quieter still. The renderer must **boost**, by
+roughly 3–4×, and must not soft-clip a signal that has 78% of its range unused.
+
+### 22.3 Why it survived this long
+
+Two tests asserted on the misread buffer, and both passed:
+
+- `test_soundfont_loads_and_renders` asserted `abs(audio).max() > 100` "in int16
+  range". A saturated misread is ~32767, so it cleared that by three orders of
+  magnitude.
+- `test_render_is_hot_and_needs_post_gain` divided the int16 misread by 32768 and
+  asserted a peak above 0.9 — i.e. it asserted that the *misreading* saturated.
+
+A test that passes for the wrong reason is worse than no test, because it is
+evidence. This is §21.2's lesson in a different costume: **the assertion was on the
+field, not on the seam.** The seam here is the boundary between "a memoryview of
+bytes" and "the numbers we believe about audio".
+
+Both tests now read float32, and three were added:
+
+- `test_sfload_loads_a_soundfont_without_pyaudio` — the pyaudio-free route, and that
+  `Synth.start()` really does raise `ModuleNotFoundError` here. This is what
+  `requirements-optional.txt` now asserts in prose.
+- `test_generate_returns_stereo_float32_not_int16` — the trap itself, including that
+  the int16 misread still saturates. If that ever stops being true, the correction
+  above needs revisiting rather than trusting.
+- `test_sfload_gain_does_nothing` — §7.5's surviving claim, pinned.
+
+And the clipping test became `test_the_render_is_quiet_and_needs_boosting_not_taming`,
+asserting `0.05 < peak < 0.9` on a measurement rather than on a policy, so a future
+soundfont that genuinely does clip fails it and gets handled deliberately.
+
+### Not done — §22
+
+- **No post-gain code exists**, so nothing implements the corrected direction yet.
+  `guitaroids/audio/` is an empty package and §1.5 is still the blocker. Whoever
+  writes `audio/synth.py` should start from 0.22, not from 1.0.
+- **The boost factor is not decided.** 3–4× is what "audible next to a click"
+  roughly implies; the right number depends on the click's level and on
+  `Settings.master_volume`, and it should be measured once there is a stream to
+  measure through.
+- **Only one soundfont and one preset were measured** (FluidR3 mono, GM 25). A
+  brass or piano preset may well be hotter, and the correction is about *this*
+  measurement, not about soundfonts in general.
+- **No limiter or soft-clipper is specified.** §7.5 assumed one would be needed;
+  with 78% of the range unused it may not be. Deciding that needs a louder worst
+  case than a single acoustic chord.
+- **§7.5's `audio/soundfont.py` and `audio/synth.py` module sketch is unchanged** —
+  only its numbers were wrong, and it is still unbuilt.
