@@ -42,7 +42,7 @@ class MainMenu(ScreenBase):
         column.addWidget(heading("GUITAROIDS"))
         column.addWidget(
             heading(
-                "Play Guitar Pro tabs at tempo, with your hands on the webcam.",
+                "Turn your real guitar into the controller and play your favorite tabs live.",
                 kind="subtitle",
             )
         )
