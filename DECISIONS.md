@@ -85,6 +85,8 @@ is where the "why" belongs.
 | The app opens **full screen** (`showFullScreen`, not maximized); `--windowed` opts out | live | §12 |
 | Before reporting geometry, the entry point **waits for the window to be exposed** | live | §12 |
 | **Nothing scales with the screen** — type and control widths are fixed pixels | live | §12 |
+| A vertical layout filling a variable-height container **needs a stretch item**, or it shares surplus height equally | live | §13 |
+| `ScreenBase.showEvent` **pins every wrapped label's height to its size hint**, so a layout cannot clip the last line | live | §13 |
 
 ## The clock
 

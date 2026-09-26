@@ -11,7 +11,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle avoidance, types only
     from ..context import AppContext
@@ -96,6 +96,47 @@ class ScreenBase(QtWidgets.QWidget):
             self.shell.go_back()
             return
         super().keyPressEvent(event)
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # noqa: N802 - Qt naming
+        # Before super(), so the pinning is in place for the layout pass this
+        # event triggers.
+        pin_wrapped_label_heights(self)
+        super().showEvent(event)
+
+
+def pin_wrapped_label_heights(widget: QtWidgets.QWidget) -> int:
+    """Stop a word-wrapped ``QLabel`` being given less height than its text needs.
+
+    Returns how many labels were adjusted.
+
+    A word-wrapped ``QLabel`` reports two different heights: ``sizeHint`` for the
+    width it will actually have, and ``minimumSizeHint``, which Qt derives from
+    ``heightForWidth``. When a layout has to economise -- or, as happened on Import
+    GP, when the stylesheet has only just been applied and the cached container size
+    is a few pixels short -- it hands out the *minimum*, and the last line of the
+    text is silently not drawn. The user sees a sentence that stops mid-thought with
+    no indication anything is missing.
+
+    The height cannot be pinned at construction: the stylesheet owns typography, and
+    the label's size hint is wrong until that is applied. By ``showEvent`` it is
+    right, so pin it there and let the layout re-run.
+
+    Applied to whole screens rather than at the two call sites that were broken,
+    because the same mistake is available to every word-wrapped label in the app.
+    """
+    adjusted = 0
+    for label in widget.findChildren(QtWidgets.QLabel):
+        if not label.wordWrap():
+            continue
+        needed = label.sizeHint().height()
+        if needed > label.minimumHeight():
+            label.setMinimumHeight(needed)
+            adjusted += 1
+    if adjusted:
+        layout = widget.layout()
+        if layout is not None:
+            layout.invalidate()
+    return adjusted
 
 
 class ShellBase:

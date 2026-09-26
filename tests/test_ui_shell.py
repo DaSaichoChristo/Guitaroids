@@ -404,6 +404,81 @@ def test_every_screen_fits_inside_the_window(shell, qapp, screen: Screen) -> Non
     assert not too_wide, f"{screen.label} has children wider than the screen: {too_wide}"
 
 
+@pytest.mark.parametrize("size", [(960, 640), (1920, 1080), (3440, 1440)])
+@pytest.mark.parametrize("screen", list(Screen))
+def test_no_screen_clips_its_own_text(shell, qapp, screen: Screen, size) -> None:
+    """A word-wrapped label must be at least as tall as the text it holds.
+
+    A word-wrapped QLabel reports two heights: ``sizeHint`` for the width it will
+    actually have, and ``minimumSizeHint``, which Qt derives from
+    ``heightForWidth``. When a layout economises it hands out the *minimum*, and the
+    last line is simply not drawn -- Import GP shipped that, losing "you will be
+    asked before it is replaced" with no indication anything was missing.
+
+    Three sizes because the failure needs spare room to appear, and squeezing on a
+    short window can cause the same thing from the other direction.
+    """
+    from PySide6 import QtWidgets
+
+    shell.resize(*size)
+    shell.show()
+    qapp.processEvents()
+    shell.navigate(screen)
+    qapp.processEvents()
+
+    clipped = [
+        (label.text()[:40], label.height(), label.sizeHint().height())
+        for label in shell.current_screen.findChildren(QtWidgets.QLabel)
+        if label.wordWrap()
+        and label.text()
+        and label.height() < label.sizeHint().height() - 2
+    ]
+    assert not clipped, (
+        f"{screen.label} at {size[0]}x{size[1]} clips its text "
+        f"(height, needed): {clipped}"
+    )
+
+
+@pytest.mark.parametrize("size", [(960, 640), (1920, 1080), (3440, 1440)])
+def test_page_content_is_not_stretched_to_fill_a_tall_window(shell, qapp, size) -> None:
+    """The Preferences form column needs a stretch item, and had lost its own.
+
+    Its action row moved outside the scroll area when the form was made scrollable,
+    and taking the ``addStretch(1)`` with it left the QVBoxLayout with nothing to
+    absorb surplus height. It then handed the extra out *equally* to every widget
+    that can grow, and QLabel and QGroupBox both can -- at 1440px the "Preferences"
+    title was given 203px for 31px of text, opening a 120px hole under the heading.
+
+    Checked on the two screens whose content is a single top-aligned column, since
+    the placeholder screens centre their content and are supposed to spread.
+    """
+    from PySide6 import QtWidgets
+
+    shell.resize(*size)
+    shell.show()
+    qapp.processEvents()
+
+    stretched = {}
+    for screen in (Screen.PREFERENCES, Screen.IMPORT_GP):
+        shell.navigate(screen)
+        qapp.processEvents()
+        for label in shell.current_screen.findChildren(QtWidgets.QLabel):
+            if not label.text() or not label.wordWrap():
+                continue
+            # Only page-level labels. A label inside a QGroupBox that shares a form
+            # row with a taller control is *meant* to be stretched to match it --
+            # "Mode" next to a 34px combo is 29px tall, and that is correct.
+            # What the missing stretch broke was the page's own column, whose
+            # children have nothing to align to but each other.
+            if label.parentWidget().objectName() != "column":
+                continue
+            needed = label.sizeHint().height()
+            if label.height() > needed + 4:
+                stretched[f"{screen.label}:{label.text()[:24]}"] = (label.height(), needed)
+
+    assert not stretched, f"at {size[0]}x{size[1]} content was stretched: {stretched}"
+
+
 # --- rendering ---------------------------------------------------------------
 
 

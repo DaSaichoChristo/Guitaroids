@@ -62,7 +62,7 @@ says what ran.
 
 ## Current state
 
-`tests/` is 422 tests, all passing. **Four of the six screens are real:** the main
+`tests/` is 446 tests, all passing. **Four of the six screens are real:** the main
 menu, song select (tab + track + audio offset), import GP, and preferences. **Game
 and Results are still placeholders** — the note highway, judging and scoring are the
 whole of what remains before the app does anything playable.
@@ -83,14 +83,24 @@ Look at a screen without launching the app:
 ```
 .venv/bin/python scripts/screenshot_ui.py --all  # PNGs in /tmp/opencode/ui
 ```
+## Five things that will bite you
 
-## Three things that will bite you
+All five cost real time, and all five are now enforced by tests.
 
-All three cost real time, and all three are now enforced by tests.
 - **A layout that does not fit does not clip — it compresses.** Children get squeezed
   below their minimum height and end up drawn on top of each other. This shipped a
   preferences screen with three combo boxes overlapping. Tall forms go in a
   `QScrollArea`, and `test_ui_shell.py` fails if any screen compresses a group box.
+- **A vertical layout with no stretch item shares surplus height *equally*.** Both
+  `QLabel` and `QGroupBox` can grow, so on a tall window every one of them gets the
+  same slice of the extra and the page opens holes between its own paragraphs. A
+  `QScrollArea` with `setWidgetResizable(True)` guarantees a surplus exists, so this
+  shows up on big screens and not small ones.
+- **A word-wrapped `QLabel`'s minimum is smaller than its text needs.** A layout that
+  economises hands out `minimumSizeHint` and the last line is silently not drawn —
+  Import GP shipped a sentence ending mid-thought. `ScreenBase.showEvent` pins every
+  wrapped label's `minimumHeight` to its `sizeHint`; do not remove that, and do not
+  add a wrapped label without a test that its height covers its text.
 - **`AppContext` must stay free of Qt.** It is pinned by a subprocess test, and it is
   why the background library loader is owned by a screen rather than by the context.
   Put a `QObject` on the context and every context test becomes a Qt test.

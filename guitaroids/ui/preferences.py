@@ -89,6 +89,14 @@ class Preferences(ScreenBase):
         self._status.setWordWrap(True)
         column.addWidget(self._status)
 
+        # The actions are outside the scroll area, so the form column has no stretch
+        # of its own. Without this the QVBoxLayout has no stretch item to absorb the
+        # surplus height on a tall window, and it hands the extra out *equally* to
+        # every widget that can grow -- QLabel and QGroupBox both can. At 1440px
+        # that gave the "Preferences" title 203px for 31px of text, and put a
+        # 120px hole between the title and the subtitle.
+        column.addStretch(1)
+
         # The actions sit outside the scroll area, pinned to the bottom. A Save
         # button below the fold is a real wart: you move a slider, go looking for
         # Save, and cannot tell whether the change stuck.

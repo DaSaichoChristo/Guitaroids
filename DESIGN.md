@@ -1552,3 +1552,96 @@ below.
   manager. Harmless, but the title bar is no longer a debugging surface.
 - **Screen selection is not handled.** With two monitors the window goes to whichever
   screen it is on, defaulting to the primary. There is no flag to choose a display.
+
+---
+
+## §13 — Two layout bugs that only appear on a tall screen (2026-09-26)
+
+Reported after §12 put the app full screen: the preferences window had "a lot of
+space" between the title, the description and the setting boxes, and part of the
+Import GP description was not drawn. Two unrelated bugs, and neither is visible at
+the 960x640 the layouts were originally built against.
+
+**Tests: 446, all passing. Checked at 960x640, 1920x1080, 1366x768 and 3440x1440.**
+
+### 13.1 Preferences: a column with no stretch item
+
+When the form was made scrollable (§11.6) the action row moved out to the screen's
+own layout — and took the column's `addStretch(1)` with it. A `QVBoxLayout` with no
+stretch item and surplus height to distribute **shares the surplus equally among
+every widget whose vertical size policy allows growth**, and both `QLabel` and
+`QGroupBox` do. At 1440px:
+
+| widget | height | needed |
+|---|---|---|
+| "Preferences" title | 203 | 31 |
+| "Changes are saved when you press Save." | 203 | 54 |
+| Sound / Input / Devices groups | 203 each | ~120 each |
+
+So the content was correct and the *spacing* was the bug: a 120px hole under the
+heading, then 70px before the first group box. Invisible at 960x640, because there
+is no surplus to distribute there. One `addStretch(1)` fixes it.
+
+The general rule, now written into `AGENTS.md`: **a vertical layout that fills a
+variable-height container needs a stretch item.** A `QScrollArea` with
+`setWidgetResizable(True)` makes the content exactly as tall as the viewport, so
+this bites on tall screens and not on short ones — the worst kind of bug to
+reproduce.
+
+### 13.2 Import GP: a word-wrapped label clipped to its minimum
+
+A word-wrapped `QLabel` reports two different heights:
+
+- `sizeHint` — for the width it will actually have (72px here)
+- `minimumSizeHint` — which Qt derives from `heightForWidth` (54px here)
+
+When a layout economises it hands out the **minimum**, and the last line is simply
+not drawn. Import GP lost the end of its own sentence: the text stopped at
+"…is already in the library you will be asked" and stopped being a complete thought
+with nothing on screen to say so.
+
+Not caused by a short window either — it reproduced at 1440px, because the container
+had cached its size from before the stylesheet was applied, when the label's size
+hint was still the pre-QSS one. The few-pixel shortfall was absorbed by the one
+label that could give it up.
+
+The fix is `pin_wrapped_label_heights()` in `ScreenBase.showEvent`: by then the
+stylesheet is applied and the size hint is right, so each wrapped label's
+`minimumHeight` is pinned to its `sizeHint().height()`. Applied to whole screens
+rather than to the two broken call sites, because every word-wrapped label in the
+app can make this mistake.
+
+Pinning cannot happen at construction: the stylesheet owns typography, so a label's
+size hint is simply wrong until it is applied. `ensurePolished()` does not fix it
+either — measured, still 68px against the 72px actually needed.
+
+### 13.3 Both are now tests, and both were checked to fail
+
+- `test_no_screen_clips_its_own_text` — every screen, three sizes. Fails on Import
+  GP at all three and preferences at 1440px with the pinning removed.
+- `test_page_content_is_not_stretched_to_fill_a_tall_window` — three sizes. Fails at
+  1080p and 1440px with the stretch removed, and correctly *passes* at 960x640,
+  because that is the size where the bug does not exist.
+
+The stretch test scopes itself to labels whose parent is the page's `column`
+container. A label sharing a form row with a taller control is *meant* to be
+stretched to match it — "Mode" next to a 34px combo is 29px tall — so an unscoped
+version of this test would have failed on correct code.
+
+Both were verified to fail with the fix reverted, rather than being written and
+assumed. That check is the point: a regression test that passes on the broken code
+is worse than no test, because it is a test that lies.
+
+### Not done — §13
+
+- **The UI is still small at 3440x1440.** §12.2 is unchanged and this section does
+  not address it; it only fixed the *spacing*. Nothing scales with the screen.
+- **No test renders pixels and reads the text back.** Both bugs were caught by a
+  human looking at a screenshot. The geometry assertions here are a partial
+  mitigation: they check label heights against size hints, which is the mechanism
+  of these particular bugs, not the rendered result.
+- **`pin_wrapped_label_heights` runs on every show.** It walks the widget tree and
+  invalidates the layout. Negligible for a screen of tens of widgets, but it is not
+  free, and it would need hoisting if a future screen held thousands.
+- **Untested on the 96dpi scaling case.** A HiDPI display changes every size hint;
+  the pinning follows them, but nothing here was run at `QT_SCALE_FACTOR=2`.
