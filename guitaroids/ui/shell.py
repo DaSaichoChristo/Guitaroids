@@ -23,6 +23,7 @@ _BACK: dict[Screen, Screen] = {
     Screen.GAME: Screen.SONG_SELECT,
     Screen.RESULTS: Screen.MAIN,
     Screen.PREFERENCES: Screen.MAIN,
+    Screen.IMPORT_GP: Screen.MAIN,
 }
 
 
@@ -38,14 +39,14 @@ class PlaceholderScreen(ScreenBase):
     def __init__(
         self,
         shell,
-        title: str,
+        label: str,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(shell, parent)
-        self.screen_title = title
+        self.screen_label = label
         column = content_column(self)
 
-        column.addWidget(heading(title.replace("_", " ").title()))
+        column.addWidget(heading(label))
         column.addWidget(
             heading(
                 "This screen is not built yet.\n\n"
@@ -78,6 +79,7 @@ class MainWindow(QtWidgets.QMainWindow):
             Screen.GAME: self._make_placeholder(Screen.GAME),
             Screen.RESULTS: self._make_placeholder(Screen.RESULTS),
             Screen.PREFERENCES: self._make_placeholder(Screen.PREFERENCES),
+            Screen.IMPORT_GP: self._make_placeholder(Screen.IMPORT_GP),
         }
         self._built: dict[Screen, ScreenBase] = {}
         self._history: list[Screen] = []
@@ -88,7 +90,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _make_placeholder(self, screen: Screen) -> Callable[[], ScreenBase]:
         def build() -> ScreenBase:
-            return PlaceholderScreen(self, screen.value)
+            return PlaceholderScreen(self, screen.label)
 
         return build
 
@@ -107,7 +109,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._history.append(current)
         widget = self._widget_for(screen)
         self._stack.setCurrentWidget(widget)
-        self.setWindowTitle(f"Guitaroids - {screen.value.replace('_', ' ').title()}")
+        self.setWindowTitle(f"Guitaroids - {screen.label}")
         widget.setFocus()
 
     def go_back(self) -> None:

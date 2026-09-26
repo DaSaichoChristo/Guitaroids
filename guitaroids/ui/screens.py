@@ -12,6 +12,25 @@ from enum import Enum
 
 from PySide6 import QtCore, QtWidgets
 
+#: Human-facing names, declared rather than derived from the enum value.
+#:
+#: Module level, not inside the ``Screen`` class body: a dict in an Enum body
+#: silently becomes a member (the leading underscore does not protect it), so
+#: ``for screen in Screen`` would yield this dict and every parametrised screen
+#: test would break.
+#:
+#: Declared because ``str.title()`` lowercases the rest of each word and so can
+#: never render an acronym: ``import_gp`` gave "Import Gp", and a version number
+#: would come out as "Gp5 Import".
+_SCREEN_LABELS: dict[str, str] = {
+    "main": "Main Menu",
+    "song_select": "Song Select",
+    "import_gp": "Import GP",
+    "game": "Game",
+    "results": "Results",
+    "preferences": "Preferences",
+}
+
 
 class Screen(Enum):
     """Where the app can be."""
@@ -21,23 +40,36 @@ class Screen(Enum):
     GAME = "game"
     RESULTS = "results"
     PREFERENCES = "preferences"
+    IMPORT_GP = "import_gp"
 
     @property
     def is_root(self) -> bool:
         """Screens with nothing behind them. Escape quits rather than going back."""
         return self in (Screen.MAIN,)
 
+    @property
+    def label(self) -> str:
+        """Human-facing name, for window titles and headings.
+
+        Declared, not derived. ``str.title()`` lowercases the rest of each word,
+        so it can never render an acronym -- ``import_gp`` became "Import Gp" --
+        and it mangles version numbers too, giving "Gp5 Import".
+        """
+        return _SCREEN_LABELS[self.value]
+
 
 class ScreenBase(QtWidgets.QWidget):
     """Common behaviour: Escape goes back, and the shell is reachable.
 
-    Subclasses set ``TITLE`` and build their widgets in ``__init__``. They should
-    not call ``show``/``hide`` on themselves; the shell does that.
+    Subclasses build their widgets in ``__init__``. They should not call
+    ``show``/``hide`` on themselves; the shell does that.
     """
 
     TITLE: str = ""
 
-    def __init__(self, shell: "ShellBase", parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self, shell: "ShellBase", parent: QtWidgets.QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self.shell = shell
 
@@ -114,7 +146,9 @@ def heading(text: str, *, kind: str = "heading") -> QtWidgets.QLabel:
     return label
 
 
-def constrained_button(text: str, *, object_name: str = "", width: int = 240) -> QtWidgets.QPushButton:
+def constrained_button(
+    text: str, *, object_name: str = "", width: int = 240
+) -> QtWidgets.QPushButton:
     """A button that will not stretch across the window."""
     button = QtWidgets.QPushButton(text)
     if object_name:
@@ -122,4 +156,3 @@ def constrained_button(text: str, *, object_name: str = "", width: int = 240) ->
     button.setMaximumWidth(width)
     button.setMinimumWidth(width)
     return button
-

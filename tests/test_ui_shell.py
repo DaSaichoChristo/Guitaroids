@@ -137,9 +137,38 @@ def test_every_screen_navigates_and_renders(shell, qapp, screen: Screen) -> None
     assert shell.current_screen.width() > 0
 
 
-def test_window_title_reflects_the_screen(shell) -> None:
-    shell.navigate(Screen.SONG_SELECT)
-    assert "Song Select" in shell.windowTitle()
+@pytest.mark.parametrize("screen", list(Screen))
+def test_window_title_uses_the_declared_label(shell, screen: Screen) -> None:
+    """Every screen, not just one.
+
+    The previous version asserted only SONG_SELECT -- the single case str.title()
+    gets right -- so it passed while IMPORT_GP rendered as "Import Gp". An exact
+    match against screen.label is what makes a derived-from-the-enum-value title
+    impossible to reintroduce silently.
+    """
+    shell.navigate(screen)
+    assert shell.windowTitle() == f"Guitaroids - {screen.label}"
+
+
+def test_every_screen_has_a_label() -> None:
+    """Guards the mapping against a new screen being added without one."""
+    from guitaroids.ui.screens import _SCREEN_LABELS
+
+    assert set(_SCREEN_LABELS) == {screen.value for screen in Screen}
+    missing = [s for s in Screen if not s.label.strip()]
+    assert missing == [], f"screens with an empty label: {missing}"
+
+
+def test_labels_are_not_derived_by_title_casing() -> None:
+    """A label must survive being title-cased, or it holds an acronym.
+
+    Not a style rule: str.title() would turn "Import GP" into "Import Gp", which
+    is precisely the bug this mapping exists to prevent.
+    """
+    for screen in Screen:
+        assert screen.label == screen.label.title() or any(
+            part.isupper() for part in screen.label.split()
+        ), f"{screen.name}: {screen.label!r} looks like it was title-cased"
 
 
 # --- lazy construction -------------------------------------------------------
@@ -162,13 +191,17 @@ def test_screens_are_built_on_first_show_only(shell) -> None:
     assert Screen.GAME not in shell._built, "unvisited screens must stay unbuilt"
 
 
-def test_main_screen_has_navigation_buttons(shell) -> None:
+def test_main_menu_has_exactly_the_expected_buttons(shell) -> None:
+    """An exact set, so a forgotten button is a failure rather than nothing.
+
+    Was two membership checks, which could not detect a missing button and did
+    not know about Quit or Import GP.
+    """
     from PySide6 import QtWidgets
 
     shell.navigate(Screen.MAIN)
-    labels = [b.text() for b in shell.current_screen.findChildren(QtWidgets.QPushButton)]
-    assert "Play" in labels
-    assert "Preferences" in labels
+    labels = {b.text() for b in shell.current_screen.findChildren(QtWidgets.QPushButton)}
+    assert labels == {"Play", "Import GP", "Preferences", "Quit"}
 
 
 def test_escape_goes_back(shell, qapp) -> None:

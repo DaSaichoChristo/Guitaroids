@@ -43,6 +43,10 @@ class MainMenu(ScreenBase):
         preferences.clicked.connect(lambda: self.shell.navigate(Screen.PREFERENCES))
         column.addWidget(preferences, alignment=_CENTRED)
 
+        import_gp = constrained_button("Import GP")
+        import_gp.clicked.connect(lambda: self.shell.navigate(Screen.IMPORT_GP))
+        column.addWidget(import_gp, alignment=_CENTRED)
+
         column.addSpacing(18)
         quit_button = constrained_button("Quit", object_name="danger")
         quit_button.clicked.connect(self._quit)
