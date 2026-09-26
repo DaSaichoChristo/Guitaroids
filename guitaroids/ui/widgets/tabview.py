@@ -30,12 +30,18 @@ string, and ``lane = string - 1``, so lane 0 is the top line. (The scrolling
 highway had lanes as rows and put lane 0 at the bottom, which is why that is
 recorded as a change rather than silently flipped.)
 
-**No fret numbers.** §15.4 drew the fret inside every note and the reaction was
-that the number system was hard to make sense of. In real tab notation there are no
-numbers on the staff at all -- the string line *is* the information, and a number
-only appears in a chord diagram. A note is a mark on a line here, and which line it
-sits on says which string. ``Note.fret`` is still carried, for display *if* someone
-later wants it.
+**A fret number is drawn inside each mark, in all three bars.** §16.2 removed them
+and §16.2's reasoning still holds: a fret number is only meaningful *given* a
+string, and drawing both in one glyph asks the player to read a chord and a pitch at
+once. §15.4 did exactly that, in a block where the number was the only thing you
+could read.
+
+What changed is the hierarchy. **The string line is still the primary read; the
+number is confirmation.** A player who reads by line never needs it, and a player
+who wants the fret has it — which is a different thing from a numbered block that
+cannot be read any other way. So the number is small, inside the mark, in all three
+bars, and sized from the marker rather than from the stylesheet
+(:meth:`TabView.marker_font`).
 
 Like the widget it replaces, this is **pure render**: it holds a chart, a position
 and nothing else, so it rasterises to a ``QImage`` with no audio device, no camera
@@ -56,6 +62,20 @@ from ..theme import COLORS, LANE_COLORS, LANE_COUNT, px, radius
 #: Measures on screen: the one just played, the current one, and the one coming.
 #: One of each, as asked for -- not a scrolling window.
 MEASURES_SHOWN = 3
+
+#: Fret numbers are set at this fraction of the marker diameter. Chosen so that two
+#: digits occupy about 70% of the circle at every size -- 24 is the highest fret on
+#: most guitars, so the two-digit case is the one that has to fit.
+FONT_RATIO = 0.57
+
+#: Below this pixel size a digit is not legible, so the mark stays plain. Reached on
+#: windows under roughly 580px tall, where the marker itself is 15px.
+MIN_FONT_PIXELS = 9
+
+#: The ink for a fret number: near-black, on the mid-tone lane fill. Contrast is
+#: roughly 7:1 against every lane colour, and it holds on the dimmed bars too, where
+#: the fill is the lane colour at partial alpha over a near-black background.
+INK = "#101216"
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,6 +260,40 @@ class TabView(QtWidgets.QWidget):
         """
         return max(4.0, self.line_spacing * 0.34)
 
+    def marker_font(self) -> QtGui.QFont:
+        """A monospace font sized to the note markers.
+
+        Sized from :meth:`marker_radius` and **never from the stylesheet**. The marker
+        derives from the widget's height; the QSS font derives from the UI scale, and
+        the two are independent. At scale 1.33 in a 960x640 window the stylesheet's
+        19px would land in a 17.4px circle and overflow it -- fine on a large display
+        and broken on a small one, which is the worst way for this to fail.
+
+        The *family* still comes from ``self.font()``, so the stylesheet remains the
+        one place typography is defined; only the size is local.
+
+        ``ensurePolished`` first, because ``QWidget.font()`` returns the application
+        default rather than the style-resolved font until the widget has been
+        polished. Painting implies polishing, so this is a no-op in a real paint; it
+        matters for any caller that asks before the widget has been shown.
+        """
+        self.ensurePolished()
+        font = self.font()
+        font.setPixelSize(self.fret_font_pixels())
+        return font
+
+    def fret_font_pixels(self) -> int:
+        """The pixel size a fret number is drawn at, 0 when it would be illegible."""
+        return round(self.marker_radius() * 2 * FONT_RATIO)
+
+    def shows_fret_numbers(self) -> bool:
+        """Whether a fret number is legible enough to draw.
+
+        A degraded window shows plain marks rather than an unreadable smudge, which
+        is the same rule the scrolling highway used (§15.4) and for the same reason.
+        """
+        return self.fret_font_pixels() >= MIN_FONT_PIXELS
+
     # --- painting ------------------------------------------------------------
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802 - Qt naming
@@ -250,6 +304,11 @@ class TabView(QtWidgets.QWidget):
 
         if not self._spans:
             return
+
+        # The note font, set once for the whole paint rather than per note. Only the
+        # markers draw text; the staff and the beat line do not, so leaving it set is
+        # harmless and rebuilding a QFont inside the note loop would not be.
+        painter.setFont(self.marker_font())
 
         for slot, index in enumerate(self.visible_measures()):
             if index is None:
@@ -313,17 +372,29 @@ class TabView(QtWidgets.QWidget):
     def _paint_measure_notes(
         self, painter: QtGui.QPainter, slot: int, index: int, current: bool
     ) -> None:
-        """Note markers on their string lines.
+        """Note markers on their string lines, each carrying its fret number.
 
-        A mark, not a numbered block: which line a note sits on *is* the pitch, the
-        same way it is in printed tab. A note at the very start or end of a measure
-        would be half-clipped by the bar line, so it is nudged inward.
+        The number is *confirmation*, not the primary read: which line a note sits on
+        is still the pitch, exactly as in printed tab. That is the whole difference
+        from §15.4, where the fret was drawn in a block and was the only thing telling
+        you what the note was -- asking the player to read a chord and a pitch from
+        one glyph at once. Here the line answers first and the number confirms.
+
+        A note at the very start or end of a measure would be half-clipped by the bar
+        line, so it is nudged inward.
         """
         span = self._spans[index]
         left = self.measure_left()
         width = self.measure_width()
         radius = self.marker_radius()
         nudge = radius + px(2)
+
+        ink = QtGui.QColor(INK)
+        if not current:
+            # Match the marker's own dimming, or the number reads as the brightest
+            # thing in a bar that is supposed to be background.
+            ink.setAlpha(150)
+        show_number = self.shows_fret_numbers()
 
         for note in self.notes_in_measure(index):
             if not span.is_complete:
@@ -339,6 +410,14 @@ class TabView(QtWidgets.QWidget):
             painter.setPen(QtGui.QPen(colour.darker(130), 1))
             painter.setBrush(colour)
             painter.drawEllipse(QtCore.QPointF(x, y), radius, radius)
+
+            if show_number:
+                painter.setPen(QtGui.QPen(ink))
+                painter.drawText(
+                    QtCore.QRectF(x - radius, y - radius, radius * 2, radius * 2),
+                    QtCore.Qt.AlignmentFlag.AlignCenter,
+                    str(note.fret),
+                )
         painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
 
     def _paint_beat_line(self, painter: QtGui.QPainter) -> None:
