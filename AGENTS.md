@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Guitaroids — a Guitar Hero-style app. Webcam hand tracking (mediapipe) walks you
-through Guitar Pro `.gp5` tabs at tempo on a 6-lane note highway, counting misses.
+through Guitar Pro `.gp5` tabs at tempo, reading three bars of tab notation at a time.
 Hackathon project.
 
 **Looking for the current design?** Read [`DECISIONS.md`](DECISIONS.md) first — one
@@ -62,16 +62,16 @@ says what ran.
 
 ## Current state
 
-`tests/` is 567 tests, all passing. **Five of the six screens are real:** the main
+`tests/` is 572 tests, all passing. **Five of the six screens are real:** the main
 menu, song select (tab + track + audio offset), import GP, preferences, and **game** —
-a horizontal note highway with a six-key keyboard test mode and PERFECT/GOOD/MISS
-judging. **Results is still a placeholder**; counts are shown in the HUD and go
-nowhere.
+three bars of tab notation with a left-to-right beat line, a six-key keyboard test
+mode, and PERFECT/GOOD/MISS judging. **Results is still a placeholder**; counts are
+shown in the HUD and go nowhere.
 
 `model/chart.py`, `model/repeats.py`, `songlib.py`, `settings.py`, `importer.py`,
 `session/play_request.py` and `session/judge.py` are pure. `context.py` holds the
 shared state and is also pinned Qt-free. `ui/` holds the screens, a background
-library loader, and `ui/widgets/highway.py` — which is **pure render** and owns no
+library loader, and `ui/widgets/tabview.py` — which is **pure render** and owns no
 clock, so it can be rasterised to a `QImage` and asserted on with no audio device and
 no event loop. That is the only way this suite checks rendered output.
 

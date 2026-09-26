@@ -165,17 +165,23 @@ and the figure scales with camera hardware rather than with our code. That is wh
 calibration is its own milestone rather than a setting buried in the end
 (§4.1).
 
-## The highway
+## The playfield
+
+**§15's scrolling highway was replaced by §16's three-bar tab view.** The rows below
+are current; §15.2's "lane 0 at the bottom" and §15.3's "bisect per paint" are
+superseded or gone with the widget.
 
 | Decision | Status | Ref |
 |---|---|---|
-| **Horizontal**: time → x, lanes as rows, a vertical playline at the centre | live | §15.2 |
-| **Lane 0 at the bottom** — fretboard order, so the highway matches the instrument | live | §15.2 |
-| The widget is **pure render**: `(chart, position, zoom)` → pixels, no clock | live | §15.1 |
-| Visible notes come from a **bisect** on cached time arrays, not a full scan | live | §15.3 |
-| The hit zone is drawn from `GOOD_SECONDS` itself, so the drawn tolerance and the judged one cannot drift | live | §15.1 |
-| The hit zone is painted **under** the notes; the playline is on top | live | §15.4 |
-| The HUD is an **overlay** — the highway keeps the whole window | live | §15.4 |
-| Notes are a fixed 0.16s wide, under the real tab's smallest gap of 197ms | live | §15.7 |
-| One colour per lane, blue→red hue ramp, separate from `COLORS` | live | §15 |
-| Default zoom 200px/s — 10–18 notes visible; not a setting | live | §15 |
+| **Three bars stacked vertically** — previous, current, next | live | §16.1 |
+| Progression **down the page**, one bar at a time — discrete, not a continuous scroll | live | §16.1 |
+| Within a bar the beat line sweeps **left to right**, reset at each bar line | live | §16.1 |
+| Each bar is a **six-line staff**; **lane 0 is the top line**, as in printed tab | live | §16.1 |
+| Notes are **marks on a string line with no number** — the line is the pitch | live | §16.2 |
+| The previous and next bars are **dimmed**; the current one is full weight | live | §16.4 |
+| The widget is **pure render**: `(chart, position)` → pixels, no clock | live | §15.1, §16.5 |
+| The judgement tolerance is drawn as **two window edges**, from `GOOD_SECONDS` itself | live | §16.4 |
+| The beat line is drawn **over** the notes — it points at the one being played | live | §16.3 |
+| Measure spans come from `chart.bar_lines`, not interpolated from the tempo | live | §16.3 |
+| Lane colours stay, though printed tab is monochrome — it is a game | live | §16.2 |
+| The HUD is an **overlay** — the playfield keeps the whole window | live | §15.4 |

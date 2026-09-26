@@ -1,11 +1,11 @@
 # Guitaroids
 
 A Guitar Hero-style app that tracks your hands through the webcam (mediapipe) and
-walks you through Guitar Pro tabs at tempo on a 6-lane note highway, counting
-misses.
+walks you through Guitar Pro tabs at tempo, counting misses.
 
-Hackathon project. In progress — the song import, audio rendering and menu layers
-are built; the note highway, judging and hand tracking are not yet.
+Hackathon project. In progress — the song import, menu and note-reading layers are
+built, and the keyboard test mode is playable; there is no audio yet, and hand
+tracking is not started.
 
 ## Quick start
 
@@ -53,8 +53,9 @@ round trip the window is still sitting at its minimum size.
 
 Five of the six screens are real: the main menu, **song select** (pick a tab, pick a
 track, tune the audio offset), **import GP** (copy a tab into the library),
-**preferences**, and **game** — a horizontal note highway with the current note on
-the centre line, played with the number keys `1`–`6` and judged PERFECT/GOOD/MISS.
+**preferences**, and **game** — three bars of tab notation (the bar you just played,
+the current one, and the one coming) with a line sweeping left to right through the
+current bar, played with the number keys `1`–`6` and judged PERFECT/GOOD/MISS.
 **Results** is a placeholder; the score shows in the HUD during play.
 
 There is no audio yet. The game runs on a wall clock, so it tells you whether the
@@ -143,7 +144,7 @@ guitaroids/
   settings.py user preferences                  pure, no Qt
   qtenv.py   Qt plugin bootstrap
 scripts/     setup, asset fetchers, import report, screenshots
-tests/       567 tests
+tests/       572 tests
 songs/       your tabs and audio (gitignored)
 ```
 

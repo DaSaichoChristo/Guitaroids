@@ -1926,3 +1926,96 @@ ordering by risk, and this section is the receipt for having got the order wrong
   section did not build.
 - **Nothing was verified at HiDPI**, as §14. Same gap, now with a `QPainter` surface
   in it.
+
+---
+
+## §16 — The highway is replaced: three bars of tab (2026-09-26)
+
+The scrolling highway of §15.2 was the wrong idea, not a badly-tuned one. Replaced
+by a view that reads like printed tab. **Tests: 572, all passing.**
+
+### 16.1 What was asked for, and what that means
+
+| | §15.2 highway | §16 tab view |
+|---|---|---|
+| continuity | continuous scroll | **one bar at a time** |
+| progression | position held at the centre | a line sweeping **left to right** |
+| on screen | 6 rows, one per lane | **3 bars** — previous, current, next |
+| a note | a block with a fret number | **a mark on a string line** |
+| lane order | lane 0 at the bottom (rows) | **lane 0 the top line** (tab) |
+
+**"Static" does not mean frozen.** Crossing a bar line shifts the page down by one
+measure and pulls in a new bottom measure — discrete, not a sweep. The line still
+travels left to right *within* the current bar, which is what makes that axis
+legible as beats rather than as an arbitrary drift. There are tests for both: the
+sweep reaches the right edge immediately before the bar line, and is back at the
+left immediately after.
+
+### 16.2 The number problem, and what tab notation actually does
+
+§15.4 drew the fret inside every note. The reaction was that the number system was
+hard to make sense of, and it is: a fret number is only meaningful *given a string*,
+and drawing both in one glyph asks the player to read a chord and a pitch at once.
+
+**Printed tab has no numbers on the staff at all.** The string line *is* the
+information; a number appears only in a chord diagram. So a note here is a mark on a
+line, and which line it sits on says which string. `Note.fret` is still carried, for
+display if anyone later wants it.
+
+The lane colours stay. Real tab is monochrome, but this is a game and colour-coding
+the six strings is what lets a player confirm "that was lane 3" at a glance.
+
+### 16.3 Two bugs, one of them a repeat
+
+- **The measure-span builder was wrong in a way that broke the whole view.** It took
+  `max(next_bar_line, last_note_time)` for *every* bar instead of only the last, so
+  every bar claimed to be 380 seconds long. Every note in the chart landed at fraction
+  0.0 — the left edge — and the beat line never moved. The regression test is named
+  for the symptom rather than the cause.
+- **The beat line is drawn over the notes**, which is correct: it points at the note
+  being played. But it is a failure class already recorded in §15.4, where a hit zone
+  painted over the notes hid them. Here the line is a few pixels against a marker of
+  about twenty, so a test asserts the note is still visible either side of it.
+- `QPen(str, width)` is not a valid overload: a QPen takes a QBrush, a QColor, *or* a
+  str, never a str plus a width.
+
+### 16.4 The tolerance is drawn as edges, not a fill
+
+`GOOD_SECONDS` is 0.08 of a 3.16-second bar, and a bar spans the full window width,
+so the judgement window is a **5% slice** — 77px on a 1520px measure. As a filled
+band that is a green wall with notes hidden inside it, which reads as a bug rather
+than as a tolerance. Drawn as two thin lines at the window edges it says exactly the
+same thing and leaves the notation readable.
+
+Worth noting what did *not* change: §15.2's argument that the orientation suits full
+chords still holds, and is now stronger — a chord in this view is a vertical stack
+of marks on adjacent lines, which is what a chord looks like in tab.
+
+### 16.5 Still pure render
+
+`(chart, position)` → pixels, with no clock, so it rasterises to a `QImage` with no
+audio device, no camera and no event loop. The test module **replaces** the
+highway's rather than supplementing it: keeping tests for a widget that no longer
+exists would preserve the shape of an idea that was rejected, which is the opposite
+of what §1.4's append-only record is for.
+
+### Not done — §16
+
+- **The previous bar is not annotated with what you did on it.** `GameState.by_note`
+  and `verdict_at` exist and nothing reads them, so a missed note in the bar above
+  looks identical to one you never saw. This is the most obvious next thing to build
+  and it was left out to keep this section to one idea.
+- **A bar is very wide.** On a 1600px window a single 4/4 measure spans the full
+  width, so Hotel California's 10 notes per bar look sparse. That is what the music
+  is, and the beat divisions make it readable, but it is not how a printed tab is
+  proportioned and a narrower measure with the rest of the window left empty is a
+  legitimate alternative nobody has asked for yet.
+- **No measure numbers.** Deliberate, given §16.2, but a small bar count in the
+  corner would help orientation and was not added without asking.
+- **The first bar of the song has no previous**, so the view starts as two bars and a
+  gap. Correct, and untidy.
+- **No audio**, so none of this can be judged for feel. §15.6 still stands: the clock
+  is a wall clock and the audio transport is the next milestone.
+- **Beat divisions are drawn from the time signature, not from the notation.** A
+  chart with a written tuplet or an odd meter will show a 4/4 grid over it, because
+  `Chart` carries one `time_signature` and no per-measure changes.
