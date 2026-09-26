@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..settings import InputMode, Settings
+from .theme import px
 from .screens import ScreenBase, constrained_button, content_column, heading
 
 if TYPE_CHECKING:  # pragma: no cover - types only
@@ -120,7 +121,7 @@ class Preferences(ScreenBase):
         box = QtWidgets.QWidget(parent)
         layout = QtWidgets.QVBoxLayout(box)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(px(4))
 
         header = QtWidgets.QHBoxLayout()
         header.addWidget(heading(title, kind="dim"))
@@ -136,7 +137,7 @@ class Preferences(ScreenBase):
     def _build_sliders(self) -> QtWidgets.QGroupBox:
         box = QtWidgets.QGroupBox("Sound")
         layout = QtWidgets.QVBoxLayout(box)
-        layout.setSpacing(14)
+        layout.setSpacing(px(14))
 
         self._master_box, self._master, self._master_value = self._labelled_slider(
             box, "Master volume"
@@ -155,7 +156,7 @@ class Preferences(ScreenBase):
     def _build_input_group(self) -> QtWidgets.QGroupBox:
         box = QtWidgets.QGroupBox("Input")
         layout = QtWidgets.QVBoxLayout(box)
-        layout.setSpacing(10)
+        layout.setSpacing(px(10))
 
         # A form, not stacked hboxes: a label and its control then share one row
         # baseline instead of each being laid out independently and drifting.
@@ -205,7 +206,7 @@ class Preferences(ScreenBase):
     def _build_devices_group(self) -> QtWidgets.QGroupBox:
         box = QtWidgets.QGroupBox("Devices")
         layout = QtWidgets.QVBoxLayout(box)
-        layout.setSpacing(8)
+        layout.setSpacing(px(8))
 
         form = QtWidgets.QFormLayout()
         form.setHorizontalSpacing(14)
@@ -235,8 +236,8 @@ class Preferences(ScreenBase):
         and must line up with it at any window size.
         """
         row = QtWidgets.QHBoxLayout()
-        row.setContentsMargins(40, 10, 40, 24)
-        row.setSpacing(12)
+        row.setContentsMargins(px(40), px(10), px(40), px(24))
+        row.setSpacing(px(12))
         row.addStretch(1)
 
         back = constrained_button("Back", width=140)

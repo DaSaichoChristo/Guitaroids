@@ -62,7 +62,7 @@ says what ran.
 
 ## Current state
 
-`tests/` is 446 tests, all passing. **Four of the six screens are real:** the main
+`tests/` is 468 tests, all passing. **Four of the six screens are real:** the main
 menu, song select (tab + track + audio offset), import GP, and preferences. **Game
 and Results are still placeholders** — the note highway, judging and scoring are the
 whole of what remains before the app does anything playable.
@@ -82,6 +82,11 @@ Look at a screen without launching the app:
 
 ```
 .venv/bin/python scripts/screenshot_ui.py --all  # PNGs in /tmp/opencode/ui
+```
+
+Screenshots pin scale 1.0 and a 960x640 frame, so they stay comparable run to run
+whatever display you are on. `--scale 1.5 --size 1440x960` renders the enlarged
+layout.
 ```
 ## Five things that will bite you
 
@@ -104,11 +109,13 @@ All five cost real time, and all five are now enforced by tests.
 - **`AppContext` must stay free of Qt.** It is pinned by a subprocess test, and it is
   why the background library loader is owned by a screen rather than by the context.
   Put a `QObject` on the context and every context test becomes a Qt test.
-- **The app opens full screen, and nothing scales with the screen.** Type sizes and
-  control widths are fixed pixels, so an ultrawide display renders a small UI
-  (`DESIGN.md` §12.2). Fine at 1080p, visibly small above ~2560px. Fixing it means
-  scaling the QSS and `content_column`/`constrained_button` together. Use
-  `--windowed` when working on the layouts.
+- **The app opens full screen, and the UI scales with the screen.** The factor is
+  `clamp(height / 1080, 1.0, 1.5)`, set once in `build_application`. Every length
+  must go through `theme.px(n)` — in the QSS, in `content_column`,
+  `constrained_button`, and in raw `setContentsMargins`/`setSpacing` calls. A
+  hardcoded pixel will not move and will look wrong next to everything that does.
+  `theme.radius()` is for corners, damped by the square root. The scale is a module
+  global, so `conftest.py` resets it and the stylesheet after every test.
 
 ## Unblock this first
 

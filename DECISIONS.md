@@ -87,6 +87,10 @@ is where the "why" belongs.
 | **Nothing scales with the screen** — type and control widths are fixed pixels | live | §12 |
 | A vertical layout filling a variable-height container **needs a stretch item**, or it shares surplus height equally | live | §13 |
 | `ScreenBase.showEvent` **pins every wrapped label's height to its size hint**, so a layout cannot clip the last line | live | §13 |
+| UI scale is `clamp(screen_height / 1080, 1.0, 1.5)`; 1080p is 1.0 and never changes | live | §14 |
+| Every design-unit length goes through `theme.px()`; the scale is a module global | live | §14 |
+| Corner radii scale as `sqrt(f)` — full scaling makes buttons read as pills | live | §14 |
+| The window's **minimum size scales too**, or the enlarged UI is starved of room | live | §14 |
 
 ## The clock
 

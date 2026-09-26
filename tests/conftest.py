@@ -33,6 +33,40 @@ from guitaroids.settings import Settings  # noqa: E402
 from guitaroids.songlib import Library  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def reset_ui_scale():
+    """Put the process-wide UI scale and stylesheet back to their defaults.
+
+    Autouse because the scale is a module global in ``theme`` -- deliberately, so
+    ``content_column`` and ``constrained_button`` can scale their design units
+    without every screen having to thread a scale argument through. The cost of a
+    global is that a test which sets it leaks into every test after it, and the
+    symptom would be a screen mysteriously laid out at 1.5x with no obvious cause.
+
+    The stylesheet is restored too, because it is the *other* half of the same
+    state: ``QApplication.styleSheet`` is also process-wide and outlives the
+    session-scoped ``qapp``, so a test that re-themes the app to check the scaled
+    layout would otherwise leave every later test asserting against the wrong sheet.
+
+    Restored **only if it differs**. ``QApplication.setStyleSheet`` re-polishes every
+    live widget, and measuring that at ~0.7s per call: paying it unconditionally
+    made the suite take minutes and looked like a hang. One test changes the sheet,
+    so one test pays.
+    """
+    from PySide6 import QtWidgets
+
+    from guitaroids.ui import theme
+
+    yield
+    theme.set_scale(1.0)
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return
+    default = theme.build_stylesheet(1.0)
+    if app.styleSheet() != default:
+        app.setStyleSheet(default)
+
+
 @pytest.fixture(scope="session")
 def qapp():
     """One QApplication for the whole session. Qt permits exactly one."""
@@ -43,9 +77,14 @@ def qapp():
         app = QtWidgets.QApplication([sys.argv[0]])
     if "Fusion" in QtWidgets.QStyleFactory.keys():
         app.setStyle("Fusion")
-    from guitaroids.ui.theme import STYLESHEET
+    from guitaroids.ui import theme
 
-    app.setStyleSheet(STYLESHEET)
+    # Scale 1.0 explicitly, not STYLESHEET, so the fixture states the scale rather
+    # than relying on the global happening to be 1.0. build_application would derive
+    # it from the offscreen platform's 800x800 screen, which is below the minimum
+    # and so would clamp to 1.0 -- right answer, but by accident.
+    theme.set_scale(1.0)
+    app.setStyleSheet(theme.build_stylesheet(1.0))
     yield app
 
 

@@ -1645,3 +1645,125 @@ is worse than no test, because it is a test that lies.
   free, and it would need hoisting if a future screen held thousands.
 - **Untested on the 96dpi scaling case.** A HiDPI display changes every size hint;
   the pinning follows them, but nothing here was run at `QT_SCALE_FACTOR=2`.
+
+---
+
+## §14 — The UI scales with the screen (2026-09-26)
+
+Closes the §12.2 "not done". At 3440x1440 the app rendered a 520px column with
+14px type in the middle of the screen: correct, and small.
+
+**Tests: 468, all passing. Verified at 1.0, 1.33 and 1.5; 1080p is byte-identical
+to before this change.**
+
+### 14.1 The policy
+
+```
+scale = clamp(screen_height / 1080, 1.0, 1.5)
+```
+
+- **1080p is 1.0 by definition** — that is the size the whole UI was measured at, and
+  a test asserts `build_stylesheet(scale_for_height(1080)) == STYLESHEET`, so the
+  common case cannot drift.
+- **Never below 1.0.** A short window should get a scrollbar or a compressed
+  layout, not smaller type. Scaling *down* would trade the bugs in §11.6 and §13.2
+  for fresh ones, and 14px is already small.
+- **Never above 1.5.** Past that the column stops reading as a menu and starts
+  reading as a web page, and a 4K panel is viewed from further away than a laptop,
+  so it needs less enlargement than the arithmetic suggests.
+- **Height, not width or area.** This is a full screen app, and what makes the UI
+  look small is being measured against the *vertical* extent of the display. A
+  3440x1440 ultrawide is tall enough to read comfortably from a desk.
+
+Measured: 768→1.0, 1080→1.0, 1200→1.11, 1440→1.33, 2160→1.5, 3840→1.5.
+
+### 14.2 One source of truth, and a global
+
+`theme.px(n)` is the only way a design-unit length becomes a pixel. Every length in
+the QSS, in `content_column`, in `constrained_button`, and in the raw
+`setContentsMargins`/`setSpacing`/`setFixedWidth` calls inside the four screens goes
+through it.
+
+The scale is a **module global** in `theme`, set once by `build_application` before
+any screen is built. The alternative — threading a `scale` argument through
+`content_column`, `constrained_button` and all four screens — was rejected as more
+chances to forget it than the global is chances to leak it. Both helpers still take
+an explicit `scale_factor`, which is what makes them testable without global state.
+
+The global does need a guard, and getting that wrong cost real time: see §14.4.
+
+**Corner radii are damped, by the square root.** A 6px radius at 1.33 becomes 8px,
+which is a visibly rounder button, and past about 12px it reads as a pill. Lengths
+scale fully; curvature scales as `sqrt(f)` so the proportion of rounding stays put
+while the box grows.
+
+### 14.3 The shell's minimum size scales too
+
+`setMinimumSize(720, 480)` is now `px(720), px(480)`. A minimum that did not grow
+would starve the enlarged UI of room, and §11.6 records exactly what a layout does
+when given less space than it needs: it does not clip, it compresses, and the
+widgets overlap.
+
+### 14.4 A global in the tests, and the 70-second bug it caused
+
+The test suite pins the scale with an autouse fixture, because a global that one
+test sets leaks into every test after it. It restores **both** halves of the state:
+the scale, and `QApplication.styleSheet`, which is also process-wide and outlives
+the session-scoped `qapp`.
+
+The first version restored the stylesheet unconditionally. That made the suite take
+**over 70 seconds** and look like a hang, because `QApplication.setStyleSheet`
+re-polishes every live widget — measured at **~0.7s per call**, paid 100+ times.
+
+The fix is one line of logic and it is the kind of thing worth remembering:
+
+```python
+if app.styleSheet() != default:      # only restore what a test actually changed
+    app.setStyleSheet(default)
+```
+
+One test changes the sheet, so one test pays. Back to 13s. A test-harness
+optimisation that also happens to be the difference between a suite that runs and
+one that appears to hang.
+
+### 14.5 The screenshot tool had to be pinned
+
+`screenshot_ui.py` renders a fixed 960x640 frame. It inherited the display's scale
+and drew a **1.33x UI into a 1080p frame**, silently clipping the Quit button off the
+bottom of the main menu — the frames being the only screenshots anyone reviews.
+
+Its parser is now `build_parser()`, so a test asserts `scale == 1.0` and
+`size == "960x640"` as behaviour rather than as source text. `--scale 1.5 --size
+1440x960` is how the enlarged layout gets looked at.
+
+### 14.6 What the scale does *not* fix
+
+The pages are centred columns that **size to their content**, not to the window. So
+at 3440x1440 song select occupies about 770px — scaled correctly and consistently
+(769/570 = 1.35 ≈ 1.33), but it does not *grow into* the extra width, because the
+convention in `AGENTS.md` is a centred fixed-width column rather than a full-bleed
+form.
+
+For a menu that is correct and looks like a menu. For song select it means the song
+list is narrow on a very wide display. Widening it is a layout decision about how
+much a song list should span, not a scaling bug, so it is written down rather than
+changed here.
+
+### Not done — §14
+
+- **The scale is not user-configurable.** No setting, no `--scale` on the app (only
+  on the screenshot tool). The heuristic is `height / 1080` and a user on a 32"
+  1080p panel who wants it larger has no way to ask.
+- **Only the primary screen is measured**, and §12's "screen selection is not
+  handled" still stands. On a two-monitor machine like the one this was built on,
+  the scale comes from whichever display is primary, not from the one the window is
+  on.
+- **HiDPI is untested.** A `devicePixelRatio` of 2 makes Qt do its own scaling, and
+  this multiplies on top. Nothing was run at `QT_SCALE_FACTOR=2`, and it is possible
+  the result is double-scaled.
+- **No test renders the scaled UI and checks the pixels.** The tests check the
+  numbers — the stylesheet's font sizes, the column cap, the minimum size — and a
+  human looked at the renders. Same gap as §11.6 and §13.
+- **The music game's highway is not built**, so the note lane widths, fret markers
+  and hit flashes have no scale story at all yet. That is the screen that will
+  actually need the factor most, and it will arrive with the scale already in place.

@@ -25,13 +25,38 @@ sys.path.insert(0, str(ROOT))
 OUT_DIR = Path("/tmp/opencode/ui")
 
 
-def main(argv: list[str]) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The argument parser, exposed so a test can check the defaults.
+
+    Separate from :func:`main` because the scale default is load-bearing: this tool
+    renders a fixed-size frame, and inheriting the display's scale would draw a
+    1.33x UI into a 1080p window and clip the bottom of every screen.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("screen", nargs="?", default="main")
     parser.add_argument("--all", action="store_true", help="capture every screen")
     parser.add_argument("--offscreen", action="store_true", help="render without a display")
     parser.add_argument("--out", default=str(OUT_DIR))
-    args = parser.parse_args(argv)
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=1.0,
+        help=(
+            "UI scale to render at. Defaults to 1.0, the 1080p design size, which "
+            "is what --size below assumes. Pass --scale 1.5 with a matching larger "
+            "--size to look at the enlarged layout."
+        ),
+    )
+    parser.add_argument(
+        "--size",
+        default="960x640",
+        help="window size, WxH. Should match --scale.",
+    )
+    return parser
+
+
+def main(argv: list[str]) -> int:
+    args = build_parser().parse_args(argv)
 
     if args.offscreen:
         import os
@@ -44,17 +69,22 @@ def main(argv: list[str]) -> int:
 
     from guitaroids.app import build_application
     from guitaroids.context import AppContext
+    from guitaroids.ui import theme
     from guitaroids.ui.screens import Screen
     from guitaroids.ui.shell import MainWindow
 
-    app = build_application([sys.argv[0]])
+    app = build_application([sys.argv[0]], scale_factor=args.scale)
     # A real context, unlike the test suite's. The point of this script is to look
     # at what the user will actually see, and a real song list is most of it.
     context = AppContext.create()
     print(f"songs: {len(context.library.entries)} found in {context.songs_dir}")
+
+    width, _, height = args.size.partition("x")
+    width, height = int(width), int(height)
     shell = MainWindow(context)
-    shell.resize(960, 640)
+    shell.resize(width, height)
     shell.show()
+    print(f"scale: {theme.scale():.3f}  window: {width}x{height}")
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

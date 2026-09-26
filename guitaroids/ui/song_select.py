@@ -32,6 +32,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from ..songlib import SongEntry, Status, format_duration
 from .library_loader import LibraryLoader
 from .screens import Screen, ScreenBase, constrained_button, content_column, heading
+from .theme import px
 
 if TYPE_CHECKING:  # pragma: no cover - types only
     from ..context import AppContext
@@ -56,11 +57,9 @@ OFFSET_MIN_MS = -500
 OFFSET_MAX_MS = 500
 OFFSET_STEP_MS = 5
 
-
 def format_offset(ms: float) -> str:
     """Signed milliseconds, for a label."""
     return f"{ms:+.0f} ms"
-
 
 class SongSelect(ScreenBase):
     """The song list, the details of the selection, and the controls to play it."""
@@ -94,7 +93,7 @@ class SongSelect(ScreenBase):
         column.addLayout(header)
 
         body = QtWidgets.QHBoxLayout()
-        body.setSpacing(16)
+        body.setSpacing(px(16))
         column.addLayout(body, 1)
 
         body.addWidget(self._build_list_column(), 1)
@@ -113,8 +112,8 @@ class SongSelect(ScreenBase):
         panel = QtWidgets.QFrame()
         panel.setObjectName("card")
         layout = QtWidgets.QVBoxLayout(panel)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(px(12), px(12), px(12), px(12))
+        layout.setSpacing(px(8))
 
         self._songs = QtWidgets.QListWidget()
         self._songs.setObjectName("songs")
@@ -141,10 +140,10 @@ class SongSelect(ScreenBase):
     def _build_detail_column(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QFrame()
         panel.setObjectName("card")
-        panel.setFixedWidth(340)
+        panel.setFixedWidth(px(340))
         layout = QtWidgets.QVBoxLayout(panel)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(px(16), px(16), px(16), px(16))
+        layout.setSpacing(px(10))
 
         self._detail_title = heading("", kind="heading")
         self._detail_artist = heading("", kind="subtitle")
@@ -154,7 +153,7 @@ class SongSelect(ScreenBase):
         layout.addWidget(_divider())
 
         self._facts = QtWidgets.QFormLayout()
-        self._facts.setSpacing(6)
+        self._facts.setSpacing(px(6))
         # The label column sizes to its widest label, so "Difficulty" ends up flush
         # against the longest value. Horizontal spacing is what separates them.
         self._facts.setHorizontalSpacing(14)
@@ -190,15 +189,15 @@ class SongSelect(ScreenBase):
     def _build_problems_box(self) -> QtWidgets.QGroupBox:
         box = QtWidgets.QGroupBox("Problems")
         layout = QtWidgets.QVBoxLayout(box)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(px(8), px(8), px(8), px(8))
         self._problems = QtWidgets.QListWidget()
-        self._problems.setMaximumHeight(110)
+        self._problems.setMaximumHeight(px(110))
         layout.addWidget(self._problems)
         return box
 
     def _build_button_row(self) -> QtWidgets.QHBoxLayout:
         row = QtWidgets.QHBoxLayout()
-        row.setSpacing(12)
+        row.setSpacing(px(12))
 
         back = constrained_button("Back", width=140)
         back.clicked.connect(self.shell.go_back)
@@ -419,7 +418,6 @@ class SongSelect(ScreenBase):
         """
         self._loader.cancel()
         super().hideEvent(event)
-
 
 def _divider() -> QtWidgets.QFrame:
     line = QtWidgets.QFrame()

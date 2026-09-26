@@ -20,14 +20,16 @@ from PySide6 import QtWidgets
 from guitaroids import qtenv
 from guitaroids.context import AppContext
 from guitaroids.ui.shell import MainWindow
-from guitaroids.ui.theme import STYLESHEET
+from guitaroids.ui import theme
 
 APPLICATION_NAME = "Guitaroids"
 DEFAULT_SIZE = (960, 640)
 
 
-def build_application(argv: list[str]) -> QtWidgets.QApplication:
-    """Create or reuse the QApplication, with the theme applied.
+def build_application(
+    argv: list[str], *, scale_factor: float | None = None
+) -> QtWidgets.QApplication:
+    """Create or reuse the QApplication, with the theme and scale applied.
 
     Reuse rather than always construct: Qt permits exactly one QApplication per
     process, so a test that has already built widgets and then calls ``run()``
@@ -39,6 +41,11 @@ def build_application(argv: list[str]) -> QtWidgets.QApplication:
 
     No ``setFont``: the stylesheet owns typography, and two owners for font size
     means changing one and wondering why nothing happened.
+
+    The scale comes from the primary screen's height, so the UI grows on a large
+    panel instead of sitting in the middle of it as a small strip. Explicit
+    ``scale_factor`` overrides the measurement, which is how the tests pin a
+    size.
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(argv[:1])
     app.setApplicationName(APPLICATION_NAME)
@@ -52,7 +59,14 @@ def build_application(argv: list[str]) -> QtWidgets.QApplication:
     else:  # pragma: no cover - no such build seen
         print("warning: the Fusion style is unavailable; the platform default will be used")
 
-    app.setStyleSheet(STYLESHEET)
+    factor = scale_factor
+    if factor is None:
+        screen = app.primaryScreen()
+        height = screen.availableGeometry().height() if screen is not None else 0
+        factor = theme.scale_for_height(height)
+    theme.set_scale(factor)
+
+    app.setStyleSheet(theme.build_stylesheet())
     return app
 
 

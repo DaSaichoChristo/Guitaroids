@@ -16,6 +16,9 @@ from PySide6 import QtCore, QtGui, QtWidgets
 if TYPE_CHECKING:  # pragma: no cover - import cycle avoidance, types only
     from ..context import AppContext
 
+from . import theme
+from .theme import px
+
 #: Human-facing names, declared rather than derived from the enum value.
 #:
 #: Module level, not inside the ``Screen`` class body: a dict in an Enum body
@@ -163,6 +166,7 @@ def content_column(
     margin: int = 40,
     max_width: int = 520,
     vertical_centred: bool = False,
+    scale_factor: float | None = None,
 ) -> QtWidgets.QVBoxLayout:
     """A vertical layout for page content, width-constrained and centred.
 
@@ -174,11 +178,19 @@ def content_column(
     container is width-capped and centred; widgets inside keep their own size hints,
     so :func:`constrained_button` controls how wide they are.
 
+    ``margin`` and ``max_width`` are 1080p design units and are scaled by
+    ``scale_factor``, or by the process-wide scale when that is ``None``. That is
+    what stops a 3440x1440 display rendering a 520px column in the middle of it.
+
     Args:
         vertical_centred: pad above and below so sparse pages sit in the middle of
             the window. Right for a title screen, wrong for song select or
             preferences, which fill the page and should stay top-aligned.
     """
+    f = theme.scale() if scale_factor is None else scale_factor
+    margin = px(margin, f)
+    max_width = px(max_width, f)
+
     outer = QtWidgets.QVBoxLayout(parent)
     outer.setContentsMargins(margin, margin, margin, margin)
     if vertical_centred:
@@ -189,7 +201,7 @@ def content_column(
     container.setMaximumWidth(max_width)
     column = QtWidgets.QVBoxLayout(container)
     column.setContentsMargins(0, 0, 0, 0)
-    column.setSpacing(12)
+    column.setSpacing(px(12, f))
 
     outer.addWidget(container, alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
     if vertical_centred:
@@ -206,9 +218,18 @@ def heading(text: str, *, kind: str = "heading") -> QtWidgets.QLabel:
 
 
 def constrained_button(
-    text: str, *, object_name: str = "", width: int = 240
+    text: str,
+    *,
+    object_name: str = "",
+    width: int = 240,
+    scale_factor: float | None = None,
 ) -> QtWidgets.QPushButton:
-    """A button that will not stretch across the window."""
+    """A button that will not stretch across the window.
+
+    ``width`` is a 1080p design unit, scaled the same way as :func:`content_column`.
+    """
+    f = theme.scale() if scale_factor is None else scale_factor
+    width = px(width, f)
     button = QtWidgets.QPushButton(text)
     if object_name:
         button.setObjectName(object_name)

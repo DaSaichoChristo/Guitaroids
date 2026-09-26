@@ -60,6 +60,12 @@ To look at a screen without launching the app:
 
 ```bash
 .venv/bin/python scripts/screenshot_ui.py --all    # PNGs in /tmp/opencode/ui
+.venv/bin/python scripts/screenshot_ui.py --all --scale 1.5 --size 1440x960
+```
+
+Screenshots render at scale 1.0 into a 960x640 frame by default — the 1080p design
+size — so they stay comparable run to run whatever display you are on. Pass
+`--scale` to inspect the enlarged layout.
 ```
 
 ## Adding songs
@@ -132,7 +138,7 @@ guitaroids/
   settings.py user preferences                  pure, no Qt
   qtenv.py   Qt plugin bootstrap
 scripts/     setup, asset fetchers, import report, screenshots
-tests/       446 tests
+tests/       468 tests
 songs/       your tabs and audio (gitignored)
 ```
 

@@ -22,6 +22,7 @@ from .import_gp import ImportGp
 from .main_menu import MainMenu
 from .preferences import Preferences
 from .screens import Screen, ScreenBase, constrained_button, content_column, heading
+from .theme import px
 from .song_select import SongSelect
 
 _CENTRED = QtCore.Qt.AlignmentFlag.AlignHCenter
@@ -82,7 +83,10 @@ class MainWindow(QtWidgets.QMainWindow):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Guitaroids")
-        self.setMinimumSize(720, 480)
+        # Scaled, because a UI that has been enlarged past what the minimum size
+        # allows cannot lay out properly -- and DESIGN.md §11.6 and §13 record what
+        # a layout does when it is given less room than it needs.
+        self.setMinimumSize(px(720), px(480))
 
         self.context = context
         self._stack = QtWidgets.QStackedWidget()
