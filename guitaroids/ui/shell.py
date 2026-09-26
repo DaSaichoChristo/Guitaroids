@@ -18,7 +18,9 @@ from collections.abc import Callable
 from PySide6 import QtCore, QtWidgets
 
 from ..context import AppContext
+from .import_gp import ImportGp
 from .main_menu import MainMenu
+from .preferences import Preferences
 from .screens import Screen, ScreenBase, constrained_button, content_column, heading
 from .song_select import SongSelect
 
@@ -91,8 +93,8 @@ class MainWindow(QtWidgets.QMainWindow):
             Screen.SONG_SELECT: lambda: SongSelect(self, self.context),
             Screen.GAME: self._make_placeholder(Screen.GAME),
             Screen.RESULTS: self._make_placeholder(Screen.RESULTS),
-            Screen.PREFERENCES: self._make_placeholder(Screen.PREFERENCES),
-            Screen.IMPORT_GP: self._make_placeholder(Screen.IMPORT_GP),
+            Screen.PREFERENCES: lambda: Preferences(self, self.context),
+            Screen.IMPORT_GP: lambda: ImportGp(self, self.context),
         }
         self._built: dict[Screen, ScreenBase] = {}
         self._history: list[Screen] = []

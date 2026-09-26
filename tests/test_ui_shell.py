@@ -315,6 +315,60 @@ def test_screen_base_requires_a_context() -> None:
     assert parameters == ["self", "shell", "context", "parent"]
 
 
+@pytest.mark.parametrize("screen", list(Screen))
+def test_no_screen_compresses_its_content(shell, qapp, screen: Screen) -> None:
+    """Nothing on any screen may be drawn on top of anything else.
+
+    A QVBoxLayout that cannot fit its children does not clip them -- it compresses
+    them below their minimum height, and the widgets overlap. Preferences did
+    exactly this on first build: three combo boxes stacked 19px apart when each
+    needed 34. A screenshot is how that was found, so the check belongs here
+    rather than in one screen's tests where a new screen would not hit it.
+    """
+    from PySide6 import QtWidgets
+
+    shell.resize(960, 640)  # the app's default, and the tightest realistic case
+    shell.show()
+    qapp.processEvents()
+    shell.navigate(screen)
+    qapp.processEvents()
+
+    squeezed = []
+    for box in shell.current_screen.findChildren(QtWidgets.QGroupBox):
+        layout = box.layout()
+        if layout is None:
+            continue
+        needed = layout.minimumSize().height()
+        if box.height() < needed - 2:
+            squeezed.append(f"{box.title()!r}: {box.height()}px < {needed}px")
+
+    assert not squeezed, f"{screen.label} overlaps its contents: {squeezed}"
+
+
+@pytest.mark.parametrize("screen", list(Screen))
+def test_every_screen_fits_inside_the_window(shell, qapp, screen: Screen) -> None:
+    """A child wider than the screen is clipped, i.e. invisible.
+
+    Catches a fixed-width panel that stops fitting when the window is narrow --
+    the failure mode a fixed-width detail pane invites.
+    """
+    from PySide6 import QtWidgets
+
+    shell.resize(960, 640)
+    shell.show()
+    qapp.processEvents()
+    shell.navigate(screen)
+    qapp.processEvents()
+
+    current = shell.current_screen
+    too_wide = [
+        c.objectName() or type(c).__name__
+        for c in current.findChildren(QtWidgets.QWidget)
+        if c.parent() is current and c.width() > current.width() + 1
+    ]
+    assert not too_wide, f"{screen.label} has children wider than the screen: {too_wide}"
+
+
 # --- rendering ---------------------------------------------------------------
 
 
