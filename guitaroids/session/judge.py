@@ -12,9 +12,11 @@ state lived in the screen, leaving and re-entering GAME would silently reset a
 run, and there would be nowhere to test the windows without building a widget.
 
 **A stray does not count as a miss.** Pressing a lane with no note in range is
-tracked (:attr:`GameState.strays`) but never penalised. DESIGN.md's real tab is
-68% one lane after chord collapse, and counting faking-through-a-solo as a miss
-would punish the exact behaviour a practice tool is for.
+tracked (:attr:`GameState.strays`) but never penalised. The original justification
+was that the real tab is 68% one lane *after chord collapse*; chords are kept by
+default now (§21), so that number no longer describes the shipped chart -- but the
+rule stands on its own, because counting faking-through-a-solo as a miss punishes
+the exact behaviour a practice tool is for, at any density.
 """
 
 from __future__ import annotations

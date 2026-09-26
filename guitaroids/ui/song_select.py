@@ -512,7 +512,9 @@ class SongSelect(ScreenBase):
         self.shell.navigate(Screen.GAME)
 
     def _rescan_library(self) -> None:
-        if not self._loader.start(self.context.songs_dir):
+        if not self._loader.start(
+            self.context.songs_dir, collapse=self.context.settings.collapse_chords
+        ):
             self._set_status("already scanning")
             return
         self._rescan.setEnabled(False)

@@ -132,7 +132,13 @@ inside a ±35ms window reads as "the app is broken" rather than as an off-by-10m
 | ...and a track that changes tempo is **dropped from the track list** rather than offered and refused | live | §20.3 |
 | Missing audio is **metronome-only**, a supported state rather than an error | live | §3.4 |
 | Track is chosen by the user; the **General MIDI program** (24–31 guitar, 32–39 bass) classifies and filters the list | live | §7.3, §8 |
-| Chords collapsed to **one note per onset**, default rule "highest pitch", with a per-song toggle for full chords | live | §7.4, §8 |
+| ~~Chords collapsed to one note per onset, by default~~ — **full chords are now the default**; collapsing is opt-in | live | §21.3 |
+| A chord is **playable**: each lane resolves independently, so six notes are six presses and six PERFECTs | live | §21.4 |
+| The chord setting is read from the **`PlayRequest`**, so it changes the next song with no rescan | live | §21.2 |
+| `LibraryLoader.start` takes `collapse` as a **required** argument — no default for a call site to inherit | live | §21.2 |
+| Every `collapse` default in the project is **False**, so none of them can disagree | live | §21.2 |
+| Settings **version 2** drops a stale `collapse_chords` so the new default reaches an existing install | live | §21.3 |
+| Loading a file **upgrades its version**, so a migration does not re-run on every launch | live | §21.3 |
 | `.gpx` is unreadable — PyGuitarPro 0.11 handles GP3/GP4/GP5 only | assumed | §6.3 |
 | Repeat barlines are unrolled with `passes = stored + 1` | assumed | §6.4 |
 | Alternative endings resolve to the **last** ending (straight-through playback) | assumed | §6.4 |
@@ -157,7 +163,8 @@ The three `assumed` rows have never been seen hold:
 | Camera feed mirroring direction (affects handedness) | planned | §1.6 |
 | Hit windows: Perfect ±35ms, Good ±80ms, **expire past 140ms** | live | §1.6, §15.7 |
 | The 80–140ms band resolves the note as a **MISS**, not a stray — one hit, one outcome | live | §15.7 |
-| **Strays are counted but never penalised** — the real chart is 68% one lane after collapse | live | §15.7 |
+| **Strays are counted but never penalised** — faking through a solo is practice, not cheating | live | §15.7 |
+| **Difficulty bands on onsets per second, not notes** — a checkbox must not re-band a whole library | live | §21.5 |
 | `accuracy` is hits over notes **judged so far**; `song_accuracy` is the whole-chart figure | live | §15.7 |
 | Keys **1–6** for lanes 0–5, hard-coded; the only mapping there is | live | §15 |
 | The game **does not depend on Qt focus** — an app-wide filter catches the lane keys while visible | live | §15.5 |

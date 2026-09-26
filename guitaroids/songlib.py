@@ -101,7 +101,7 @@ class SongEntry:
     chart: Chart | None = None
     audio_path: Path | None = None
     tracks: tuple[TrackInfo, ...] = ()
-    collapse: bool = True
+    collapse: bool = False
     rule: CollapseRule = CollapseRule.HIGHEST
     _song: object | None = field(default=None, repr=False, compare=False)
 
@@ -109,13 +109,30 @@ class SongEntry:
     def slug(self) -> str:
         return self.tab_path.stem
 
-    def chart_for(self, track_number: int) -> Chart | None:
+    def chart_for(
+        self, track_number: int, *, collapse: bool | None = None
+    ) -> Chart | None:
         """Build the chart for a specific track, or ``None`` if unavailable.
 
+        ``collapse`` overrides the value the entry was scanned with, so a
+        preference change takes effect on the next attempt **without a rescan**
+        (§21). Omit it and the entry's own setting is used, which is what the
+        song list wants: it is describing the scan, not an attempt.
+
         Falls back to the entry's own chart if the song was not retained (a
-        tab that failed to parse has no tracks anyway).
+        tab that failed to parse has no tracks anyway). Note the fallback cannot
+        honour ``collapse`` -- there is no song left to rebuild from -- so it is
+        only correct when the entry was scanned the same way.
         """
+        wanted = self.collapse if collapse is None else bool(collapse)
         if self._song is None:
+            # No song, so nothing can be rebuilt: the cached chart is the only
+            # answer available, and it is only the right one if it was built the
+            # way we now want. Returning None rather than a chart of the wrong
+            # shape is the honest failure -- a silently collapsed tab is exactly
+            # the bug this argument was added to fix (§21).
+            if wanted != self.collapse:
+                return None
             return self.chart if self.chart and self.chart.track_number == track_number else None
         try:
             track = next(
@@ -126,7 +143,7 @@ class SongEntry:
             from .model.chart import chart_from_song
 
             return chart_from_song(
-                self._song, self.tab_path, track=track, collapse=self.collapse, rule=self.rule
+                self._song, self.tab_path, track=track, collapse=wanted, rule=self.rule
             )
         except ChartError:
             return None
@@ -162,12 +179,25 @@ class SongEntry:
 
     @property
     def notes_per_second(self) -> float:
+        """Every note, chord included. This is what the song list displays."""
         return self.chart.notes_per_second if self.chart is not None else 0.0
 
     @property
+    def onsets_per_second(self) -> float:
+        """One per rhythmic event, chord included. This is what difficulty bands on."""
+        return self.chart.onsets_per_second if self.chart is not None else 0.0
+
+    @property
     def difficulty(self) -> str:
-        """Coarse band from note density. Rough on purpose -- see DESIGN.md §6.7."""
-        rate = self.notes_per_second
+        """Coarse band from **onset** density. Rough on purpose -- see §6.7.
+
+        Onsets rather than notes, and the reason is §21: a chord is one thing to
+        hit, so banding on note count would make the setting quadruple the density
+        of every song and push the whole library into "Expert" without the songs
+        having got any harder. The displayed density stays note-based, because
+        "10.77 nps" is the truth about how much is written down.
+        """
+        rate = self.onsets_per_second
         if rate <= 0:
             return "?"
         if rate < 2.0:
@@ -246,7 +276,7 @@ def describe_tracks(song, suggested) -> tuple[TrackInfo, ...]:
 def load_tab(
     tab_path: Path,
     *,
-    collapse: bool = True,
+    collapse: bool = False,
     rule: CollapseRule = CollapseRule.HIGHEST,
 ) -> SongEntry:
     """Parse and validate one tab. Never raises for bad input.
@@ -364,7 +394,7 @@ def find_tabs(root: str | Path) -> tuple[Path, ...]:
 def scan_library(
     root: str | Path,
     *,
-    collapse: bool = True,
+    collapse: bool = False,
     rule: CollapseRule = CollapseRule.HIGHEST,
 ) -> Library:
     """Scan ``root`` for tabs and build a :class:`Library`.

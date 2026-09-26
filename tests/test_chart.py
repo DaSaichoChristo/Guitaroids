@@ -14,6 +14,7 @@ from pathlib import Path
 
 import guitarpro
 import pytest
+from songbuild import make_chart
 
 from guitaroids.model.chart import (
     TICKS_PER_BEAT,
@@ -386,3 +387,40 @@ def test_empty_duration_is_zero_not_an_error() -> None:
     )
     assert chart.duration == 0.0
     assert chart.notes_per_second == 0.0
+
+
+# --- onsets vs notes (§21) ----------------------------------------------------
+#
+# `difficulty` bands on onsets, and this is the property that makes that honest: a
+# chord is one thing to hit, so the onset count must not move when the chord
+# setting does. If it ever does, the song list's difficulty column starts lying
+# whenever the player changes a checkbox.
+
+
+def test_onset_count_is_the_number_of_distinct_times() -> None:
+    chart = make_chart([(1.0, 0, 0), (1.0, 2, 1), (1.0, 4, 2), (2.0, 1, 0)], collapse=False)
+    assert chart.note_count == 4
+    assert chart.onset_count == 2
+
+
+def test_onset_count_survives_collapse() -> None:
+    """The whole reason difficulty is banded on onsets."""
+    notes = [(1.0, 0, 0), (1.0, 2, 1), (1.0, 4, 2), (2.0, 1, 0)]
+    full = make_chart(notes, collapse=False)
+    collapsed = make_chart(notes, collapse=True)
+    assert full.note_count == 4 and collapsed.note_count == 2
+    assert full.onset_count == collapsed.onset_count == 2
+
+
+def test_onsets_per_second_is_the_band_input_not_the_notes() -> None:
+    chart = make_chart([(1.0, lane, 0) for lane in range(6)], collapse=False)
+    assert chart.onsets_per_second == 1.0, "one onset, whatever the chord size"
+    assert chart.notes_per_second == 6.0, "six notes, and the song list says so"
+
+
+def test_an_empty_chart_has_no_onsets_and_no_rate() -> None:
+    from dataclasses import replace
+
+    empty = replace(make_chart([(1.0, 0, 0)]), notes=())
+    assert empty.onset_count == 0
+    assert empty.onsets_per_second == 0.0

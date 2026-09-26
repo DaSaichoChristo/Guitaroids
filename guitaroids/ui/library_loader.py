@@ -119,7 +119,7 @@ class LibraryLoader(QtCore.QObject):
         self,
         root: str | Path,
         *,
-        collapse: bool = True,
+        collapse: bool,
         rule: CollapseRule = CollapseRule.HIGHEST,
     ) -> bool:
         """Begin a scan. Returns ``False`` if one is already in flight.
@@ -128,6 +128,13 @@ class LibraryLoader(QtCore.QObject):
         same directory would race to write the library, and the loser's result
         would be the one shown. Call :meth:`cancel` and wait for
         :attr:`cancelled` if a rescan is genuinely wanted.
+
+        ``collapse`` is **required, and deliberately has no default** (§21). It
+        used to default to True, and both call sites omitted it -- so the
+        "Collapse chords" preference in Preferences was saved, persisted and then
+        ignored, and every library came back collapsed whatever the player chose.
+        A required argument is the fix that cannot recur: a third call site now
+        has to say which it wants.
         """
         if self._running:
             return False

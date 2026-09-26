@@ -26,9 +26,14 @@ from guitaroids.songlib import (
     load_tab,
     scan_library,
 )
+from guitaroids.context import AppContext
 from guitaroids.model.chart import ChartError, changes_tempo
 
 ROOT = Path(__file__).resolve().parent.parent
+REAL_SONGS = ROOT / "songs"
+needs_songs = pytest.mark.skipif(
+    not any(REAL_SONGS.glob("*.gp*")), reason="no tabs in songs/"
+)
 
 
 def write_junk(path: Path) -> Path:
@@ -318,3 +323,53 @@ def test_an_effect_with_no_mix_table_at_all_is_not_a_tempo_change() -> None:
     """
     song = make_song(tracks=1, notes=4)
     assert changes_tempo(song, song.tracks[0]) is False
+
+
+@needs_songs
+def test_difficulty_is_unchanged_by_the_chord_setting() -> None:
+    """The band is a property of the song, not of a checkbox (§21).
+
+    On the real tab, notes go from 1108 to 4099 when chords are kept -- density
+    2.91 nps to 10.77 -- which would put every rock tab in "Expert" and leave the
+    column saying nothing. Banding on onsets keeps the rating honest.
+    """
+    from guitaroids.settings import Settings
+
+    collapsed = AppContext.create(
+        songs_dir=REAL_SONGS, settings_path=Path("/nonexistent/s.json"),
+        settings=Settings(collapse_chords=True),
+    )
+    full = AppContext.create(
+        songs_dir=REAL_SONGS, settings_path=Path("/nonexistent/s.json"),
+        settings=Settings(collapse_chords=False),
+    )
+    bands = {e.slug: (e.difficulty, e.notes_per_second) for e in collapsed.library.playable}
+    for entry in full.library.playable:
+        assert entry.difficulty == bands[entry.slug][0], (
+            f"{entry.slug}: {entry.difficulty} vs {bands[entry.slug][0]}"
+        )
+    # ...and the density really did move, so the test is not passing because
+    # nothing changed.
+    assert any(
+        entry.notes_per_second != bands[entry.slug][1] for entry in full.library.playable
+    ), "full chords must change the note density; otherwise this proves nothing"
+
+
+@needs_songs
+def test_the_real_tab_keeps_every_note_by_default() -> None:
+    """The flip, on the data that prompted it.
+
+    Hotel California is 4099 notes over 1108 onsets. Collapsing it lost 2991 notes
+    and put 68% of the rest on the high E, which is what stopped the play view
+    looking like the tab.
+    """
+    ctx = AppContext.create(
+        songs_dir=REAL_SONGS, settings_path=Path("/nonexistent/s.json")
+    )
+    for entry in ctx.library.playable:
+        if entry.chart is None:
+            continue
+        assert entry.chart.note_count >= entry.chart.onset_count
+        assert "collapsed" not in " ".join(entry.chart.warnings), (
+            f"{entry.slug} was collapsed: {entry.chart.warnings}"
+        )

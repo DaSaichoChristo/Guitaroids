@@ -2517,3 +2517,145 @@ dead-looking one, and the exact thing the button's own test warns about. Fixed w
 - **§1.6's constant-tempo limitation is unchanged**, and is now the reason a real
   track is missing. Tempo *maps* would be a much larger change to the note clock
   than the control in §19.
+
+## §21 — Chords are kept, because the setting that removed them did nothing (2026-09-26)
+
+Supersedes §7.4's collapse-by-default. §7.4's reasoning about a *fretting hand's
+x-position* is kept below, because it is the reasoning that made collapsing sound
+reasonable and it is still the reason the preference exists.
+
+**Tests: 682, all passing. Verified by render on `xcb`: the real tab now draws as
+the tab it is.**
+
+### 21.1 The report, and what it turned out to be
+
+*"The play mode doesn't seem to accurately represent the song."*
+
+Everything about the **timing** turned out to be exact, which is worth recording
+because it was the first hypothesis and it was wrong: no repeat signs in either
+real tab, constant tempo, all 4/4, **zero** onsets off the 16th grid, no notes
+dropped, no bar-line drift. `seconds = tick/960 × 60/tempo` is doing its job.
+
+The inaccuracy was the **chord collapse**, and the numbers are stark:
+
+| tab | notes in the file | notes in play mode | on the high E |
+|---|---|---|---|
+| Hotel California | 4099 | **1108** (27%) | 757 (68%) |
+| Sweet Child O' Mine | 2015 | **674** (33%) | 190 |
+
+Three quarters of the music was invisible, and what remained was the *highest*
+note of each chord, so the play view was a column of dots on the top string. It
+did not look like the tab the player learned the song from, and it did not sound
+like it either once there is audio.
+
+### 21.2 The actual bug: a setting that nothing read
+
+The cause was not the default. It was that the default could not be changed.
+
+`PlayRequest.collapse_chords` was **write-only**. It was set in `from_settings`,
+carried by `with_offset_ms`, printed by `describe()`, persisted, and asserted by
+six tests — and read by **nothing**. The chart is built by the library scan, and
+*both* `loader.start()` call sites omitted the argument, so `LibraryLoader.start`'s
+own `collapse: bool = True` won every time. Untick "Collapse chords" in
+Preferences, press Save, press Play: an identical song.
+
+That is the §20.4 failure again in a new costume: **a live-looking control that
+changes nothing.** It had been in the app since §7.4 and had never once been
+tested end to end, because every test either set the field and read it back, or
+drove the loader directly. Nothing tested the *seam*.
+
+Three fixes, because the bug was in three places:
+
+- **Both `start()` call sites pass the setting**, and `LibraryLoader.start` now takes
+  `collapse` as a **required** argument with no default. A required argument is the
+  fix that cannot come back: a third call site now has to say which it wants. This
+  is the same reasoning as the immutable `QPen(str, width)` and the parented HUD
+  labels — make the mistake impossible rather than documented.
+- **`AppContext.create` loads its settings *before* scanning.** It had them the
+  other way round, so the first library was built with a default the player may not
+  have chosen. The same bug one layer down, found by looking for the first one.
+- **`AppContext.chart_for` passes `request.collapse_chords`**, and
+  `SongEntry.chart_for` grew a `collapse=` override. This is the good part: the
+  request is frozen per attempt, so unticking the box changes the **next** song
+  without a rescan and without touching a song that is already playing — which is
+  what the field's own docstring always claimed.
+
+Every `collapse` default in the project is now `False` — the model, `SongEntry`,
+`load_tab`, `scan_library`, `Settings` and the test fixture — because four
+defaults that can disagree is the same hazard as one that is wrong.
+
+### 21.3 Full chords, and the migration that made it reach anyone
+
+`collapse_chords` defaults to `False`. An existing settings file has the key
+present with the *old* default in it, so flipping the dataclass default alone
+would have left every current installation exactly where it was.
+
+`SETTINGS_VERSION` goes to **2**, and a file below it has the `collapse_chords`
+key **dropped** on load, so the new default applies. A file that says `false`
+already agrees, so nothing is lost by dropping it — the migration can only ever
+change behaviour for someone sitting on the old default.
+
+Loading also now **upgrades the version** rather than keeping the file's. That was
+not in the plan and the round-trip test found it: without it, a version-1 file
+says 1 forever and every migration added later re-runs on every single load. A
+file from a *newer* build keeps its own number, so downgrading does not re-run old
+migrations over data that is already past them.
+
+**No performance cost.** The whole library scans in 0.70s collapsed and 0.67s
+full: the parse dominates and the collapse is free. `GameState.update` is
+`bisect` per lane over time-sorted notes, so more notes in the same lanes costs
+nothing. Measured, not assumed.
+
+### 21.4 A chord was always playable
+
+§7.4 collapsed chords because "a fretting hand's x-position selects one lane".
+That is true of a *hand*, and it was used to justify a chart shape for a keyboard.
+`GameState.press` resolves **one lane at a time** and each note is independent, so
+a six-note chord was always six simultaneous presses and six PERFECTs — verified,
+and now pinned by four tests including the one that matters: a chord you played
+completely must not age into a miss.
+
+So the preference was never a capability limit. It stays, because a six-note chord
+is genuinely six keys at once and that is hard on a keyboard — but it is now a
+*choice* rather than a mutilation, and its tooltip says so in both directions
+instead of claiming, as it did, that keeping every note "is what keyboard play
+needs".
+
+### 21.5 Difficulty bands on onsets, because a checkbox is not a difficulty
+
+`SongEntry.difficulty` banded on `note_count / duration`. Keeping every note takes
+Hotel California from 2.91 nps to 10.77, which is "Expert" — and so is every real
+rock tab, which leaves the column saying nothing at all. The songs had not got
+harder; a preference had changed.
+
+`Chart.onset_count` (distinct note times, one pass over a time-sorted tuple) and
+`onsets_per_second` now exist, and **difficulty bands on those**. A chord is one
+rhythmic event however many strings it covers, so this is the measure that does
+not move when the setting does. The **displayed** density stays note-based,
+because "10.77 nps" is the truth about how much is written down. The two disagree
+on purpose and both are labelled for what they are.
+
+`onset_count` compares times with `==`, which is only safe because notes sharing an
+onset share a computed float — the assumption `group_by_onset` and
+`count_chord_sizes` already make. Consistency with them beats a rounding fudge
+that would disagree with the collapse.
+
+### Not done — §21
+
+- **The string names sit 6px from the first note in a bar.** The marker is already
+  nudged clear of the staff edge, so they do not overlap, but in a dense bar the
+  leftmost chord is drawn hard against the `E A D G B E` column. Tightening it means
+  widening the margin or insetting the first note, and both move every bar.
+- **Scores are not comparable between the two modes.** An accuracy figure is out of
+  1108 notes collapsed and out of 4099 full, so the same performance reads
+  differently. There is no leaderboard to be inconsistent with, and the HUD does not
+  say which mode produced a number.
+- **A chord is still one verdict at a time in the HUD.** Pressing six strings fires
+  six judgements and the flash shows the last, so a completed chord reads as one
+  hit rather than six. `GameState` has everything needed to aggregate per onset.
+- **`--full-chords` on `import_songs.py` is now `--collapse-chords`.** The report
+  used to default to collapsed, so it was describing a song nobody would ever see.
+- **Hit feedback is still absent**, unchanged from §18.5, and now harder to
+  motivate on a chord.
+- **The preference is global, not per song**, and there is still no way to see the
+  two shapes side by side before committing to one.

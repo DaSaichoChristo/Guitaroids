@@ -326,3 +326,62 @@ def test_judging_needs_no_qt() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "clean"
+
+
+# --- chords (§21) -------------------------------------------------------------
+#
+# Full chords are the shipped default now, so "a chord is playable" is no longer a
+# curiosity: it is the main path. `GameState.press` resolves one lane at a time and
+# each note is independent, so a six-note chord should be six simultaneous presses
+# and six PERFECTs. This is the test that says so, because the alternative -- a
+# chord silently costing five misses -- is not a thing anyone would notice by
+# playing until they had already judged themselves bad at their own instrument.
+
+
+@pytest.fixture()
+def chord_state() -> GameState:
+    """One six-note chord at t=2.0, on all six strings."""
+    return GameState(make_chart([(2.0, lane, 5) for lane in range(6)], collapse=False))
+
+
+def test_a_six_note_chord_is_six_simultaneous_presses(chord_state: GameState) -> None:
+    for lane in range(6):
+        judgement = chord_state.press(lane, 2.0)
+        assert judgement is not None, f"lane {lane} had nothing to hit"
+        assert judgement.verdict is Verdict.PERFECT
+
+
+def test_a_chord_played_completely_leaves_nothing_outstanding(chord_state: GameState) -> None:
+    for lane in range(6):
+        chord_state.press(lane, 2.0)
+    chord_state.update(2.5)  # well past MISS_SECONDS
+    assert chord_state.outstanding == 0
+    assert chord_state.misses == 0, "a chord you played must not age into a miss"
+
+
+def test_the_notes_of_one_chord_are_independent(chord_state: GameState) -> None:
+    """Hitting three of the six strands costs exactly three misses, not six.
+
+    Worth pinning because the alternative -- one press resolving the whole onset --
+    would make a chord *easier* than a single note, and nothing else in the judge
+    would notice.
+    """
+    for lane in range(3):
+        chord_state.press(lane, 2.0)
+    chord_state.update(2.5)
+    assert chord_state.misses == 3
+    assert chord_state.accuracy == pytest.approx(0.5)
+
+
+def test_a_chord_still_counts_as_one_onset_for_the_tally(chord_state: GameState) -> None:
+    """`outstanding` is notes, but the *song* is one rhythmic event.
+
+    Not asserted as a behaviour change -- it is a note about what the numbers in
+    the HUD now mean. With full chords the note count is three to four times what
+    it was, so an accuracy figure is no longer comparable with a collapsed run of
+    the same song, and there is no leaderboard to be inconsistent with yet.
+    """
+    assert chord_state.outstanding == 6
+    assert GameState(
+        make_chart([(2.0, lane, 5) for lane in range(6)], collapse=True)
+    ).outstanding == 1

@@ -49,6 +49,11 @@ says what ran.
   Never drive note timing from a GUI timer. Omitting `latency` biases every note
   10–20ms early.
 - **Lane = the tab's string number − 1.** No mapping table.
+- **Chords are kept whole.** `Settings.collapse_chords` is `False` by default, so the
+  chart is every note in the tab and a chord is several simultaneous presses —
+  playable, because the judge resolves one lane at a time. Collapsing to one note
+  per onset is an opt-in in Preferences, and it drops three quarters of a real tab
+  (§21.3).
 - **Timing:** `seconds = beat.start / 960 * (60 / song.tempo)`. `Beat.start` is an
   **absolute** tick, so note times are recomputed against a running offset when
   repeats are unrolled.
@@ -62,7 +67,7 @@ says what ran.
 
 ## Current state
 
-`tests/` is 660 tests, all passing. **Five of the six screens are real:** the main
+`tests/` is 682 tests, all passing. **Five of the six screens are real:** the main
 menu, song select (tab + track + audio offset + **per-song practice tempo**), import
 GP (choose a file, then Add to library), preferences, and **game** — three bars
 of tab notation with a left-to-right beat line, `E A D G B E` down the left, a six-key keyboard test mode and PERFECT/GOOD/MISS
@@ -94,9 +99,9 @@ Screenshots pin scale 1.0 and a 960x640 frame, so they stay comparable run to ru
 whatever display you are on. `--scale 1.5 --size 1440x960` renders the enlarged
 layout.
 ```
-## Five things that will bite you
+## Six things that will bite you
 
-All five cost real time, and all five are now enforced by tests.
+All six cost real time, and all six are now enforced by tests.
 
 - **A layout that does not fit does not clip — it compresses.** Children get squeezed
   below their minimum height and end up drawn on top of each other. This shipped a
@@ -127,6 +132,14 @@ All five cost real time, and all five are now enforced by tests.
   hardcoded pixel will not move and will look wrong next to everything that does.
   `theme.radius()` is for corners, damped by the square root. The scale is a module
   global, so `conftest.py` resets it and the stylesheet after every test.
+
+- **A setting that nothing reads looks exactly like a setting that works.** "Collapse
+  chords" was saved, persisted, carried in `PlayRequest`, printed by `describe()` and
+  asserted by six tests — and read by nothing, because both `loader.start()` call
+  sites omitted the argument and the loader's own default won (§21.2). Every test
+  covered the field or the loader; none covered the *seam*. When a preference matters,
+  test it through the real path — settings file → context → screen — and give any
+  argument a call site could forget a **required** no-default parameter.
 
 ## Unblock this first
 

@@ -28,7 +28,16 @@ from pathlib import Path
 
 #: Bumped when a change is not backwards compatible. Older files are migrated or
 #: ignored, never fatal.
-SETTINGS_VERSION = 1
+#:
+#: 2 -- ``collapse_chords`` defaults to False (full chords, §21). Files written at
+#: version 1 have the key, and almost all of them have the *old default* in it, so
+#: the key is dropped on load and the new default applies. A file that says
+#: ``false`` already agrees with the new default, so nothing is lost by dropping it.
+SETTINGS_VERSION = 2
+
+#: Files below this version had their ``collapse_chords`` key dropped on load, so
+#: that the flip in version 2 reaches an existing installation.
+_MIGRATE_COLLAPSE_FROM = 2
 
 #: Practice-tempo bounds. The floor is where the beat line stops being readable as a
 #: moving thing; the ceiling is far above any real tab, and a song's *own* written
@@ -120,8 +129,21 @@ class Settings:
     count_in_bars: int = 1
     """0-2 bars of clicks before the music. Many tracks open with their own."""
 
-    collapse_chords: bool = True
-    """One note per onset. Off keeps every note, for keyboard play (§7.4)."""
+    collapse_chords: bool = False
+    """Keep every note in a chord, or reduce each onset to one.
+
+    **False by default since §21.** The tab in ``songs/`` loses 2991 of its 4099
+    notes when chords are collapsed, and the survivor is the highest note of each
+    chord -- so 68% of what is left sits on the high E string and the play view
+    stops resembling the tab the player learned the song from. That was the wrong
+    default for a game whose whole claim is to represent the song.
+
+    A chord is genuinely playable: ``GameState.press`` resolves each lane
+    independently, so a six-note chord is six simultaneous presses and six
+    PERFECTs. The cost is difficulty -- a full six-note chord is six keys at once,
+    which a keyboard player will not manage, and this is why the preference stays
+    rather than being removed. Collapsing is one click away.
+    """
 
     song_offsets_ms: dict[str, float] = field(default_factory=dict)
     """Per-tab audio alignment, keyed by slug, so a manual tweak sticks."""
@@ -159,6 +181,13 @@ class Settings:
         defaults = cls()
         if not isinstance(raw, dict):
             return defaults
+
+        # Before the per-field loop, because the loop is what would otherwise
+        # resurrect the old default: a version-1 file has the key present with
+        # True in it, and that is the value this migration exists to discard.
+        file_version = raw.get("version")
+        if not isinstance(file_version, int) or file_version < _MIGRATE_COLLAPSE_FROM:
+            raw = {k: v for k, v in raw.items() if k != "collapse_chords"}
 
         values: dict = {}
         for spec in fields(cls):
@@ -210,8 +239,14 @@ class Settings:
                         tempos[slug] = max(MIN_BPM, min(MAX_BPM, number))
                 values[name] = tempos
             elif name == "version":
-                values[name] = _clamp_int(given, 0, 999, SETTINGS_VERSION)
-            # version: keep the file's value if sane, else current
+                # A file older than this build has been *migrated* on the way in,
+                # so it now reports itself as current. Without that, a
+                # version-1 file keeps saying 1 forever and every migration added
+                # later re-runs on every single load. A file from a *newer* build
+                # keeps its own number, so downgrading does not re-run old
+                # migrations over data it has already been past.
+                stored = _clamp_int(given, 0, 999, SETTINGS_VERSION)
+                values[name] = max(stored, SETTINGS_VERSION)
 
         return cls(**values)
 

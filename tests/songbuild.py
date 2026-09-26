@@ -40,14 +40,22 @@ def _headers(measures: int = 2) -> list[guitarpro.MeasureHeader]:
     return headers
 
 
-def _attach_notes(track: guitarpro.Track, notes: int) -> None:
+def _attach_notes(track: guitarpro.Track, notes: int, chord_size: int = 1) -> None:
+    """Put ``notes`` onsets on the track, ``chord_size`` strings at each onset.
+
+    ``chord_size`` > 1 stacks notes from the low string up, which is what a real
+    tab looks like and what §21 made the default shape. Most fixtures want 1: a
+    chord is several notes sharing one onset, and a fixture that wanted one note
+    per lane would otherwise find them merged.
+    """
     for index in range(notes):
         measure = track.measures[index % len(track.measures)]
         voice = measure.voices[0]
         beat = guitarpro.Beat(voice, start=measure.header.start + index * TICK)
-        note = guitarpro.Note(beat, value=0, string=(index % 6) + 1)
-        note.type = guitarpro.NoteType.normal
-        beat.notes.append(note)
+        for string in range(1, chord_size + 1):
+            note = guitarpro.Note(beat, value=0, string=string)
+            note.type = guitarpro.NoteType.normal
+            beat.notes.append(note)
         voice.beats.append(beat)
 
 
@@ -58,6 +66,7 @@ def make_song(
     tempo: int = 120,
     tracks: int = 1,
     notes: int = 4,
+    chord_size: int = 1,
     program: int = GUITAR_PROGRAM,
 ) -> guitarpro.Song:
     """A structurally real Song, built in memory. No file is touched."""
@@ -70,7 +79,7 @@ def make_song(
         track = guitarpro.Track(song, number=number, name=f"Guitar {number}")
         track.channel.instrument = program
         track.measures = [guitarpro.Measure(track, header) for header in headers]
-        _attach_notes(track, notes)
+        _attach_notes(track, notes, chord_size)
         song.tracks.append(track)
     return song
 
@@ -80,7 +89,7 @@ def make_entry(
     path: Path | str = Path("songs/synthetic.gp5"),
     *,
     status: Status = Status.OK,
-    collapse: bool = True,
+    collapse: bool = False,
 ) -> SongEntry:
     """Wrap a Song the way ``songlib.load_tab`` would, without reading a file."""
     from guitaroids.model.chart import chart_from_song, suggest_track
@@ -105,9 +114,12 @@ def write_tab(
     notes: int = 4,
     tempo: int = 120,
     tracks: int = 1,
+    chord_size: int = 1,
 ) -> Path:
     """Write a minimal but real ``.gp5``. Returns the path."""
-    song = make_song(title=path.stem, tempo=tempo, tracks=tracks, notes=notes)
+    song = make_song(
+        title=path.stem, tempo=tempo, tracks=tracks, notes=notes, chord_size=chord_size
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     guitarpro.write(song, path)
     return path

@@ -31,7 +31,9 @@ def test_defaults_are_sane() -> None:
     assert 0.0 <= s.click_volume <= 1.0
     assert s.input_mode is InputMode.KEYBOARD, "keyboard must be the default, not camera"
     assert s.count_in_bars == 1
-    assert s.collapse_chords is True
+    # Full chords, since §21: the collapsed default dropped 2991 of the real
+    # tab's 4099 notes and put 68% of the rest on one string.
+    assert s.collapse_chords is False
     assert s.input_latency_ms == 0.0
     assert s.audio_device is None
     assert s.song_offsets_ms == {}
@@ -393,3 +395,61 @@ def test_module_imports_nothing_heavy() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "clean", f"settings.py pulled in {result.stdout.strip()}"
+
+
+# --- the collapse migration (§21) --------------------------------------------
+#
+# `collapse_chords` flipped from True to False. A settings file written before the
+# flip has the key present with the *old default* in it, so flipping the dataclass
+# default alone would leave an existing installation exactly where it was.
+
+
+def test_a_version_1_file_gets_the_new_chord_default() -> None:
+    loaded = Settings.from_dict({"version": 1, "collapse_chords": True})
+    assert loaded.collapse_chords is False, "the old default must not survive the flip"
+
+
+def test_the_migration_does_not_invent_a_choice_the_file_already_made() -> None:
+    """A version-1 file that already said False agrees with the new default."""
+    assert Settings.from_dict({"version": 1, "collapse_chords": False}).collapse_chords is False
+
+
+def test_a_version_2_file_keeps_the_setting_it_has() -> None:
+    """The migration is a one-way door: v2 is past it, and the key is honoured."""
+    assert Settings.from_dict({"version": 2, "collapse_chords": True}).collapse_chords is True
+    assert Settings.from_dict({"version": 2, "collapse_chords": False}).collapse_chords is False
+
+
+def test_a_file_with_no_version_is_treated_as_old() -> None:
+    """Nobody wrote a version by hand, and a missing one must not be a free pass."""
+    assert Settings.from_dict({"collapse_chords": True}).collapse_chords is False
+
+
+def test_the_migration_leaves_every_other_setting_alone() -> None:
+    """It drops one key. It does not rebuild the file."""
+    loaded = Settings.from_dict(
+        {
+            "version": 1,
+            "collapse_chords": True,
+            "master_volume": 0.25,
+            "count_in_bars": 2,
+            "song_bpm": {"alpha": 60.0},
+            "song_offsets_ms": {"alpha": -120.0},
+        }
+    )
+    assert loaded.master_volume == 0.25
+    assert loaded.count_in_bars == 2
+    assert loaded.bpm_for("alpha") == 60.0
+    assert loaded.offset_for("alpha") == -120.0
+
+
+def test_the_migration_survives_a_round_trip(tmp_path: Path) -> None:
+    """Loaded from disk, saved, loaded again: the answer must not wobble."""
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"version": 1, "collapse_chords": True}), encoding="utf-8")
+
+    once = Settings.load(path)
+    assert once.collapse_chords is False
+    once.save(path)
+    assert Settings.load(path).collapse_chords is False
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == SETTINGS_VERSION

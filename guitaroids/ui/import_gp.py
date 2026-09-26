@@ -252,7 +252,9 @@ class ImportGp(ScreenBase):
 
     def _rescan(self) -> None:
         """Refresh the library so the new tab appears without a restart."""
-        if not self._loader.start(self.context.songs_dir):
+        if not self._loader.start(
+            self.context.songs_dir, collapse=self.context.settings.collapse_chords
+        ):
             self._report("Already scanning; the new tab will appear shortly.")
 
     # --- reporting ------------------------------------------------------------

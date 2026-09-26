@@ -195,8 +195,17 @@ class Preferences(ScreenBase):
         form.addRow(heading("Count-in", kind="dim"), self._count_in)
 
         self._collapse = QtWidgets.QCheckBox("Collapse chords to one note per onset")
+        # The tooltip used to say that keeping every note "is what keyboard play
+        # needs", which is the opposite of the truth and the opposite of §7.4's
+        # reasoning: one fretting-hand position is one lane, so a six-note chord is
+        # six keys at once. A player reading this needs to know what they are
+        # trading, and it now says both directions.
         self._collapse.setToolTip(
-            "Off keeps every note in a chord, which is what keyboard play needs."
+            "Off by default: every note in a chord is kept and drawn, and a chord "
+            "is several notes at once.\n\n"
+            "On reduces each chord to a single note -- one key per beat, much "
+            "easier on a keyboard, but most of what is written down disappears "
+            "from the tab."
         )
         self._collapse.toggled.connect(self._on_collapse_changed)
         layout.addWidget(self._collapse)

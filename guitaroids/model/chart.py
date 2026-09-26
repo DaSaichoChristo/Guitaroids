@@ -65,9 +65,14 @@ class TrackKind(Enum):
 class CollapseRule(Enum):
     """Which note survives when a chord is collapsed to a single onset.
 
-    Real tabs are chord-heavy: the one tab in ``songs/`` has 688 of 1108 onsets
-    carrying five or six notes (DESIGN.md §7.4). A fretting hand's x-position
-    selects one lane, so the chord has to be reduced to something playable.
+    Real tabs are chord-heavy: the tab in ``songs/`` has 688 of its 1108 onsets
+    carrying five or six notes, which is why collapsing it throws away 2991 of its
+    4099 notes.
+
+    **This only applies when the player asks for it.** Chords are kept by default
+    (§21), because losing three quarters of a tab is a poor trade for a slightly
+    easier chart -- and because a chord turned out to be genuinely playable, the
+    per-lane resolution in :mod:`guitaroids.session.judge` was always capable of it.
     """
 
     HIGHEST = "highest"
@@ -203,10 +208,40 @@ class Chart:
 
     @property
     def notes_per_second(self) -> float:
-        """Naive density, for a rough difficulty read in the song list."""
+        """Notes per second -- how much there is, counting every note of a chord."""
         if not self.notes or self.duration <= 0:
             return 0.0
         return len(self.notes) / self.duration
+
+    @property
+    def onset_count(self) -> int:
+        """Distinct note times: the number of things a player has to *do*.
+
+        A chord is one rhythmic event however many strings it covers, so this is
+        the measure that does **not** change when the chord setting does. With
+        full chords the real tab is 4099 notes over 1108 onsets, and banding a
+        difficulty on notes alone would put every rock tab in "Expert" for the
+        sake of a preference (§21).
+
+        Exact float comparison, because notes sharing an onset share a computed
+        time -- the same assumption :func:`group_by_onset` and
+        :func:`count_chord_sizes` already make. ``notes`` is time-sorted, so this
+        is one pass.
+        """
+        if not self.notes:
+            return 0
+        return sum(
+            1
+            for index, note in enumerate(self.notes)
+            if index == 0 or note.time != self.notes[index - 1].time
+        )
+
+    @property
+    def onsets_per_second(self) -> float:
+        """Onsets per second. The difficulty band's input, not the displayed one."""
+        if not self.notes or self.duration <= 0:
+            return 0.0
+        return self.onset_count / self.duration
 
     def notes_in_lane(self, lane: int) -> tuple[Note, ...]:
         return tuple(n for n in self.notes if n.lane == lane)
@@ -356,7 +391,7 @@ def chart_from_song(
     path: Path,
     track=None,
     *,
-    collapse: bool = True,
+    collapse: bool = False,
     rule: CollapseRule = CollapseRule.HIGHEST,
 ) -> Chart:
     """Build a :class:`Chart` from an already-parsed guitarpro ``Song``.

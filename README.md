@@ -87,7 +87,7 @@ Check a library without launching the GUI:
 ```bash
 .venv/bin/python scripts/import_songs.py             # human-readable report
 .venv/bin/python scripts/import_songs.py --json      # machine-readable, exits 1 on problems
-.venv/bin/python scripts/import_songs.py --full-chords
+.venv/bin/python scripts/import_songs.py --collapse-chords   # one note per chord
 ```
 
 ```
@@ -144,7 +144,7 @@ guitaroids/
   settings.py user preferences                  pure, no Qt
   qtenv.py   Qt plugin bootstrap
 scripts/     setup, asset fetchers, import report, screenshots
-tests/       660 tests
+tests/       682 tests
 songs/       your tabs and audio (gitignored)
 ```
 

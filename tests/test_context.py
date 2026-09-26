@@ -235,3 +235,121 @@ def test_importing_context_does_not_import_qt() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "clean"
+
+
+# --- the chord setting actually reaches the chart (§21) ----------------------
+#
+# `PlayRequest.collapse_chords` was write-only: set, described, persisted, tested,
+# and read by nothing. The chart came from the library scan, and both `start()`
+# call sites omitted `collapse`, so the loader's own default won every time. These
+# are the tests that would have caught it.
+
+
+@pytest.fixture()
+def chorded() -> AppContext:
+    """A context whose one song is four six-note chords."""
+    entry = make_entry(make_song(notes=4, chord_size=6), Path("songs/chords.gp5"))
+    return AppContext(
+        library=Library(root=Path("songs"), entries=(entry,)),
+        settings=Settings(),
+        songs_dir=Path("songs"),
+        settings_path=Path("/nonexistent/settings.json"),
+    )
+
+
+def test_the_request_decides_whether_chords_are_collapsed(chorded: AppContext) -> None:
+    """One library, two requests, two different songs -- and no rescan between them.
+
+    The point of reading the preference off the request rather than the scan: the
+    player unticks the box in Preferences, presses Play, and gets the other song.
+    """
+    chorded.request_play("chords", 1)
+    full = chorded.chart_for(chorded.play_request)
+    assert full is not None
+    assert full.note_count == 24, "four chords of six"
+
+    chorded.settings.collapse_chords = True
+    collapsed_request = chorded.request_play("chords", 1)
+    collapsed = chorded.chart_for(collapsed_request)
+    assert collapsed is not None
+    assert collapsed.note_count == 4, "one note per onset"
+    assert full.onset_count == collapsed.onset_count == 4
+
+
+def test_playing_a_second_song_with_a_changed_setting_needs_no_rescan(
+    chorded: AppContext,
+) -> None:
+    """The second attempt differs from the first, with the same library object.
+
+    Asserted on the library being untouched as much as on the two charts, because
+    the old behaviour could also have been reached by rebuilding the library --
+    and that needed a rescan the player was never asked for.
+    """
+    library = chorded.library
+    chorded.settings.collapse_chords = False
+    full = chorded.chart_for(chorded.request_play("chords", 1))
+    chorded.settings.collapse_chords = True
+    collapsed = chorded.chart_for(chorded.request_play("chords", 1))
+
+    assert full is not None and collapsed is not None
+    assert full.note_count > collapsed.note_count
+    assert chorded.library is library, "charting must not have replaced the library"
+
+
+def test_the_scan_uses_the_setting_too(tmp_path: Path) -> None:
+    """The song list describes the library the player asked for.
+
+    `AppContext.create` loaded its settings *after* scanning, so the first library
+    was built with a default the player may not have chosen -- the same bug as the
+    omitted `collapse` argument, one layer down.
+    """
+    from songbuild import write_tab
+
+    songs = tmp_path / "songs"
+    songs.mkdir()
+    write_tab(songs / "song.gp5", notes=4, chord_size=6)
+    settings_path = tmp_path / "settings.json"
+
+    def charts(ctx: AppContext):
+        return [e.chart for e in ctx.library.playable if e.chart is not None]
+
+    # The setting has to be in place *before* create, because create scans first:
+    # changing it afterwards is the very thing the test above shows has no effect.
+    full = AppContext.create(
+        songs_dir=songs,
+        settings_path=settings_path,
+        settings=Settings(collapse_chords=False),
+    )
+    collapsed = AppContext.create(
+        songs_dir=songs,
+        settings_path=settings_path,
+        settings=Settings(collapse_chords=True),
+    )
+
+    full_chart = charts(full)[0]
+    collapsed_chart = charts(collapsed)[0]
+    # Stated as the relationship rather than as a magic number: collapsing keeps
+    # every onset and drops notes. The round trip through the .gp5 format decides
+    # how many onsets there are, and that is not this test's business.
+    assert collapsed_chart.note_count == full_chart.onset_count
+    assert full_chart.note_count > collapsed_chart.note_count
+
+
+def test_a_full_chord_chart_is_what_the_app_ships(tmp_path: Path) -> None:
+    """End to end from a settings file: default settings mean every note is kept.
+
+    The regression guard for the flip itself, through the real path -- a file on
+    disk, `Settings.load`, a scan, a chart -- rather than through a fixture that
+    has already been told what to do.
+    """
+    from songbuild import write_tab
+
+    songs = tmp_path / "songs"
+    songs.mkdir()
+    write_tab(songs / "song.gp5", notes=4, chord_size=6)
+
+    ctx = AppContext.create(songs_dir=songs, settings_path=tmp_path / "settings.json")
+    chart = ctx.chart_for(ctx.request_play("song", 1))
+    assert chart is not None
+    assert chart.note_count == 24
+    assert "collapsed" not in " ".join(chart.warnings)

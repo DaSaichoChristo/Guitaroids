@@ -55,12 +55,19 @@ class AppContext:
 
         A missing songs directory yields an empty library rather than raising, so
         first run is an empty state and not a crash.
+
+        The settings are loaded **before** the scan, not after, so the first
+        library is built with the player's chord preference rather than with a
+        default that then quietly disagrees with it. This was the same bug one
+        layer down from §21's: a scan that did not know what the player asked
+        for.
         """
         root = Path(songs_dir) if songs_dir is not None else SONGS_DIR
         path = Path(settings_path) if settings_path is not None else SETTINGS_PATH
+        loaded = settings if settings is not None else Settings.load(path)
         return cls(
-            library=scan_library(root),
-            settings=settings if settings is not None else Settings.load(path),
+            library=scan_library(root, collapse=loaded.collapse_chords),
+            settings=loaded,
             songs_dir=root,
             settings_path=path,
         )
@@ -118,6 +125,11 @@ class AppContext:
         Returns ``None`` rather than raising for an unknown slug, a track that has
         gone away since the scan, or a tab that no longer parses. A game screen
         that cannot resolve its request should show an error, not crash.
+
+        The chord setting comes from the **request**, not from the library (§21).
+        The request is frozen per attempt, so unticking "Collapse chords" in
+        Preferences changes the next song without touching a song that is already
+        playing -- and without a rescan, which is what the setting used to need.
         """
         request = request if request is not None else self.play_request
         if request is None:
@@ -125,7 +137,9 @@ class AppContext:
         entry = self.entry_for(request.slug)
         if entry is None:
             return None
-        return entry.chart_for(request.track_number)
+        return entry.chart_for(
+            request.track_number, collapse=request.collapse_chords
+        )
 
     def entry_for_request(self, request: PlayRequest | None = None) -> SongEntry | None:
         request = request if request is not None else self.play_request

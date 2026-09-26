@@ -48,9 +48,21 @@ def loader(qapp) -> LibraryLoader:
     wait_until(lambda: not instance.is_running, timeout_ms=10_000)
 
 
+#: ``collapse`` is a required argument since §21 -- it used to default to True and
+#: both call sites omitted it, so the preference did nothing. These tests pass it
+#: explicitly to say which shape they are looking at, and COLLAPSED covers the
+#: other one.
+COLLAPSE = False
+
+
 def run_scan(loader: LibraryLoader, root: Path, **kwargs) -> SignalSpy:
-    """Start a scan and wait for its terminal signal. Returns a spy on `completed`."""
+    """Start a scan and wait for its terminal signal. Returns a spy on `completed`.
+
+    ``collapse`` defaults to COLLAPSE so every test states the shape it expects;
+    pass ``collapse=`` to override it.
+    """
     done = SignalSpy(loader.completed)
+    kwargs.setdefault("collapse", COLLAPSE)
     assert loader.start(root, **kwargs) is True
     assert done.wait(timeout_ms=15_000), done.describe()
     return done
@@ -83,7 +95,7 @@ def test_completed_library_matches_the_synchronous_scan(
 def test_entries_are_reported_incrementally(loader: LibraryLoader, library_dir: Path) -> None:
     found = SignalSpy(loader.entry_found)
     done = SignalSpy(loader.completed)
-    loader.start(library_dir)
+    loader.start(library_dir, collapse=COLLAPSE)
     assert done.wait(), done.describe()
     assert found.count == 3, "each tab should be announced as it is parsed"
     assert [entry.slug for (entry,) in found.calls] == ["alpha", "beta", "gamma"]
@@ -92,7 +104,7 @@ def test_entries_are_reported_incrementally(loader: LibraryLoader, library_dir: 
 def test_progress_counts_up_to_the_total(loader: LibraryLoader, library_dir: Path) -> None:
     progress = SignalSpy(loader.progress)
     done = SignalSpy(loader.completed)
-    loader.start(library_dir)
+    loader.start(library_dir, collapse=COLLAPSE)
     assert done.wait(), done.describe()
     assert progress.calls == [(1, 3), (2, 3), (3, 3)]
 
@@ -168,7 +180,7 @@ def test_an_unreadable_directory_fails_rather_than_hangs(
 
     failed = SignalSpy(loader.failed)
     completed = SignalSpy(loader.completed)
-    loader.start(tmp_path)
+    loader.start(tmp_path, collapse=COLLAPSE)
     assert failed.wait(), f"expected failed; {failed.describe()}"
     assert completed.count == 0, "failed and completed are mutually exclusive"
     assert "could not read" in failed.first[0]
@@ -185,7 +197,7 @@ def test_completion_clears_is_running(loader: LibraryLoader, library_dir: Path) 
 def test_cancel_emits_cancelled_and_not_completed(loader: LibraryLoader, library_dir: Path) -> None:
     cancelled = SignalSpy(loader.cancelled)
     completed = SignalSpy(loader.completed)
-    loader.start(library_dir)
+    loader.start(library_dir, collapse=COLLAPSE)
     loader.cancel()
     assert cancelled.wait(), cancelled.describe()
     assert completed.count == 0
@@ -196,7 +208,7 @@ def test_cancelling_a_finished_scan_is_harmless(loader: LibraryLoader, library_d
     run_scan(loader, library_dir)
     loader.cancel()
     assert wait_until(lambda: not loader.is_running)
-    assert loader.start(library_dir) is True, "a finished scan must not block the next one"
+    assert loader.start(library_dir, collapse=COLLAPSE) is True, "a finished scan must not block the next one"
     assert wait_until(lambda: not loader.is_running)
 
 
@@ -219,7 +231,7 @@ def test_only_one_terminal_signal_per_scan(loader: LibraryLoader, library_dir: P
     completed = SignalSpy(loader.completed)
     cancelled = SignalSpy(loader.cancelled)
     failed = SignalSpy(loader.failed)
-    loader.start(library_dir)
+    loader.start(library_dir, collapse=COLLAPSE)
     loader.cancel()  # racing the scan on purpose
     # Wait on is_running rather than on a specific signal: whichever terminal
     # signal wins, the guard clears, and waiting on the "wrong" one would just
@@ -235,8 +247,8 @@ def test_only_one_terminal_signal_per_scan(loader: LibraryLoader, library_dir: P
 
 
 def test_a_second_concurrent_scan_is_refused(loader: LibraryLoader, library_dir: Path) -> None:
-    assert loader.start(library_dir) is True
-    assert loader.start(library_dir) is False, "a second scan must be refused, not queued"
+    assert loader.start(library_dir, collapse=COLLAPSE) is True
+    assert loader.start(library_dir, collapse=COLLAPSE) is False, "a second scan must be refused, not queued"
     assert wait_until(lambda: not loader.is_running)
 
 
@@ -291,7 +303,7 @@ def test_the_task_is_not_garbage_collected_mid_run(
     real timeout rather than hanging the suite.
     """
     done = SignalSpy(loader.completed)
-    loader.start(library_dir)
+    loader.start(library_dir, collapse=COLLAPSE)
     assert done.wait(timeout_ms=15_000), done.describe()
 
 
@@ -300,11 +312,52 @@ def test_the_task_is_not_garbage_collected_mid_run(
 
 def test_collapse_and_rule_reach_the_parser(loader: LibraryLoader, library_dir: Path) -> None:
     library = run_scan(
-        loader, library_dir, collapse=False, rule=CollapseRule.LOWEST
+        loader, library_dir, collapse=True, rule=CollapseRule.LOWEST
     ).first[0]
     entry = library.get("alpha")
-    assert entry.collapse is False
+    assert entry.collapse is True
     assert entry.rule is CollapseRule.LOWEST
+
+
+def test_collapse_is_required_so_a_call_site_cannot_forget_it(
+    loader: LibraryLoader, library_dir: Path
+) -> None:
+    """The bug this guards: a default nobody overrode.
+
+    ``collapse`` defaulted to True and *both* call sites omitted it, so the
+    "Collapse chords" preference was saved, persisted, and then ignored. A
+    required argument is the fix that cannot come back, and this is what holds it
+    in place.
+    """
+    import inspect
+
+    from guitaroids.ui.library_loader import LibraryLoader
+
+    parameter = inspect.signature(LibraryLoader.start).parameters["collapse"]
+    assert parameter.default is inspect.Parameter.empty, (
+        "collapse must have no default: a new call site would silently pick one"
+    )
+    with pytest.raises(TypeError):
+        loader.start(library_dir)
+
+
+def test_the_scanned_library_really_honours_the_setting(
+    loader: LibraryLoader, library_dir: Path
+) -> None:
+    """End to end: the same directory, two settings, two different libraries.
+
+    ``library_dir`` is written by the fixture with notes that share onsets, so a
+    collapsed scan has strictly fewer notes than a full one. Asserted on the note
+    count rather than on ``entry.collapse``, because the flag is only a promise --
+    the count is the evidence.
+    """
+    full = run_scan(loader, library_dir, collapse=False).first[0]
+    collapsed = run_scan(loader, library_dir, collapse=True).first[0]
+    full_notes = sum(e.chart.note_count for e in full.playable if e.chart)
+    collapsed_notes = sum(e.chart.note_count for e in collapsed.playable if e.chart)
+    assert full_notes > collapsed_notes, (
+        f"collapse=True still produced {full_notes} notes against {collapsed_notes}"
+    )
 
 
 # --- integration with the context ---------------------------------------------
@@ -317,7 +370,7 @@ def test_a_rescan_can_write_its_result_into_the_context(
 
     context = AppContext(songs_dir=library_dir)
     done = SignalSpy(loader.completed)
-    loader.start(library_dir)
+    loader.start(library_dir, collapse=COLLAPSE)
     assert done.wait(), done.describe()
 
     context.set_library(done.first[0])

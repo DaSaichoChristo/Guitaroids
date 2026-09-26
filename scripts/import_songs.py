@@ -8,7 +8,11 @@ changes tempo (DESIGN.md §6.6).
 
 Usage::
 
-    .venv/bin/python scripts/import_songs.py [songs_dir] [--json] [--full-chords]
+    .venv/bin/python scripts/import_songs.py [songs_dir] [--json] [--collapse-chords]
+
+Full chords, as the app ships them (DESIGN.md §21). The flag is the other way
+round from what it was: this script used to default to collapsing, which made the
+report describe a song the player would never see.
 """
 
 from __future__ import annotations
@@ -127,9 +131,12 @@ def main(argv: list[str]) -> int:
     parser.add_argument("directory", nargs="?", default=str(ROOT / "songs"))
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument(
-        "--full-chords",
+        "--collapse-chords",
         action="store_true",
-        help="keep every note of a chord instead of one per onset (DESIGN.md §7.4)",
+        help=(
+            "reduce each chord to one note, instead of the app's default of keeping "
+            "every note (DESIGN.md §21)"
+        ),
     )
     parser.add_argument(
         "--rule",
@@ -141,7 +148,7 @@ def main(argv: list[str]) -> int:
 
     library = scan_library(
         args.directory,
-        collapse=not args.full_chords,
+        collapse=args.collapse_chords,
         rule=CollapseRule(args.rule),
     )
     # Exit non-zero when anything is unplayable, in both output modes, so this is
@@ -153,7 +160,7 @@ def main(argv: list[str]) -> int:
             json.dumps(
                 {
                     "root": str(library.root),
-                    "collapse": not args.full_chords,
+                    "collapse": args.collapse_chords,
                     "rule": args.rule,
                     "entries": [entry_dict(e) for e in library.entries],
                 },
