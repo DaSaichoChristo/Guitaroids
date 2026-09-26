@@ -33,7 +33,7 @@ from .model.chart import (
     suggest_track,
 )
 
-TAB_EXTENSIONS = (".gp5",)
+TAB_EXTENSIONS = (".gp3", ".gp4", ".gp5")
 AUDIO_EXTENSIONS = (".ogg", ".mp3", ".wav", ".flac", ".m4a")
 
 
