@@ -11,64 +11,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import guitarpro
 import pytest
+from songbuild import make_entry, make_song
 
 from guitaroids.context import AppContext
-from guitaroids.model.chart import chart_from_song, suggest_track
 from guitaroids.session.play_request import PlayRequest
 from guitaroids.settings import InputMode, Settings
-from guitaroids.songlib import Library, SongEntry, Status, describe_tracks
+from guitaroids.songlib import Library
 
-TICK = 960
-
-
-# --- a synthetic library -----------------------------------------------------
-
-
-def make_song(title: str = "Synthetic") -> guitarpro.Song:
-    """A tiny but structurally real Song, built in memory. No file needed."""
-    headers = []
-    tick = 0
-    for number in range(1, 3):
-        header = guitarpro.MeasureHeader(number=number, start=tick)
-        header.timeSignature.numerator = 4
-        header.timeSignature.denominator.value = 4
-        headers.append(header)
-        tick += 4 * TICK
-
-    song = guitarpro.Song(measureHeaders=headers, tempo=120, title=title, artist="Nobody")
-    track = guitarpro.Track(song, number=1, name="Guitar")
-    track.channel.instrument = 25
-    track.measures = [guitarpro.Measure(track, header) for header in headers]
-    song.tracks = [track]
-
-    for measure in track.measures:
-        voice = measure.voices[0]
-        for offset, string in ((0, 1), (TICK, 2)):
-            beat = guitarpro.Beat(voice, start=measure.header.start + offset)
-            note = guitarpro.Note(beat, value=0, string=string)
-            note.type = guitarpro.NoteType.normal
-            beat.notes.append(note)
-            voice.beats.append(beat)
-    return song
-
-
-def make_entry(song: guitarpro.Song, path: Path) -> SongEntry:
-    """Wrap a synthetic Song the way songlib.load_tab would, without a file.
-
-    Built from the same production functions rather than a test-only helper in
-    songlib, so this cannot drift from real behaviour.
-    """
-    track = suggest_track(song)
-    chart = chart_from_song(song, path, track=track, collapse=True)
-    return SongEntry(
-        tab_path=path,
-        status=Status.OK,
-        chart=chart,
-        tracks=describe_tracks(song, track),
-        _song=song,
-    )
+REAL_SONGS = Path(__file__).resolve().parent.parent / "songs"
 
 
 @pytest.fixture()
@@ -221,8 +172,6 @@ def test_create_falls_back_to_defaults_for_a_corrupt_settings_file(tmp_path: Pat
 
 # --- against the real library -----------------------------------------------
 
-
-REAL_SONGS = Path(__file__).resolve().parent.parent / "songs"
 needs_songs = pytest.mark.skipif(
     not any(REAL_SONGS.glob("*.gp5")), reason="no tabs in songs/"
 )

@@ -14,46 +14,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import guitarpro
 import pytest
 from PySide6 import QtCore
 from qtsupport import SignalSpy, wait_until
+from songbuild import broken_tab, write_tab
 
 from guitaroids.model.chart import CollapseRule
 from guitaroids.songlib import Library, Status, scan_library
 from guitaroids.ui.library_loader import LibraryLoader
-
-TICK = 960
-
-
-def write_tab(path: Path, *, notes: int = 2, tempo: int = 120) -> Path:
-    """Write a minimal but real .gp5. Uses the same builder as test_songlib."""
-    headers = [
-        guitarpro.MeasureHeader(number=1, start=0),
-        guitarpro.MeasureHeader(number=2, start=4 * TICK),
-    ]
-    for header in headers:
-        header.timeSignature.numerator = 4
-        header.timeSignature.denominator.value = 4
-
-    song = guitarpro.Song(measureHeaders=headers, tempo=tempo, title=path.stem)
-    track = guitarpro.Track(song, number=1, name="Guitar")
-    track.channel.instrument = 25
-    track.measures = [guitarpro.Measure(track, header) for header in headers]
-    song.tracks = [track]
-
-    for index in range(notes):
-        measure = track.measures[index % len(track.measures)]
-        voice = measure.voices[0]
-        beat = guitarpro.Beat(voice, start=measure.header.start + index * TICK)
-        note = guitarpro.Note(beat, value=0, string=(index % 6) + 1)
-        note.type = guitarpro.NoteType.normal
-        beat.notes.append(note)
-        voice.beats.append(beat)
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    guitarpro.write(song, path)
-    return path
 
 
 @pytest.fixture()
@@ -148,7 +116,7 @@ def test_a_missing_directory_is_empty_not_an_error(loader: LibraryLoader, tmp_pa
 def test_a_corrupt_tab_is_reported_but_the_scan_finishes(
     loader: LibraryLoader, library_dir: Path
 ) -> None:
-    (library_dir / "broken.gp5").write_bytes(b"definitely not a guitar pro file")
+    broken_tab(library_dir / "broken.gp5")
     library = run_scan(loader, library_dir).first[0]
     assert len(library.entries) == 4
     broken = library.get("broken")

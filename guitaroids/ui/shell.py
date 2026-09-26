@@ -20,6 +20,7 @@ from PySide6 import QtCore, QtWidgets
 from ..context import AppContext
 from .main_menu import MainMenu
 from .screens import Screen, ScreenBase, constrained_button, content_column, heading
+from .song_select import SongSelect
 
 _CENTRED = QtCore.Qt.AlignmentFlag.AlignHCenter
 
@@ -87,7 +88,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._factories: dict[Screen, Callable[[], ScreenBase]] = {
             Screen.MAIN: lambda: MainMenu(self, self.context),
-            Screen.SONG_SELECT: self._make_placeholder(Screen.SONG_SELECT),
+            Screen.SONG_SELECT: lambda: SongSelect(self, self.context),
             Screen.GAME: self._make_placeholder(Screen.GAME),
             Screen.RESULTS: self._make_placeholder(Screen.RESULTS),
             Screen.PREFERENCES: self._make_placeholder(Screen.PREFERENCES),
