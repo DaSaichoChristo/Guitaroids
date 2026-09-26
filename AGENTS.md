@@ -62,11 +62,12 @@ says what ran.
 
 ## Current state
 
-`tests/` is 581 tests, all passing. **Five of the six screens are real:** the main
+`tests/` is 618 tests, all passing. **Five of the six screens are real:** the main
 menu, song select (tab + track + audio offset), import GP, preferences, and **game** —
-three bars of tab notation with a left-to-right beat line, a six-key keyboard test
-mode, and PERFECT/GOOD/MISS judging. **Results is still a placeholder**; counts are
-shown in the HUD and go nowhere.
+three bars of tab notation with a left-to-right beat line, `E A D G B E` down the
+left, a six-key keyboard test mode, PERFECT/GOOD/MISS judging, and a **per-song
+practice tempo** (`BPM n of m`, remembered per song, never above the written tempo).
+**Results is still a placeholder**; counts are shown in the HUD and go nowhere.
 
 `model/chart.py`, `model/repeats.py`, `songlib.py`, `settings.py`, `importer.py`,
 `session/play_request.py` and `session/judge.py` are pure. `context.py` holds the

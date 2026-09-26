@@ -188,3 +188,20 @@ superseded or gone with the widget.
 | Measure spans come from `chart.bar_lines`, not interpolated from the tempo | live | §16.3 |
 | Lane colours stay, though printed tab is monochrome — it is a game | live | §16.2 |
 | The HUD is an **overlay** — the playfield keeps the whole window | live | §15.4 |
+| Strings are **named `E A D G B E`** down the left margin, where printed tab puts them | live | §18.1 |
+| The bottom **key legend is deleted** — one answer to "which key is which", not two | live | §18.1 |
+| Each painter method sets its **own font**; the number and the letters are sized to different boxes | live | §18.1 |
+
+## Practice tempo
+
+| Decision | Status | Ref |
+|---|---|---|
+| **Per-song absolute BPM**, remembered per song in `Settings.song_bpm` | live | §18.3 |
+| A **percentage** is rejected: a rate is song-relative, and an absolute BPM is also the value a transport needs | live | §18.3 |
+| Rate is **never above 1.0**; the spin box is clamped to the tab's own tempo | live | §18.3 |
+| The rate is a **single multiplication at the clock**; notes keep their times, expiry slows down for free | live | §18.2 |
+| The **audio offset is applied after the rate** — it is a property of the song, not of the practice speed | live | §18.2 |
+| Judgement windows stay in **milliseconds**, so scores are comparable across speeds | live | §18.3 |
+| Changing tempo **re-anchors the clock origin**; the position is preserved, the song does not jump | live | §18.4 |
+| The control lives on the **game screen**, and tempo is saved **once on hide** | live | §18.5 |
+| A **generated** backing track that follows the practice tempo | planned | §1.5 |

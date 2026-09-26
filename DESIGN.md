@@ -2127,3 +2127,141 @@ rendering fault. Same rule as §15.4's highway, for the same reason.
   tested synthetically, but no tab in the library produces one.
 - **Beat divisions are still drawn from the time signature**, not from the notation
   (§16), so a tuplet or an odd meter will show a 4/4 grid over it.
+
+## §18 — The strings get names, and the tempo is yours to choose (2026-09-26)
+
+**Tests: 618, all passing. Verified on `xcb` at 960x640 and full screen; the BPM
+control and the cord names were checked in a render, not only in assertions.**
+
+Two unrelated things that both came from the same note: *"this doesn't look like a
+tab, and there's no way to play it slower."* They are separate in the code and were
+done together because the tempo work needed the render to be right to be checkable.
+
+### 18.1 `E A D G B E` down the left, and the legend goes away
+
+Printed tab names the strings, so the tab view now does. The letters sit in the
+left margin that §16 already reserved (56–84px, scaled) and that nothing was
+using, so **the layout did not move at all** — which is why this is not a redesign.
+
+The order is the one trap. **Lane 0 is the high E string and is the top line**
+(§16.1), so the tuple the widget draws top-to-bottom is `E B G D A E`, while the
+notation reads `E A D G B E` from the high string down. Both are asserted in
+`tests/test_tabview.py`, because the tuple is what the renderer indexes and the
+reversed one is what the notation means; a test that only checked one of them would
+pass with a plausible-looking transposition.
+
+**The key legend along the bottom is deleted, and its QSS rule with it.** It used to
+be the only place the mapping "key 1 = lane 0" was stated anywhere on screen, and it
+stated it in a form that conflicts with the tab: on the highway, lane 0 was at the
+bottom. With the names on the cords the question has one answer, printed where a
+guitarist looks, instead of two answers in two places. Deleting it is the fix; the
+QSS selector is removed so it cannot be resurrected by a stray style.
+
+Each painter method now sets its own font. A single font for the whole paint had
+the fret number and the string names quietly trading sizes — the number is sized to
+fit *inside a note* and the letters are sized to the *margin*, and those are
+different problems. §17.2's trap (marker derived from widget height, stylesheet from
+UI scale, the two unrelated) applies to the letters too.
+
+### 18.2 Practice tempo: one number, and it is BPM
+
+The whole feature is a multiplication at the clock. Everything downstream already
+works in **chart time**, so notes keep their times, the geometry is untouched, the
+visible slice is unchanged, and note *expiry* slows down on its own with no special
+case — the judge has no idea the rate changed.
+
+```python
+return (self._t0_ms + self._clock.elapsed()) / 1000.0 * self._rate - self._offset
+```
+
+**The offset is applied after the rate**, and that ordering is the point: the audio
+offset is a property of the *song* (how far ahead of or behind the backing track the
+tab sits), not of how fast you are practising it. Multiply the offset by the rate
+and every song would re-tune itself the moment you slowed it down — an invisible
+bug, with no symptom except that a fixed offset is silently no longer the offset.
+
+### 18.3 Why per-song absolute BPM, and not a percentage
+
+A percentage is a **rate**, and a rate is song-relative. That kills both global
+options:
+
+- one global **"80%"** cannot mean "play it slower" across a library, because 80% of
+  a 76 BPM tab and of a 50 BPM tab are different tempi;
+- one global **absolute BPM** is worse — set 60 and the 50 BPM tab gets *no slowdown
+  at all*, silently, and the control appears to do nothing.
+
+Per-song absolute BPM has neither failure, and it is **also the value a future
+audio transport needs directly** (§1.5, the next milestone): a transport wants "play
+this at 50", not "play this at 0.66 of whatever the tab says". That is what decided
+it, not taste.
+
+`Settings.song_bpm` mirrors `song_offsets_ms` exactly: a slug-keyed dict, unparseable
+values **dropped rather than invented**, clamped to 20–400, and no migration needed
+because `from_dict` only reads keys that are present.
+
+**A rate is never above 1.0.** A tab cannot usefully be practised faster than
+written, so `rate_for` returns `min(1.0, bpm / written)` and the spin box's range is
+clamped to the tab's own tempo — the control cannot express a value that would break
+the music. **Judgement windows stay in milliseconds**, so scores stay comparable
+across speeds rather than drifting toward PERFECT the slower you play.
+
+### 18.4 The re-anchor, which was wrong on the second change
+
+Changing the rate of a *running* clock teleports the song. `_reanchor` has to move
+the origin, and the first version derived it from the raw elapsed time:
+
+```python
+now_ms = elapsed * old_rate        # WRONG after the first change
+```
+
+That is only correct while `t0 == 0`. Once an origin has been set, `elapsed` is
+measured from the last `clock.restart()` while `_t0_ms` carries everything before it
+— so the two cannot be added. Measured: halving the rate of a clock reading 4s put
+the position at **6s**. The song jumped forward two seconds on the second tempo
+change and on no other.
+
+```python
+now_ms = (self._t0_ms + elapsed) * self._rate   # correct
+self._t0_ms = int(now_ms / new_rate)
+self._clock.restart()
+```
+
+The test that justifies it is *changing tempo does not teleport the song*, asserted
+across **two consecutive changes** — the version that shipped first passes a
+single-change test and fails that one, which is the only reason it was found.
+
+### 18.5 Two bugs the render caught and no assertion did
+
+- **`set_bpm()` moved the rate and the readout but not the spin box.** Loading a
+  remembered tempo set the game to 50 BPM while the control still read 76: the
+  control was lying about the tempo in use. `set_bpm` now sets the box with signals
+  blocked, so there is one path that changes the tempo and it updates all three of
+  rate, box, and readout.
+- **The spin box was parentless**, which makes it a *top-level window*. It was never
+  shown, so it did not appear in the game at all, and nothing raised — a `QSpinBox`
+  constructed without a parent is its own window, and the layout that thinks it
+  contains it is describing a rectangle in space. This is exactly §15.4's HUD-label
+  bug, and the test written for that now covers **every HUD widget including this
+  one**, plus a check that each is actually `isVisible()` rather than merely
+  parented. Parenting alone was the lesson; visibility is the stronger assertion.
+
+Tempo is written to disk **once on hide**, not on every step: a save is an fsync,
+and stepping 76 down to 60 one notch at a time would otherwise be sixteen of them.
+
+### Not done — §18
+
+- **The tempo still makes no sound.** It slows the chart and nothing else, because
+  there is no audio. Playing at 50 BPM is silent. This makes §1.5 the blocker it
+  already was, not a smaller one.
+- **The song's own tempo is not shown as a fraction of anything.** The readout says
+  `BPM 50 of 76 · 66%`; the percentage is still there, but as a *display* of an
+  absolute choice, not as the stored value.
+- **No way to type a tempo outside the spin box's range**, and no double-click to
+  reset to written tempo — the obvious affordance, not built.
+- **Tempo is not per-track.** The slug is the song, so choosing a different track in
+  the same tab reuses the tempo, which is usually right and is not always.
+- **The string names are not shown on the axis of the scroll position**, only inside
+  the three bars, so a note is identified by the tab above it rather than by the
+  letters at the moment it arrives.
+- **Nothing was tested with hand tracking running**, so §15.2's correction (lane
+  comes from hand *y*, not x) is still unexercised.
