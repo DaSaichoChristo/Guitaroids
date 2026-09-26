@@ -1,0 +1,24 @@
+# Packages that must be installed with --no-deps.
+#
+#   pip install -r requirements-optional.txt --no-deps
+#
+# scripts/setup.sh does this for you. Do NOT install these normally: their own
+# declared dependencies cannot be satisfied on a plain Linux box, and we do not
+# need them.
+#
+# tinysoundfont==0.3.7
+#   Sampled-instrument rendering. Its declared dependency is pyaudio, which has
+#   no Linux wheel in any release and cannot be built here — portaudio.h is
+#   absent, only the libportaudio2 runtime is installed. Installing it normally
+#   fails with "fatal error: portaudio.h: No such file or directory".
+#
+#   pyaudio is a *lazy* import inside tinysoundfont, used only by Synth.start()
+#   for real-time playback. We render offline via generate_simple(), which never
+#   touches it — so --no-deps costs us nothing and saves an unnecessary
+#   dependency. Locked in by tests/test_audio_deps.py, which asserts pyaudio is
+#   absent, that tinysoundfont imports without it, and that a soundfont renders.
+#
+#   Optional in practice: the numpy Karplus-Strong synth needs nothing at all and
+#   takes over when this is absent.
+
+tinysoundfont==0.3.7

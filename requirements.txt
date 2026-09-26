@@ -1,2 +1,59 @@
-attrs==26.1.0
+# Guitaroids — runtime dependencies.
+#
+# This is the complete inventory of packages the project needs. Three of them
+# cannot be installed by a plain `pip install -r requirements.txt`, for reasons
+# that are not configuration mistakes and cannot be fixed by editing this file.
+#
+#   ==> Use `scripts/setup.sh`. It is the only supported install path.
+#
+#
+# 1. OpenCV ordering
+#    mediapipe hard-requires the *GUI* build of OpenCV (opencv-contrib-python),
+#    whose bundled Qt plugins under cv2/qt/plugins hijack QT_PLUGIN_PATH and
+#    break PySide6 with `Could not load the Qt platform plugin "xcb"`
+#    (DESIGN.md §2.2). pip treats the two builds as unrelated distributions, so
+#    listing the headless one here does not stop the GUI one being installed too.
+#    Both write to the same cv2/ directory, so the GUI build must be REMOVED
+#    BEFORE the headless one is installed. The reverse order deletes the headless
+#    files while leaving its dist-info behind, and pip then reports "already
+#    satisfied" and restores nothing — leaving `import cv2` broken. This happened;
+#    it is now asserted by tests/test_m0_window.py.
+#
+# 2. tinysoundfont
+#    Its declared dependency is pyaudio, which has NO Linux wheel in any release
+#    and cannot be built here (portaudio.h is absent; only the libportaudio2
+#    runtime is installed). Installing it normally therefore fails outright.
+#    We never need pyaudio: it is a lazy import used solely for real-time
+#    playback, and we render offline. So tinysoundfont goes in with --no-deps.
+#    It lives in requirements-optional.txt, which setup.sh installs that way.
+#
+# 3. Soundfont and model
+#    Not Python packages. Fetched by scripts/fetch_model.sh and
+#    scripts/fetch_soundfont.sh, and gitignored.
+#
+# The numpy Karplus-Strong synth is the fallback when tinysoundfont is absent, so
+# the app still makes sound with only this file installed.
+
+PySide6==6.11.2
+shiboken6==6.11.2
+mediapipe==1.0.1
+numpy==2.2.6
+opencv-contrib-python-headless==5.0.0.93   # must match the version mediapipe pulls
+soundfile==0.14.0
+sounddevice==0.5.6
 PyGuitarPro==0.11
+attrs==26.1.0
+
+# Runtime: installed with --no-deps by scripts/setup.sh, listed in
+# requirements-optional.txt rather than above, because a plain install fails.
+#   pip install -r requirements-optional.txt --no-deps
+#   tinysoundfont==0.3.7
+#
+# Development-only (pytest) is in requirements-dev.txt.
+#
+# Considered and NOT used:
+#   mido             .mid export. Taken off the table (DESIGN.md §9) — the synth
+#                    reads the Chart directly, so there is no MIDI round trip.
+#   pyfluidsynth     rejected: libfluidsynth links 60 shared libraries (§7.5).
+#   pyaudio          never imported; only real-time playback would need it.
+#   av, pydub        rejected: need Python 3.11+ / an ffmpeg binary (§3.1).

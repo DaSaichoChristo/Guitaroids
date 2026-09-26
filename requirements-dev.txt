@@ -1,0 +1,7 @@
+# Development-only dependencies. Not needed to run the app.
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# setup.sh also installs requirements-optional.txt (--no-deps) on top of these.
+-r requirements.txt
+
+pytest==9.1.1

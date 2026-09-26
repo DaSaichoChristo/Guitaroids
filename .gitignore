@@ -1,0 +1,44 @@
+# Virtualenv
+.venv/
+venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Tabs and backing audio — not committed.
+#
+# .gp5 files are transcriptions of real, copyrighted songs, and a song library is
+# personal. songs/ stays in the repo with its README and a .gitkeep so the layout
+# is documented, but individual tabs are local-only.
+songs/*.gp5
+songs/*.gp3
+songs/*.gp4
+songs/*.gpx
+songs/*.bgz
+
+# Backing audio — not committed (see DESIGN.md §3.4).
+# Provenance is recorded in songs/ATTRIBUTION.md instead.
+songs/*.mp3
+songs/*.ogg
+songs/*.wav
+songs/*.flac
+songs/*.m4a
+
+# mediapipe model, vendored rather than committed (~7.8MB).
+# Fetch with: scripts/fetch_model.sh
+assets/*.task
+
+# Soundfont, fetched rather than committed (~23MB). MIT-licensed, so committing it
+# would be legal, but it is large and regenerable.
+# Fetch with: scripts/fetch_soundfont.sh
+assets/*.sf2
+assets/*.sf3
+
+# Build / editor cruft
+*.egg-info/
+dist/
+build/
+.idea/
+.vscode/
