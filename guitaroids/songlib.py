@@ -328,6 +328,30 @@ class Library:
         return tuple(e for e in self.entries if e.status is status)
 
 
+def find_tabs(root: str | Path) -> tuple[Path, ...]:
+    """Every tab under ``root``, recursively, in a stable order.
+
+    Exists so the background loader (:mod:`guitaroids.ui.library_loader`) can
+    discover files without reimplementing the glob. A loader that filtered
+    differently would rescan a different set than :func:`scan_library`, and the
+    bug would only show up on a library containing a nested directory or an
+    oddly cased extension.
+
+    A missing directory yields an empty tuple, matching :func:`scan_library`'s
+    empty-library behaviour, so first run is an empty state and not a crash.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        return ()
+    return tuple(
+        sorted(
+            path
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix.lower() in TAB_EXTENSIONS
+        )
+    )
+
+
 def scan_library(
     root: str | Path,
     *,
@@ -340,14 +364,7 @@ def scan_library(
     select screen can show an empty state instead of crashing on first run.
     """
     root = Path(root)
-    if not root.is_dir():
-        return Library(root=root, entries=())
-
-    entries = [
-        load_tab(path, collapse=collapse, rule=rule)
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.suffix.lower() in TAB_EXTENSIONS
-    ]
+    entries = [load_tab(path, collapse=collapse, rule=rule) for path in find_tabs(root)]
     return Library(root=root, entries=tuple(entries))
 
 
