@@ -13,7 +13,7 @@ and is not started: for now the six on-screen keys are the way in.
 Linux / macOS:
 
 ```bash
-scripts/setup.sh          # the ONLY supported install path
+scripts/setup.sh          # the supported path: also fetches a soundfont
 ```
 
 Windows (PowerShell):
@@ -59,9 +59,10 @@ the current one, and the one coming) with a line sweeping left to right through 
 current bar, played with the number keys `1`–`6` and judged PERFECT/GOOD/MISS.
 **Results** is a placeholder; the score shows in the HUD during play.
 
-There is no audio yet. The game runs on a wall clock, so it tells you whether the
-lanes and keys line up but not whether the timing *feels* right — the audio clock is
-the next milestone.
+The game's clock is the audio device's clock, read from the stream, so the notes you
+see and the sound you hear come from one source (§23). The wall clock survives as a
+fallback for a machine with no working output device, and you are told once when it
+takes over.
 
 To look at a screen without launching the app:
 
@@ -73,7 +74,7 @@ To look at a screen without launching the app:
 Screenshots render at scale 1.0 into a 960x640 frame by default — the 1080p design
 size — so they stay comparable run to run whatever display you are on. Pass
 `--scale` to inspect the enlarged layout.
-```
+
 
 ## Adding songs
 
@@ -145,7 +146,7 @@ guitaroids/
   songlib.py library scan, pairing, status
   settings.py user preferences                  pure, no Qt
 scripts/     setup, asset fetchers, import report, screenshots
-tests/       813 tests
+tests/       832 tests
 songs/       your tabs and audio (gitignored)
 ```
 

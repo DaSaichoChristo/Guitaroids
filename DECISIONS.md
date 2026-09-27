@@ -39,7 +39,7 @@ is where the "why" belongs.
 | PySide6 6.11, Qt **Widgets + QPainter**, not QML | live | §1.2 |
 | A bare `pip install -r requirements.txt` **works** — verified in a clean venv, and the scripts say what they add instead of forbidding it | live | §27.2 |
 | The synth fallback is the numpy **pluck**, not Karplus-Strong, in every file that names it | live | §27.4 |
-| Python **3.12.14** in `.venv` | live | §7.1 |
+| Python **3.12** in `.venv` — the minor version, because that is the constraint | live | §7.1 |
 | ~~mediapipe 1.0.1, Tasks API only~~ — **dropped**; the input is a microphone now | live | §25 |
 | ~~opencv-contrib-python-headless, installed in a strict order after the GUI build~~ — **dropped with it**, and the install trap with that | live | §25.2 |
 | **No webcam, no OpenCV, no cv2** — nothing imports them, and the lock is 18 packages instead of 32 | live | §25.1 |

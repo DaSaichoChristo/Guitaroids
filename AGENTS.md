@@ -32,7 +32,7 @@ says what ran.
   numpy 2.2.6 · sounddevice owns audio playback, Qt plays no audio · tinysoundfont
   renders a tab into sound. **No mediapipe and no OpenCV** — the input is a
   microphone, not a webcam (§24, §25).
-- **Python is 3.12.12 in `.venv`.** 3.12 specifically: `tinysoundfont` has wheels
+- **Python is 3.12 in `.venv`.** 3.12 specifically: `tinysoundfont` has wheels
   for cp310/cp312 only, so 3.13 and 3.14 compile from source and need a C++
   toolchain plus Python dev headers. Check `.venv/bin/python --version`, not the
   system `python3`. `DESIGN.md` §5.1 records a wrong analysis caused by exactly
@@ -83,7 +83,8 @@ says what ran.
 
 ## Current state
 
-`tests/` is 813 tests, all passing. **Five of the six screens are real:** the main
+`tests/` is 832 tests, all passing (not counting `tests/test_docs.py` itself --
+that file checks this number, and a test that counts itself never matches). **Five of the six screens are real:** the main
 menu, song select (tab + track + audio offset + **per-song practice tempo**), import
 GP (choose a file, then Add to library), preferences, and **game** — three bars
 of tab notation with a left-to-right beat line, `E A D G B E` down the left, a six-key keyboard test mode and PERFECT/GOOD/MISS
@@ -114,7 +115,7 @@ Look at a screen without launching the app:
 Screenshots pin scale 1.0 and a 960x640 frame, so they stay comparable run to run
 whatever display you are on. `--scale 1.5 --size 1440x960` renders the enlarged
 layout.
-```
+
 ## Six things that will bite you
 
 All six cost real time, and all six are now enforced by tests.
@@ -216,10 +217,13 @@ float32; read it as anything else and you get NaN or a fake clip.
 
 ## Rules
 
-- Never let the GUI thread block on `cap.read()`, audio `write()`, or inference.
+- Never let the GUI thread block on audio `write()` or on inference. (The webcam's
+  `cap.read()` went with the camera in §25; the rule is unchanged, the device is
+  not there.)
 - `QApplication` is a process-wide singleton whose platform is fixed at
   construction — test platforms in subprocesses, not sequentially.
 - Pre-render the click track into a numpy buffer before opening the stream — the
   PortAudio callback runs at real-time priority and must not allocate.
 - Keep the keyboard input path working as a fallback. A demo on an unfamiliar laptop
-  has no working camera, and must not crash because of it.
+  may have no audio input at all, which is the same failure as having had no camera
+  (§24.4), and must not crash because of it.
