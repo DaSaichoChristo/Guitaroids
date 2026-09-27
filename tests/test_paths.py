@@ -105,6 +105,72 @@ def test_finds_the_fetched_soundfont_in_assets() -> None:
     assert paths.find_soundfont() in existing
 
 
+# --- one policy, and the one that runs ---------------------------------------
+
+
+def test_the_renderer_uses_this_policy_and_not_a_private_copy() -> None:
+    """There were two soundfont searches, and only one of them was tested.
+
+    ``render.py`` had its own ``find_soundfont`` that overrode this one, so the
+    renderer never saw a system soundfont -- a user with one installed got the
+    pluck synth without being told, while every test in this file passed.
+
+    Asserting the *identity* is the point: a second copy cannot drift back in
+    without this failing, which a behavioural test could not catch.
+    """
+    from guitaroids.audio import render
+
+    assert render.find_soundfont is paths.find_soundfont
+
+
+def test_the_renderer_module_defines_no_soundfont_search_of_its_own() -> None:
+    """An absence test against the source, the way §25.4 insists.
+
+    The identity check above catches a *different function* being used. This
+    catches the same function being written a second time -- which is how the
+    duplicate arrived, and which would be invisible to any behavioural test.
+    """
+    source = (paths.REPO_ROOT / "guitaroids" / "audio" / "render.py").read_text()
+    assert "def find_soundfont" not in source
+    assert "SOUNDFONT_ENV" not in source, "the override is paths' business too"
+
+
+def test_a_tilde_in_the_override_is_expanded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``$GUITAROIDS_SOUNDFONT=~/guitar.sf2`` is what a person actually types.
+
+    The private copy in ``render.py`` compared the unexpanded string with
+    ``is_file()``, so a tilde silently found nothing.
+    """
+    monkeypatch.setenv(paths.SOUNDFONT_ENV, "~/guitar.sf2")
+    assert paths.soundfont_candidates()[0] == Path.home() / "guitar.sf2"
+
+
+def test_an_override_pointing_nowhere_falls_through_instead_of_giving_up(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A bad override should cost you the override, not the soundfont.
+
+    The private copy returned ``None`` the moment the override failed to resolve,
+    so a typo in the environment variable silently downgraded the whole app to the
+    pluck synth. Here the search carries on to the next candidate.
+    """
+    monkeypatch.setenv(paths.SOUNDFONT_ENV, str(tmp_path / "typo.sf2"))
+    found = paths.find_soundfont()
+    assert found != tmp_path / "typo.sf2"
+    assert found is None or found.is_file()
+
+
+def test_the_fluid_r3_filename_is_still_searched() -> None:
+    """Moving render's name into this list must not lose it.
+
+    ``Guitarramelodica.sf2`` is what the FluidR3 download is called, and the
+    private copy was the only thing that knew that.
+    """
+    names = [c.name for c in paths.soundfont_candidates() if c.parent == paths.ASSETS_DIR]
+    assert "Guitarramelodica.sf2" in names
+    assert "soundfont.sf3" in names
+
+
 # --- staying pure ------------------------------------------------------------
 
 

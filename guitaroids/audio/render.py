@@ -36,13 +36,13 @@ must not require it -- the import is inside the backend that uses it.
 from __future__ import annotations
 
 import math
-import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
 
 from ..model.chart import Chart, group_by_onset
+from ..paths import find_soundfont
 
 #: Stereo float32 in [-1.0, 1.0], shaped (samples, 2).
 Samples = np.ndarray
@@ -314,25 +314,11 @@ def _render_pluck(chart: Chart, sample_rate: int, *, should_stop=None) -> Render
 # --- finding a soundfont, and the entry point ------------------------------------
 
 
-def find_soundfont() -> Path | None:
-    """The first soundfont we can find, or ``None``.
-
-    ``$GUITAROIDS_SOUNDFONT`` first, then the vendor names ``fetch_soundfont.sh``
-    leaves in ``assets/``. A soundfont file is a better answer than a format we
-    could parse ourselves, which is why the hand-rolled SF2 reader in
-    ``play_tab_prototype.py`` is not on this path.
-    """
-    from ..paths import ASSETS_DIR
-
-    override = os.environ.get("GUITAROIDS_SOUNDFONT")
-    if override:
-        candidate = Path(override)
-        return candidate if candidate.is_file() else None
-    for name in ("soundfont.sf3", "soundfont.sf2", "Guitarramelodica.sf2"):
-        candidate = ASSETS_DIR / name
-        if candidate.is_file():
-            return candidate
-    return None
+#: Soundfont discovery is :func:`guitaroids.paths.find_soundfont`, and it is the
+#: only implementation. There used to be a second, private copy here that searched
+#: no system directories at all -- so a user with a system-installed soundfont got
+#: the pluck synth, silently, while ``tests/test_paths.py`` asserted that discovery
+#: worked. One policy, tested, is the point; see DESIGN.md §28.1.
 
 
 def render_chart(

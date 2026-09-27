@@ -25,6 +25,11 @@ _ROOT_MARKERS = ("requirements.txt", "scripts/setup.sh")
 #: Environment variable that overrides soundfont discovery entirely.
 SOUNDFONT_ENV = "GUITAROIDS_SOUNDFONT"
 
+#: Soundfonts :func:`fetch_soundfont` may have left in ``assets/``, most specific
+#: first. ``Guitarramelodica`` is the name the FluidR3 download uses, so it is
+#: searched as well as the generic one we rename it to.
+_ASSET_SOUNDFONTS = ("soundfont.sf3", "soundfont.sf2", "Guitarramelodica.sf2")
+
 
 def find_repo_root(start: Path | None = None) -> Path:
     """Walk up from ``start`` looking for a repository marker.
@@ -67,7 +72,7 @@ def soundfont_candidates() -> tuple[Path, ...]:
     if override:
         candidates.append(Path(override).expanduser())
 
-    candidates += [ASSETS_DIR / "soundfont.sf2", ASSETS_DIR / "soundfont.sf3"]
+    candidates += [ASSETS_DIR / name for name in _ASSET_SOUNDFONTS]
 
     # The only soundfont most Linux desktops ship is TimGM6mb, which is GPL-2, so
     # the fetch script installs a permissively licensed one instead. These paths
