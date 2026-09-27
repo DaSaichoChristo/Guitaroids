@@ -499,3 +499,70 @@ def test_the_migration_survives_a_round_trip(tmp_path: Path) -> None:
     once.save(path)
     assert Settings.load(path).collapse_chords is False
     assert json.loads(path.read_text(encoding="utf-8"))["version"] == SETTINGS_VERSION
+
+
+# --- hiding a song from the list (§46) -----------------------------------------
+
+
+def test_hiding_is_a_membership_question_about_a_slug() -> None:
+    settings = Settings()
+    assert not settings.is_hidden("alpha")
+    assert settings.hide_song("alpha") is True
+    assert settings.is_hidden("alpha")
+
+
+def test_hiding_twice_changes_nothing_and_says_so() -> None:
+    """Idempotent, and it *says* so -- the caller uses that to skip a redundant save."""
+    settings = Settings()
+    assert settings.hide_song("alpha") is True
+    assert settings.hide_song("alpha") is False
+    assert settings.hidden_songs == ["alpha"], "a second hide duplicated the entry"
+
+
+def test_restoring_is_symmetric() -> None:
+    settings = Settings()
+    settings.hide_song("alpha")
+    assert settings.show_song("alpha") is True
+    assert settings.show_song("alpha") is False
+    assert settings.hidden_songs == []
+
+
+def test_an_empty_slug_is_refused_by_both_directions() -> None:
+    """A nameless entry in a per-song store is a bug waiting to be read."""
+    settings = Settings()
+    assert settings.hide_song("") is False
+    assert settings.show_song("") is False
+    assert settings.is_hidden("") is False
+    assert settings.hidden_songs == []
+
+
+def test_hidden_songs_load_from_a_hand_edited_file_without_inventing_entries() -> None:
+    """A settings file is hand-editable, so the loader has to be tolerant.
+
+    Non-strings, the empty string and duplicates are all dropped or folded, because
+    the one thing that must not happen is an entry that is not a string becoming a
+    slug nothing will ever match.
+    """
+    settings = Settings.from_dict(
+        {"hidden_songs": ["alpha", 7, "", "beta", "alpha", None, "gamma"]}
+    )
+    assert settings.hidden_songs == ["alpha", "beta", "gamma"]
+
+
+def test_an_older_settings_file_gains_an_empty_hidden_list() -> None:
+    """v6 is additive, and "not hidden" is the correct default for an existing install.
+
+    A version that *dropped* something would need a migration; this one only adds a
+    key, so every file written before today loads with nothing hidden and every song
+    still visible.
+    """
+    settings = Settings.from_dict({"version": 4, "song_bpm": {"alpha": 60.0}})
+    assert settings.hidden_songs == []
+    assert settings.bpm_for("alpha", 76.0) == 60.0, "the old keys still load"
+
+
+def test_hidden_songs_round_trip_through_to_dict() -> None:
+    settings = Settings()
+    settings.hide_song("alpha")
+    settings.hide_song("beta")
+    assert Settings.from_dict(settings.to_dict()).hidden_songs == ["alpha", "beta"]

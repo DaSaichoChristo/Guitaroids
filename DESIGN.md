@@ -35,7 +35,7 @@ supersedes §2" resolves without ambiguity.
 
 ## The sections
 
-44 sections, in the order they were written. Dates are all 2026-09-26 or
+45 sections, in the order they were written. Dates are all 2026-09-26 or
 -27 and are in the headings, so they are left out here.
 
 | Section | What it records |
@@ -84,6 +84,7 @@ supersedes §2" resolves without ambiguity.
 | §43 | A logo for the main menu, and a background that was never removed |
 | §44 | "Redo the song and I miss everything", which was a guard asking the wrong question |
 | §45 | Every imported tab said "Medium", and the number beside it did not |
+| §46 | Removing a song from song select, which hides rather than deletes |
 
 **§33 is missing**, and §36.3 explains why rather than back-filling it: the number was
 reserved for work that was planned, approved and then overtaken by other work, so no
@@ -5242,3 +5243,101 @@ chart, which is what makes that table possible at all.
 - **The band does not respond to the practice tempo.** A tab practised at 60% is
   genuinely easier and is still labelled from its written density. Deliberate — the
   band describes the song, not the attempt — and unexamined.
+
+---
+
+## §46 — Removing a song from song select, which hides rather than deletes (2026-09-27)
+
+Asked for: a way to remove songs from the song select menu.
+
+### §46.1 "Remove" means hide, and that is the whole design decision
+
+A tab in `songs/` is the player's own work. **That directory is gitignored precisely
+because it is not the repository's to manage**, so a button that unlinks a `.gp5` is a
+button that can lose someone's tab with no undo and no copy. Everything else follows
+from that: the feature stores a preference, the file is never touched, and there is a
+route back.
+
+`Settings.hidden_songs` is a **list of slugs**, version 6, additive — an older file
+loads with nothing hidden, which is the correct default because a song is visible
+until the player says otherwise. A list rather than a set because a hand-edited
+settings file reads better as an ordered list, and because the order is the order they
+were hidden, which is what the toggle shows. Membership is over a dozen slugs and is
+not a hot path.
+
+Keyed by slug like its three neighbours, with the same consequence: **hiding is per
+file, not per track.** Consistent with the offsets, tempi and bests; a per-track key
+would be more precise at the cost of disagreeing with them.
+
+### §46.2 Where the button went, and why it moved once
+
+First placed at the bottom of the detail card, which is **below the fold on every
+screen the project runs at** — that card is already taller than a 640px window and
+lives in a scroll area. A feature that exists and cannot be found is not a feature, so
+it moved **under the song list**, which is both visible and the right place: taking
+something *out of a list* is a list action, and the list column has the room.
+
+One button with two jobs — "Remove from list" on a visible song, "Restore to list" on
+a hidden one — because the card is too tall for two and because the pair is one
+reversible decision rather than two features. It is danger-styled in one direction and
+plain in the other, re-polished on the change because an id selector only applies
+when the object name changes.
+
+The confirmation defaults to **No** and says the file stays, verbatim: *"The tab file
+stays in your songs folder, and you can bring it back with the Hidden button."* A
+button reading "Remove" next to a song in the player's own folder is otherwise read as
+"delete", and the wording is the only thing standing between this button and a player
+believing they have lost a tab.
+
+### §46.3 The way back, and the states that need saying
+
+A **Hidden (N)** toggle beside Rescan reveals hidden entries *in place*, marked
+`[hidden]`, rather than in a dialog — so what is hidden is visible and restorable from
+the same list the hiding happened in. A setting that can put a tab out of sight with no
+route to return it is a trap rather than a preference.
+
+- A revealed hidden song has **Play disabled**, not enabled to do nothing (§42).
+- Its **offset, tempo and track picker stay live**: a hidden song is out of the list,
+  not damaged, and someone checking an alignment should not have to restore it first.
+- The **status line counts the hidden** ("4 of 5 playable · 1 hidden"), so a list that
+  looks incomplete explains itself.
+- A hidden song is filtered from the **Problems** panel too. That is not reachable by
+  hiding a broken tab — only playable songs have a row to select — it is reachable the
+  way it would really happen: a song is hidden while it plays, someone later edits the
+  tab, and a rescan reclassifies it as a problem, which would otherwise put it back in
+  front of the player from the one place they did not choose to look.
+
+### §46.4 A duplicate method, and a test that was quietly wrong
+
+Adding `_selected_entry` introduced a **second definition of a method that already
+existed** 240 lines away. Python takes the last one, so the new code worked and the
+duplicate sat there. Found by counting definitions rather than by any test failing —
+nothing was broken, which is exactly why it survived.
+
+And the problems-panel test as first written asserted that hiding a *playable* song
+changed the *problems* list, which cannot happen: `problems` is exactly the entries
+that are not playable. The test was wrong, not the code, and rewriting it is what
+surfaced that the filter is reachable only via reclassification.
+
+**Tests: 1091 in total — 1075 excluding `tests/test_docs.py`.** Two clean runs.
+
+### Not done — §46
+
+- **Hiding is per file, so hiding a tab hides all of its tracks.** Consistent with the
+  other per-song settings and possibly wrong; a player who wants one guitar part and
+  not the acoustic cannot say so.
+- **There is no "hide everything unplayable" and no bulk action.** A library with
+  twenty `.gpx` files is twenty clicks, and the `.gpx` refusal (§6.3) puts every one
+  of them in the Problems panel rather than in the list where they could be dismissed.
+- **The Hidden toggle reveals but does not restore in bulk**, and a hidden song that
+  is *also* a problem cannot be restored at all, because restoring is driven by the
+  selection and there is no row for it. That is a real dead end, reachable in the same
+  reclassification scenario §46.3 filters out of the Problems panel — so the filter
+  hides it and the toggle cannot bring it back.
+- **Nothing removes a slug from `hidden_songs` when the file leaves the folder.** A
+  hidden song that is deleted on disk stays in the list forever, and the count in the
+  status line and the toggle is permanently one too high.
+- **`_ask_confirmation` is overridden rather than driven**, following Import GP's
+  established pattern. No test presses the real dialog's buttons, so the Yes/No
+  wiring itself is unverified — only that a confirmation is asked for and that its
+  text says the file is kept.

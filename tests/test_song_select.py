@@ -648,3 +648,217 @@ def test_the_tempo_control_is_inside_the_detail_card(screen: SongSelect) -> None
     assert widget is not None, "the tempo control is not inside the detail card"
     assert widget is not screen, "a parentless spin box is its own top-level window"
     assert screen._bpm.isVisibleTo(screen), "present in the tree but not on screen"
+
+
+# --- removing a song from the list (§46) --------------------------------------
+#
+# The feature is "remove from the song select menu" and it **hides**. The file in
+# `songs/` is the player's own work and that directory is gitignored precisely
+# because it is not the repository's to manage, so a button that unlinks someone's
+# tab is a button that can lose it. Every test below is about the pair — the row goes,
+# the file stays — and the first one is the safety property the rest depends on.
+
+
+@pytest.fixture()
+def no_confirmation(screen: SongSelect) -> SongSelect:
+    """Answer "yes" to the remove confirmation.
+
+    `_ask_confirmation` is a method rather than an inline `QMessageBox` call for
+    exactly this reason, and this is the pattern: a real modal in a test blocks on a
+    human, and a test that cannot press the button cannot cover the feature.
+    """
+    screen._ask_confirmation = lambda _message: True
+    return screen
+
+
+def _titles(screen: SongSelect) -> list[str]:
+    return [screen._songs.item(row).text() for row in range(screen._songs.count())]
+
+
+def _rows_matching(screen: SongSelect, needle: str) -> list[int]:
+    return [row for row, text in enumerate(_titles(screen)) if needle in text]
+
+
+def test_removing_a_song_takes_its_row_out_of_the_list(no_confirmation: SongSelect) -> None:
+    assert _rows_matching(no_confirmation, "Beta"), "precondition: Beta is listed"
+    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
+    no_confirmation._on_list_button()
+
+    assert not _rows_matching(no_confirmation, "Beta"), "the row is still there"
+    assert _rows_matching(no_confirmation, "Alpha"), "and it took the others too"
+
+
+def test_removing_a_song_does_not_touch_the_file(
+    no_confirmation: SongSelect, context, tmp_path
+) -> None:
+    """**The safety property.** A tab in `songs/` is the player's, not ours.
+
+    Written against a file that genuinely exists, because the failure this guards
+    against is a deletion, and a test with no file on disk cannot tell a delete from a
+    no-op.
+    """
+    from songbuild import write_tab
+
+    songs = tmp_path / "songs"
+    songs.mkdir(exist_ok=True)
+    tab = songs / "beta.gp5"
+    write_tab(tab, notes=6)
+    assert tab.is_file(), "precondition: the tab is on disk"
+
+    entry = context.entry_for("beta")
+    assert entry is not None
+    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
+    no_confirmation._on_list_button()
+
+    assert tab.is_file(), "the tab file was deleted; this feature hides, it does not unlink"
+    assert context.settings.is_hidden("beta"), "and it should have been hidden"
+
+
+def test_declining_the_confirmation_changes_nothing(screen: SongSelect) -> None:
+    """The dialog's default is No, and saying no must be a complete no-op."""
+    screen._ask_confirmation = lambda _message: False
+    screen._songs.setCurrentRow(_rows_matching(screen, "Beta")[0])
+    screen._on_list_button()
+
+    assert _rows_matching(screen, "Beta"), "the row went despite declining"
+    assert not screen.context.settings.is_hidden("beta")
+
+
+def test_the_confirmation_says_the_file_is_kept(screen: SongSelect) -> None:
+    """A button reading "Remove" beside a song in the player's own folder.
+
+    Otherwise read as "delete". The wording is the only thing standing between this
+    button and a player believing they have lost a tab, so it is asserted rather than
+    assumed.
+    """
+    seen: list[str] = []
+    screen._ask_confirmation = lambda message: seen.append(message) or True
+    screen._songs.setCurrentRow(_rows_matching(screen, "Beta")[0])
+    screen._on_list_button()
+
+    assert seen, "no confirmation was asked for"
+    assert "stays" in seen[0], f"the confirmation does not say the file is kept: {seen[0]!r}"
+
+
+def test_a_hidden_song_comes_back_through_the_hidden_toggle(
+    no_confirmation: SongSelect,
+) -> None:
+    """The way out, which is the whole reason hiding is safe."""
+    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
+    no_confirmation._on_list_button()
+    assert not _rows_matching(no_confirmation, "Beta")
+
+    no_confirmation._on_hidden_toggled()
+    rows = _rows_matching(no_confirmation, "Beta")
+    assert rows, "the hidden song did not come back"
+    assert "[hidden]" in no_confirmation._songs.item(rows[0]).text(), (
+        "a revealed hidden row that looks like every other row is how a song goes "
+        "missing twice"
+    )
+
+
+def test_a_revealed_hidden_song_cannot_be_played(no_confirmation: SongSelect) -> None:
+    """Play is disabled rather than left enabled to do nothing (§42)."""
+    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
+    no_confirmation._on_list_button()
+    no_confirmation._on_hidden_toggled()
+
+    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
+    assert not no_confirmation._play.isEnabled(), (
+        "a hidden song can be played, so hiding it does not actually take it out of "
+        "the way"
+    )
+
+
+def test_restoring_a_song_puts_it_back_in_the_normal_list(no_confirmation: SongSelect) -> None:
+    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
+    no_confirmation._on_list_button()
+    no_confirmation._on_hidden_toggled()
+    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
+    no_confirmation._on_list_button()  # now a restore
+
+    assert not no_confirmation.context.settings.is_hidden("beta")
+    assert _rows_matching(no_confirmation, "Beta"), "restored but not listed again"
+
+
+def test_the_button_says_which_way_it_will_go(no_confirmation: SongSelect) -> None:
+    """One button, two jobs, so it has to say which one it is currently offering."""
+    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
+    assert no_confirmation._list_button.text() == "Remove from list"
+
+    no_confirmation._on_list_button()
+    no_confirmation._on_hidden_toggled()
+    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
+    assert no_confirmation._list_button.text() == "Restore to list"
+
+
+def test_a_hidden_song_is_hidden_from_the_problems_panel_too(
+    no_confirmation: SongSelect, context
+) -> None:
+    """Or the Problems panel becomes where a player goes to find what they put away.
+
+    Only *playable* songs can be hidden, so this is not reachable by hiding a broken
+    tab — there is no row to select. It is reachable the way it would really happen: a
+    song is hidden while it plays, and is later reclassified as a problem (someone
+    edits the tab, or it stops parsing), so a rescan moves it out of the list and into
+    the panel. Without the filter it reappears there, which undoes the hiding from the
+    one place the player did not choose to look.
+    """
+    assert no_confirmation._problems.count() >= 1, "precondition: a broken tab listed"
+
+    no_confirmation._songs.setCurrentRow(0)
+    no_confirmation._on_list_button()
+    assert not _rows_matching(no_confirmation, "Alpha"), "precondition: Alpha hidden"
+
+    # Alpha stops being playable, which is what a rescan after an edit would find.
+    from songbuild import make_entry, make_song
+
+    broken_alpha = make_entry(
+        make_song(title="Alpha", notes=2),
+        Path("songs/alpha.gp5"),
+        status=Status.PARSE_ERROR,
+    )
+    others = tuple(e for e in context.library.entries if e.slug != "alpha")
+    context.library = library_of(*others, broken_alpha)
+    no_confirmation._populate()
+
+    listed = [no_confirmation._problems.item(i).text() for i in range(no_confirmation._problems.count())]
+    assert not any("alpha" in text for text in listed), (
+        f"the hidden song reappeared in the problems panel: {listed}"
+    )
+
+
+def test_the_status_line_explains_where_the_missing_songs_went(
+    no_confirmation: SongSelect,
+) -> None:
+    """An empty-looking list with no explanation is the confusing part."""
+    no_confirmation._songs.setCurrentRow(0)
+    no_confirmation._on_list_button()
+    assert "hidden" in no_confirmation._status.text().lower(), no_confirmation._status.text()
+
+
+def test_hidden_survives_a_restart_through_the_real_path(
+    no_confirmation: SongSelect, context, tmp_path
+) -> None:
+    """Settings file -> a brand new context -> the screen, which is what a relaunch is.
+
+    Not `is_hidden` on the same object, which would pass even if the save silently
+    did nothing — and a song hidden from the screen but not from the file comes back
+    on the next launch with no explanation.
+    """
+    from guitaroids.context import AppContext
+
+    no_confirmation._songs.setCurrentRow(0)
+    no_confirmation._on_list_button()
+    assert context.settings.hidden_songs, "precondition: something was hidden"
+    slug = context.settings.hidden_songs[0]
+
+    reloaded = AppContext(
+        library=context.library,
+        settings=Settings.load(context.settings_path),
+        songs_dir=context.songs_dir,
+        settings_path=context.settings_path,
+        audio_enabled=False,
+    )
+    assert reloaded.settings.is_hidden(slug), "the hidden song came back on reload"
+    assert reloaded.settings.hidden_songs == [slug], "and with nothing else invented"
