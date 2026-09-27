@@ -35,7 +35,7 @@ supersedes §2" resolves without ambiguity.
 
 ## The sections
 
-45 sections, in the order they were written. Dates are all 2026-09-26 or
+46 sections, in the order they were written. Dates are all 2026-09-26 or
 -27 and are in the headings, so they are left out here.
 
 | Section | What it records |
@@ -85,6 +85,7 @@ supersedes §2" resolves without ambiguity.
 | §44 | "Redo the song and I miss everything", which was a guard asking the wrong question |
 | §45 | Every imported tab said "Medium", and the number beside it did not |
 | §46 | Removing a song from song select, which hides rather than deletes |
+| §47 | §46's hide was the wrong answer, and the near miss it caused |
 
 **§33 is missing**, and §36.3 explains why rather than back-filling it: the number was
 reserved for work that was planned, approved and then overtaken by other work, so no
@@ -5341,3 +5342,125 @@ surfaced that the filter is reachable only via reclassification.
   established pattern. No test presses the real dialog's buttons, so the Yes/No
   wiring itself is unverified — only that a confirmation is asked for and that its
   text says the file is kept.
+
+---
+
+## §47 — §46's hide was the wrong answer, and the near miss it caused (2026-09-27)
+
+§46 built "remove a song from song select" as a **hide**: a `hidden_songs` setting, a
+"Hidden (N)" toggle, and a Restore button, with the tab file untouched. That was
+overruled — *"no, you need to delete the file fully, so reimporting it isn't an
+issue"* — and the reasoning behind the overrule is the part worth keeping.
+
+**A hide does not solve the problem it was built for.** The reason to remove a song is
+to get it out of the way, and re-importing the tab puts it straight back with its slug
+intact — so the hide reappeared on the next Import GP, and the one thing the setting
+promised ("your tab is safe, come back when you like") is exactly what makes the
+feature useless. §46 optimised for the case where the player was wrong about wanting to
+delete, and paid for it in the case where they were right.
+
+So this section **removes the hide rather than adding a delete beside it.** Two
+overlapping ways to remove a song is two buttons with near-identical names and a
+`Settings` key for a feature that no longer exists. `hidden_songs` is gone and
+`SETTINGS_VERSION` is back to **5**; the key shipped in exactly one commit, so no
+settings file in the wild carries it and no migration is needed.
+
+### §47.1 The button says Delete, and the warning says "cannot be undone"
+
+Labelled **"Delete song"**, not "Remove from list", and there is no second control.
+The label is the last thing between this and a misunderstanding: "remove" is read as
+"take it off the list", which is precisely what it no longer does.
+
+The confirmation **names the file** rather than only the song's title — the file is
+what is destroyed, and two tabs can share a title — and says **"This cannot be
+undone"**, which is a different sentence from §46's "you can bring it back with the
+Hidden button" and is now true. Default **No**.
+
+**The audio file is left alone, and said to be left alone.** It is not what puts a song
+on this list, it can be large, and deleting it is a second loss the player did not ask
+for. So the message names it when there is one: *"Its audio file, beta.mp3, is left in
+place."* Saying so is what stops an orphan discovered later from looking like a
+half-applied delete.
+
+### §47.2 The near miss, and the guard it produced
+
+The first version of the delete tests pointed a real `unlink` at a path **outside
+`tmp_path`**. The shared `context` fixture builds entries with the *relative* path
+`songs/beta.gp5`, so selecting one and deleting it resolved against **the repository's
+own `songs/` directory**. Nothing was lost only because no tab in this repository is
+named `beta.gp5` — had one been, running the test suite would have deleted a tab.
+
+This is the strongest argument in this section, and it came from writing a test rather
+than from reading code:
+
+```python
+songs_dir = self.context.songs_dir.resolve()
+target = entry.tab_path.resolve()
+if not target.is_relative_to(songs_dir):
+    self._set_status(f"refused to delete {entry.tab_path.name}: "
+                     "it is outside your songs folder")
+    return
+```
+
+`tab_path` comes from a directory scan, so in production it is always inside — but this
+unlinks a file with no undo, and "the path we were handed" is not a boundary worth
+trusting when the cost of being wrong is somebody's tab. `is_relative_to` is used
+rather than a string prefix, so `/a/bc` is not inside `/a/b`, and `.resolve()` runs
+first so `..` is collapsed rather than compared lexically.
+
+The delete tests now **rescan** before selecting, so the entries under test are the ones
+a player's app actually has: real paths, built from the real folder. That is both more
+honest and the only version of the test that cannot reach out of its sandbox.
+
+### §47.3 The same mistake twice, in one session
+
+§46.4 records adding a **second `_selected_entry`** where one already existed: Python
+takes the last definition, so the new code worked, nothing failed, and it was found by
+counting definitions. This section adds a method `_delete` alongside the button
+`self._delete` — and an instance attribute shadows a method, so `self._delete(entry)`
+called the button: `TypeError: 'QPushButton' object is not callable`. The method is
+now `_delete_song`.
+
+**Two name collisions in one feature, in opposite directions, and neither was caught by
+a test failing.** Both are the same mistake: a new name placed without checking what
+already answered to it. The check is cheap and it is not a test — `grep -c "def _x"`
+before adding, and reading the attribute names the class already has.
+
+### §47.4 What the list does afterwards
+
+The library is **rebuilt by rescanning** rather than by removing the entry from the
+in-memory list. A delete is exactly the moment for the list to stop trusting what it was
+handed: the status counts and the problems panel are then true of the folder rather
+than true of a list somebody edited. The rescan is asynchronous because parsing every
+tab is seconds of work and §1.4 forbids that on the GUI thread, so **the row is still
+there for a moment after the confirmation closes** — the file is already gone, and the
+row follows when the scan lands.
+
+A delete that **fails** is reported on the status line and the row stays. Otherwise the
+button does nothing when pressed and the player has no idea why; the test makes a
+directory where the file should be, because `unlink` on a directory is the same
+`OSError` shape as a read-only folder or a permissions problem.
+
+**Tests: 1083 in total — 1067 excluding `tests/test_docs.py`.** Two clean runs.
+
+### Not done — §47
+
+- **The delete is not undoable in any sense** — no trash, no undo stack, no copy. That
+  was the explicit requirement, and it is the right call for a feature whose purpose is
+  to stop a file coming back. It does mean a mis-click on the right song in a list of
+  similar-looking titles is permanent, and the only defence is the confirmation.
+- **A song can be deleted from the Problems panel only by first making it playable.**
+  Deleting is driven by the selection in the main list, so a `.gpx`, a corrupt tab, or
+  a bass-only tab cannot be dismissed at all — they accumulate in Problems forever.
+  This is the same dead end §46.3 created and then hid.
+- **No bulk or filtered delete.** A library with twenty `.gpx` files is twenty
+  confirmations, and there is no "delete all unplayable" for the format the project
+  cannot read (§6.3).
+- **The rescan after a delete parses every remaining tab**, so deleting from a large
+  library is slow by construction. It is asynchronous and therefore not a freeze, but
+  the wait is proportional to the library.
+- **The audio orphan is the player's to clean up.** Said in the confirmation, never
+  offered as a checkbox. A "also delete the audio" option was not tried.
+- **`entry.audio_path` is read for the message but nothing else happens to it**, so an
+  audio file that a *different* slug shares would be left correctly and an audio file
+  that only this tab used becomes litter. No reference counting, deliberately.

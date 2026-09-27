@@ -107,10 +107,6 @@ class SongSelect(ScreenBase):
         self._status.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
         header.addWidget(self._status)
 
-        #: Whether the Hidden toggle is currently revealing hidden entries. A view
-        #: state rather than a setting: it is about what is on screen now, and
-        #: reloading the screen must not change which songs are hidden.
-        self._show_hidden = False
         column.addLayout(header)
 
         body = QtWidgets.QHBoxLayout()
@@ -163,13 +159,19 @@ class SongSelect(ScreenBase):
         # makes a feature that exists and cannot be found. The list column has the
         # room, and the button sits directly under the thing it acts on.
         #
-        # One button, two jobs: "Remove from list" on a visible song, "Restore to
-        # list" on a hidden one. See `_refresh_list_button`.
-        self._list_button = constrained_button(
-            "Remove from list", object_name="danger", width=200
+        # Labelled **Delete**, not "Remove", and it is the only such control on the
+        # screen. §46 first shipped this as a *hide*, behind a "Hidden (N)" toggle,
+        # on the reasoning that a tab in `songs/` is the player's and unlinking it
+        # could lose work. That was overruled: a hide does not solve the problem it
+        # was built for, because re-importing the tab brings it straight back and the
+        # song is on the list again. So this unlinks, the label says Delete, and there
+        # is exactly one way to remove a song rather than two overlapping ones.
+        self._delete = constrained_button("Delete song", object_name="danger", width=200)
+        self._delete.setToolTip(
+            "Deletes the tab file from your songs folder. This cannot be undone."
         )
-        self._list_button.clicked.connect(self._on_list_button)
-        layout.addWidget(self._list_button, alignment=_CENTRED)
+        self._delete.clicked.connect(self._on_delete_clicked)
+        layout.addWidget(self._delete, alignment=_CENTRED)
         return panel
 
     def _build_detail_column(self) -> QtWidgets.QWidget:
@@ -310,18 +312,6 @@ class SongSelect(ScreenBase):
         self._rescan.clicked.connect(self._rescan_library)
         row.addWidget(self._rescan, alignment=_CENTRED)
 
-        # The way back. Hiding a song is a one-way door without it, and a setting
-        # that can put a tab out of sight with no route to return it is a trap rather
-        # than a preference. Reveals the hidden entries *in place*, marked, rather
-        # than in a dialog — so what is hidden is visible and restorable from the same
-        # list the hiding happened in.
-        self._hidden_toggle = constrained_button("Hidden (0)", width=140)
-        self._hidden_toggle.setToolTip(
-            "Songs you have taken out of this list. Their tab files are untouched; "
-            "select one and press Restore to put it back."
-        )
-        self._hidden_toggle.clicked.connect(self._on_hidden_toggled)
-        row.addWidget(self._hidden_toggle, alignment=_CENTRED)
 
         self._play = constrained_button("Play", object_name="primary", width=180)
         self._play.clicked.connect(self._play_selected)
@@ -342,41 +332,22 @@ class SongSelect(ScreenBase):
 
         self._songs.clear()
         for entry in library.playable:
-            if self.context.settings.is_hidden(entry.slug) and not self._show_hidden:
-                continue
             self._songs.addItem(self._row_text(entry))
             item = self._songs.item(self._songs.count() - 1)
             item.setData(_ROLE, entry)
 
         self._problems.clear()
         for entry in library.problems:
-            # A hidden song is hidden everywhere, or the Problems panel becomes the
-            # place a player goes to find the thing they just put away.
-            if self.context.settings.is_hidden(entry.slug) and not self._show_hidden:
-                continue
             self._problems.addItem(self._problem_text(entry))
 
-        visible = self._songs.count()
         has_songs = bool(library.playable)
         self._songs.setVisible(has_songs)
         self._empty.setVisible(not has_songs)
         self._problems_box.setVisible(self._problems.count() > 0)
         self._problems_box.setTitle(f"Problems ({self._problems.count()})")
 
-        hidden = self._hidden_count()
-        self._hidden_toggle.setText(
-            f"Hidden ({hidden})" if not self._show_hidden else f"Hiding ({hidden})"
-        )
-        self._hidden_toggle.setEnabled(True)
-
         if library.entries:
-            playable = len(library.playable)
-            note = f"{playable} of {len(library.entries)} playable"
-            if hidden:
-                # Says where the missing songs went, so an empty-looking list is
-                # explained rather than mysterious.
-                note += f" · {hidden} hidden"
-            self._set_status(note)
+            self._set_status(f"{len(library.playable)} of {len(library.entries)} playable")
         else:
             self._set_status("no tabs found")
 
@@ -393,11 +364,6 @@ class SongSelect(ScreenBase):
         artist = f" - {entry.artist}" if entry.artist else ""
         badge = _STATUS_TEXT.get(entry.status, "")
         suffix = f"  [{badge}]" if badge else ""
-        # A hidden row is only ever on screen because the player asked to see the
-        # hidden ones, and then it says so. A row that is quietly not-playable while
-        # looking exactly like the others is how a song goes missing twice.
-        if self.context.settings.is_hidden(entry.slug):
-            suffix = "  [hidden]"
         return f"{entry.title}{artist}   {entry.difficulty}{suffix}"
 
     @staticmethod
@@ -428,11 +394,6 @@ class SongSelect(ScreenBase):
     def _on_selection_changed(self, *_args) -> None:
         entry = self._selected_entry()
         playable = entry is not None
-        # A hidden song is on screen only because the player asked to see the hidden
-        # ones, and it is not playable. Play is disabled rather than left enabled to do
-        # nothing -- §42's "a live-looking control that does nothing".
-        hidden = playable and self.context.settings.is_hidden(entry.slug)
-        can_play = playable and not hidden
 
         self._detail_title.setText(entry.title if playable else "")
         self._detail_artist.setText(entry.artist if playable else "")
@@ -442,28 +403,12 @@ class SongSelect(ScreenBase):
         self._bpm.setEnabled(playable)
         self._bpm_label.setEnabled(playable)
         self._tracks.setEnabled(playable)
-        self._play.setEnabled(can_play)
-        self._refresh_list_button()
+        self._play.setEnabled(playable)
+        self._refresh_delete_button()
 
         if not playable:
             self._clear_facts()
             self._bpm_label.setText("")
-            return
-        if hidden:
-            # Its alignment and tempo stay on screen and stay editable: a hidden song
-            # is out of the *list*, not damaged, and someone checking an offset should
-            # not have to restore it first to do so.
-            self._offset.blockSignals(True)
-            self._offset.setValue(int(self.context.settings.offset_for(entry.slug)))
-            self._offset.blockSignals(False)
-            self._on_offset_changed(self._offset.value())
-            self._load_bpm(entry)
-            for track in entry.tracks:
-                self._tracks.addItem(track.label, track.number)
-            default = entry.default_track
-            if default is not None:
-                self._tracks.setCurrentIndex(self._tracks.findData(default.number))
-            self._refresh_facts()
             return
 
         self._offset.blockSignals(True)
@@ -640,98 +585,105 @@ class SongSelect(ScreenBase):
     def _set_status(self, text: str) -> None:
         self._status.setText(text)
 
-    # --- hiding and restoring a song (§46) -------------------------------------
-
-    def _hidden_count(self) -> int:
-        """How many songs the player has taken out of the list."""
-        return len(self.context.settings.hidden_songs)
+    # --- deleting a song (§46) ------------------------------------------------
 
     def _ask_confirmation(self, message: str) -> bool:
         answer = QtWidgets.QMessageBox.question(
             self,
-            "Remove from list?",
+            "Delete song?",
             message,
             QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
-            # No, not Yes. A confirmation whose default is the destructive answer is a
-            # mis-click waiting to happen, and Import GP's equivalent already does it.
+            # **No, not Yes.** A confirmation whose default is the destructive answer
+            # is a mis-click waiting to happen, and Import GP's equivalent already
+            # does it.
             QtWidgets.QMessageBox.StandardButton.No,
         )
         return answer == QtWidgets.QMessageBox.StandardButton.Yes
 
-    def _on_list_button(self) -> None:
-        """Hide the selected song, or put a hidden one back.
-
-        One button for both, because the card is too tall for two and because the
-        pair reads as one reversible decision rather than as two features.
-        """
+    def _on_delete_clicked(self) -> None:
         entry = self._selected_entry()
         if entry is None:
             return
-        if self.context.settings.is_hidden(entry.slug):
-            self._restore(entry)
-        else:
-            self._hide(entry)
+        if not self._ask_confirmation(self._delete_message(entry)):
+            return
+        self._delete_song(entry)
 
-    def _hide(self, entry: SongEntry) -> None:
-        # **Says the file is not deleted, in the confirmation itself.** A button
-        # reading "Remove" next to a song in a folder the player manages is otherwise
-        # read as "delete", and the whole reason this hides rather than unlinks is
-        # that the tab is their work.
+    def _delete_message(self, entry: SongEntry) -> str:
+        """What is about to happen, named exactly.
+
+        The filename is in the message rather than only the song's title, because the
+        file is what is being destroyed and a title can be the same for two tabs. And
+        it says **cannot be undone**, because unlike §46's first attempt at this there
+        is no second copy and no way back — a hide could be reversed from the Hidden
+        toggle, and this cannot be reversed at all.
+        """
         message = (
-            f"Take '{entry.title}' out of the song list?\n\n"
-            "The tab file stays in your songs folder, and you can bring it back "
-            "with the Hidden button."
+            f"Delete '{entry.title}'?\n\n"
+            f"{entry.tab_path.name} will be deleted from your songs folder. "
+            "This cannot be undone."
         )
-        if not self._ask_confirmation(message):
-            return
-        if not self.context.settings.hide_song(entry.slug):
-            return
-        self._save_or_report(f"removed {entry.title} from the list")
-        self._populate()
+        if entry.audio_path is not None:
+            # Said rather than done. The audio is not what puts a song on this list,
+            # and it can be large, so it is left for the player to remove deliberately.
+            message += f"\n\nIts audio file, {entry.audio_path.name}, is left in place."
+        return message
 
-    def _restore(self, entry: SongEntry) -> None:
-        if not self.context.settings.show_song(entry.slug):
-            return
-        self._save_or_report(f"restored {entry.title}")
-        self._populate()
+    def _delete_song(self, entry: SongEntry) -> None:
+        """Unlink the tab, say whether it worked, and rebuild the list from disk.
 
-    def _on_hidden_toggled(self) -> None:
-        self._show_hidden = not self._show_hidden
-        self._populate()
+        Named ``_delete_song`` and not ``_delete`` because the **button** is
+        ``self._delete``, and an instance attribute shadows a method of the same name:
+        the first version of this was ``_delete``, and ``self._delete(entry)`` called
+        the button -- `TypeError: 'QPushButton' object is not callable`. The same
+        mistake as the duplicate ``_selected_entry`` in §46.4, in the same session.
 
-    def _save_or_report(self, message: str) -> None:
-        """Persist a per-song change, and say so on the status line if it did not.
 
-        The same shape song select already uses for offsets and tempi: a settings save
-        is an fsync, so it happens on the explicit action rather than on a drag, and a
-        failure is reported rather than swallowed -- a song that has been hidden from
-        the screen but not from the file would come back on the next launch with no
-        explanation.
+        **The library is rebuilt by rescanning rather than by removing the entry from
+        the in-memory list.** A delete is exactly the moment for the list to stop
+        trusting what it was handed: anything derived from the entry -- the status
+        counts, the problems panel -- is then true of the folder rather than true of a
+        list someone edited. The rescan is asynchronous because parsing every tab is
+        seconds of work and §1.4 forbids doing that on the GUI thread.
         """
+        # **Refuse to unlink anything outside the songs folder.** `tab_path` comes from
+        # a directory scan, so in practice it is always inside -- but this unlinks a
+        # file with no undo, and "the path we were handed" is not a boundary worth
+        # trusting when the cost of being wrong is the player's tab.
+        #
+        # This is not hypothetical. A test whose library entry carried the relative
+        # path `songs/beta.gp5` resolved that against the **repository's own songs
+        # directory** and would have deleted a real tab, had the name happened to
+        # match one. Nothing was lost only because no tab in this repository is called
+        # `beta.gp5`. That is a near miss found by writing the test, not by reading
+        # the code.
+        songs_dir = self.context.songs_dir.resolve()
         try:
-            self.context.save_settings()
-        except Exception as exc:  # noqa: BLE001 - any write failure must be visible
-            self._set_status(f"could not save: {exc}")
-        else:
-            self._set_status(message)
-
-    def _refresh_list_button(self) -> None:
-        """The one button, dressed for what it will do to the current selection."""
-        entry = self._selected_entry()
-        if entry is None:
-            self._list_button.setVisible(False)
-            self._list_button.setEnabled(False)
+            target = entry.tab_path.resolve()
+        except OSError as exc:  # pragma: no cover - a path that will not resolve
+            self._set_status(f"could not resolve {entry.tab_path.name}: {exc}")
             return
-        hidden = self.context.settings.is_hidden(entry.slug)
-        self._list_button.setVisible(True)
-        self._list_button.setEnabled(True)
-        self._list_button.setText("Restore to list" if hidden else "Remove from list")
-        # A hidden song is not playable, so the button that starts it says so rather
-        # than letting a player press Play and get nothing.
-        self._list_button.setObjectName("" if hidden else "danger")
-        # Re-polish: an id selector is only applied when the object name changes.
-        self._list_button.style().unpolish(self._list_button)
-        self._list_button.style().polish(self._list_button)
+        if not target.is_relative_to(songs_dir):
+            self._set_status(
+                f"refused to delete {entry.tab_path.name}: it is outside your songs folder"
+            )
+            return
+
+        try:
+            target.unlink()
+        except OSError as exc:
+            # A failure here is a real outcome and the song is still on disk, so it is
+            # reported rather than swallowed. Silently doing nothing would leave a
+            # row that looks deletable and is not.
+            self._set_status(f"could not delete {entry.tab_path.name}: {exc}")
+            return
+        self._set_status(f"deleted {entry.tab_path.name}")
+        self._rescan_library()
+
+    def _refresh_delete_button(self) -> None:
+        """Enabled only with something selected, so it never looks like a no-op."""
+        has_selection = self._selected_entry() is not None
+        self._delete.setVisible(True)
+        self._delete.setEnabled(has_selection)
 
     # --- lifecycle -----------------------------------------------------------
 

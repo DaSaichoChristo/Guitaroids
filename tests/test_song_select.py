@@ -650,18 +650,18 @@ def test_the_tempo_control_is_inside_the_detail_card(screen: SongSelect) -> None
     assert screen._bpm.isVisibleTo(screen), "present in the tree but not on screen"
 
 
-# --- removing a song from the list (§46) --------------------------------------
+# --- deleting a song (§46) ----------------------------------------------------
 #
-# The feature is "remove from the song select menu" and it **hides**. The file in
-# `songs/` is the player's own work and that directory is gitignored precisely
-# because it is not the repository's to manage, so a button that unlinks someone's
-# tab is a button that can lose it. Every test below is about the pair — the row goes,
-# the file stays — and the first one is the safety property the rest depends on.
+# §46 shipped this as a *hide* first, on the reasoning that a tab in `songs/` is the
+# player's and unlinking it could lose work. That was overruled: a hide does not solve
+# the problem it was built for, because re-import the tab and it is straight back on
+# the list. So the feature is a delete, and these tests are about the file actually
+# being gone -- which is the whole point of it.
 
 
 @pytest.fixture()
-def no_confirmation(screen: SongSelect) -> SongSelect:
-    """Answer "yes" to the remove confirmation.
+def confirmed(screen: SongSelect) -> SongSelect:
+    """Answer "yes" to the delete confirmation.
 
     `_ask_confirmation` is a method rather than an inline `QMessageBox` call for
     exactly this reason, and this is the pattern: a real modal in a test blocks on a
@@ -671,194 +671,190 @@ def no_confirmation(screen: SongSelect) -> SongSelect:
     return screen
 
 
-def _titles(screen: SongSelect) -> list[str]:
-    return [screen._songs.item(row).text() for row in range(screen._songs.count())]
+@pytest.fixture()
+def scanned(confirmed: SongSelect, on_disk: Path, qapp) -> SongSelect:
+    """The screen after a real scan, so every entry's ``tab_path`` is a real file.
+
+    **This is the honest way to test a delete.** The shared `context` fixture builds
+    entries with *relative* paths like `songs/beta.gp5`, so selecting one of those and
+    deleting it resolves against the **repository's own songs directory** rather than
+    tmp_path. A scan replaces the library with entries built from the real folder,
+    which is both what a player's app has and the only version of this test that
+    cannot reach out of its sandbox.
+    """
+    done = SignalSpy(confirmed._loader.completed)
+    confirmed._rescan.click()
+    assert done.wait(), done.describe()
+    return confirmed
 
 
 def _rows_matching(screen: SongSelect, needle: str) -> list[int]:
-    return [row for row, text in enumerate(_titles(screen)) if needle in text]
+    """Rows whose text contains ``needle``, case-insensitively.
 
-
-def test_removing_a_song_takes_its_row_out_of_the_list(no_confirmation: SongSelect) -> None:
-    assert _rows_matching(no_confirmation, "Beta"), "precondition: Beta is listed"
-    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
-    no_confirmation._on_list_button()
-
-    assert not _rows_matching(no_confirmation, "Beta"), "the row is still there"
-    assert _rows_matching(no_confirmation, "Alpha"), "and it took the others too"
-
-
-def test_removing_a_song_does_not_touch_the_file(
-    no_confirmation: SongSelect, context, tmp_path
-) -> None:
-    """**The safety property.** A tab in `songs/` is the player's, not ours.
-
-    Written against a file that genuinely exists, because the failure this guards
-    against is a deletion, and a test with no file on disk cannot tell a delete from a
-    no-op.
+    Case-insensitive because the two ways of building this fixture disagree on a
+    song's title: the in-memory library says "Beta" (`make_song(title=...)`) and a
+    scanned tab says "beta" (`write_tab` titles from the filename). A matcher that
+    cared would fail every delete test for a reason that has nothing to do with
+    deleting.
     """
-    from songbuild import write_tab
+    return [
+        row
+        for row in range(screen._songs.count())
+        if needle.lower() in screen._songs.item(row).text().lower()
+    ]
 
-    songs = tmp_path / "songs"
-    songs.mkdir(exist_ok=True)
-    tab = songs / "beta.gp5"
-    write_tab(tab, notes=6)
+
+def _select(screen: SongSelect, title: str) -> None:
+    screen._songs.setCurrentRow(_rows_matching(screen, title)[0])
+
+
+def test_deleting_a_song_removes_the_file(scanned: SongSelect, on_disk: Path) -> None:
+    """**The feature.** The tab is gone from the folder, not merely from the list."""
+    tab = on_disk / "beta.gp5"
     assert tab.is_file(), "precondition: the tab is on disk"
 
-    entry = context.entry_for("beta")
-    assert entry is not None
-    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
-    no_confirmation._on_list_button()
+    _select(scanned, "Beta")
+    scanned._on_delete_clicked()
 
-    assert tab.is_file(), "the tab file was deleted; this feature hides, it does not unlink"
-    assert context.settings.is_hidden("beta"), "and it should have been hidden"
+    assert not tab.exists(), "the tab file is still there, so nothing was deleted"
 
 
-def test_declining_the_confirmation_changes_nothing(screen: SongSelect) -> None:
-    """The dialog's default is No, and saying no must be a complete no-op."""
+def test_deleting_a_song_takes_its_row_out_of_the_list(
+    scanned: SongSelect, on_disk: Path
+) -> None:
+    """Through a real rescan, because that is how the list learns about a delete.
+
+    The list is rebuilt from disk rather than edited, so a regression that only removed
+    the row would fail here: the file is gone, and a rescan is the only reason the row
+    can be.
+    """
+    _select(scanned, "Beta")
+    scanned._on_delete_clicked()
+    done = SignalSpy(scanned._loader.completed)
+    assert done.wait(), done.describe()
+    assert not _rows_matching(scanned, "Beta"), "the row survived the delete"
+    assert _rows_matching(scanned, "Alpha"), "and it took the other songs too"
+
+
+def test_deleting_leaves_the_other_files_alone(scanned: SongSelect, on_disk: Path) -> None:
+    """A delete of one song must not become a delete of the library."""
+    _select(scanned, "Beta")
+    scanned._on_delete_clicked()
+    assert not (on_disk / "beta.gp5").exists()
+    for name in ("alpha.gp5", "gamma.gp5", "broken.gp5"):
+        assert (on_disk / name).is_file(), f"{name} was deleted as collateral"
+
+
+def test_declining_the_confirmation_deletes_nothing(screen: SongSelect, on_disk: Path) -> None:
+    """The dialog defaults to No, and saying no must be a complete no-op."""
     screen._ask_confirmation = lambda _message: False
-    screen._songs.setCurrentRow(_rows_matching(screen, "Beta")[0])
-    screen._on_list_button()
-
-    assert _rows_matching(screen, "Beta"), "the row went despite declining"
-    assert not screen.context.settings.is_hidden("beta")
+    _select(screen, "Beta")
+    screen._on_delete_clicked()
+    assert (on_disk / "beta.gp5").is_file(), "the file was deleted despite declining"
 
 
-def test_the_confirmation_says_the_file_is_kept(screen: SongSelect) -> None:
-    """A button reading "Remove" beside a song in the player's own folder.
+def test_the_confirmation_names_the_file_and_says_it_is_permanent(screen: SongSelect) -> None:
+    """A button reading "Delete" next to the player's own work earns a real warning.
 
-    Otherwise read as "delete". The wording is the only thing standing between this
-    button and a player believing they have lost a tab, so it is asserted rather than
-    assumed.
+    The **filename** is in the message rather than only the song's title, because the
+    file is what is being destroyed and two tabs can share a title.
     """
     seen: list[str] = []
     screen._ask_confirmation = lambda message: seen.append(message) or True
-    screen._songs.setCurrentRow(_rows_matching(screen, "Beta")[0])
-    screen._on_list_button()
+    _select(screen, "Beta")
+    screen._on_delete_clicked()
 
     assert seen, "no confirmation was asked for"
-    assert "stays" in seen[0], f"the confirmation does not say the file is kept: {seen[0]!r}"
-
-
-def test_a_hidden_song_comes_back_through_the_hidden_toggle(
-    no_confirmation: SongSelect,
-) -> None:
-    """The way out, which is the whole reason hiding is safe."""
-    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
-    no_confirmation._on_list_button()
-    assert not _rows_matching(no_confirmation, "Beta")
-
-    no_confirmation._on_hidden_toggled()
-    rows = _rows_matching(no_confirmation, "Beta")
-    assert rows, "the hidden song did not come back"
-    assert "[hidden]" in no_confirmation._songs.item(rows[0]).text(), (
-        "a revealed hidden row that looks like every other row is how a song goes "
-        "missing twice"
+    assert "beta.gp5" in seen[0], f"the message does not name the file: {seen[0]!r}"
+    assert "cannot be undone" in seen[0], (
+        f"the message does not say it is permanent: {seen[0]!r}"
     )
 
 
-def test_a_revealed_hidden_song_cannot_be_played(no_confirmation: SongSelect) -> None:
-    """Play is disabled rather than left enabled to do nothing (§42)."""
-    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
-    no_confirmation._on_list_button()
-    no_confirmation._on_hidden_toggled()
+def test_a_song_with_audio_says_the_audio_is_kept(screen: SongSelect, tmp_path: Path) -> None:
+    """The audio is not what puts a song on this list, and it can be large.
 
-    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
-    assert not no_confirmation._play.isEnabled(), (
-        "a hidden song can be played, so hiding it does not actually take it out of "
-        "the way"
-    )
-
-
-def test_restoring_a_song_puts_it_back_in_the_normal_list(no_confirmation: SongSelect) -> None:
-    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
-    no_confirmation._on_list_button()
-    no_confirmation._on_hidden_toggled()
-    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
-    no_confirmation._on_list_button()  # now a restore
-
-    assert not no_confirmation.context.settings.is_hidden("beta")
-    assert _rows_matching(no_confirmation, "Beta"), "restored but not listed again"
-
-
-def test_the_button_says_which_way_it_will_go(no_confirmation: SongSelect) -> None:
-    """One button, two jobs, so it has to say which one it is currently offering."""
-    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
-    assert no_confirmation._list_button.text() == "Remove from list"
-
-    no_confirmation._on_list_button()
-    no_confirmation._on_hidden_toggled()
-    no_confirmation._songs.setCurrentRow(_rows_matching(no_confirmation, "Beta")[0])
-    assert no_confirmation._list_button.text() == "Restore to list"
-
-
-def test_a_hidden_song_is_hidden_from_the_problems_panel_too(
-    no_confirmation: SongSelect, context
-) -> None:
-    """Or the Problems panel becomes where a player goes to find what they put away.
-
-    Only *playable* songs can be hidden, so this is not reachable by hiding a broken
-    tab — there is no row to select. It is reachable the way it would really happen: a
-    song is hidden while it plays, and is later reclassified as a problem (someone
-    edits the tab, or it stops parsing), so a rescan moves it out of the list and into
-    the panel. Without the filter it reappears there, which undoes the hiding from the
-    one place the player did not choose to look.
+    So it is left alone — and *said* to be left alone, rather than leaving an orphan
+    the player discovers later and wonders whether the delete was half-applied.
     """
-    assert no_confirmation._problems.count() >= 1, "precondition: a broken tab listed"
+    from dataclasses import replace
 
-    no_confirmation._songs.setCurrentRow(0)
-    no_confirmation._on_list_button()
-    assert not _rows_matching(no_confirmation, "Alpha"), "precondition: Alpha hidden"
+    entry = next(e for e in screen.context.library.entries if e.slug == "beta")
+    with_audio = replace(entry, audio_path=tmp_path / "beta.mp3")
+    message = screen._delete_message(with_audio)
 
-    # Alpha stops being playable, which is what a rescan after an edit would find.
-    from songbuild import make_entry, make_song
-
-    broken_alpha = make_entry(
-        make_song(title="Alpha", notes=2),
-        Path("songs/alpha.gp5"),
-        status=Status.PARSE_ERROR,
-    )
-    others = tuple(e for e in context.library.entries if e.slug != "alpha")
-    context.library = library_of(*others, broken_alpha)
-    no_confirmation._populate()
-
-    listed = [no_confirmation._problems.item(i).text() for i in range(no_confirmation._problems.count())]
-    assert not any("alpha" in text for text in listed), (
-        f"the hidden song reappeared in the problems panel: {listed}"
-    )
+    assert "beta.mp3" in message, f"the audio is not mentioned: {message!r}"
+    assert "left in place" in message, f"not even said to be kept: {message!r}"
 
 
-def test_the_status_line_explains_where_the_missing_songs_went(
-    no_confirmation: SongSelect,
+def test_a_song_without_audio_does_not_mention_any(screen: SongSelect) -> None:
+    """Otherwise every confirmation talks about an audio file that is not there."""
+    entry = next(e for e in screen.context.library.entries if e.slug == "beta")
+    assert entry.audio_path is None, "precondition: the fixture song has no audio"
+    assert "audio" not in screen._delete_message(entry).lower()
+
+
+def test_a_failed_delete_is_reported_and_leaves_the_song(
+    scanned: SongSelect, on_disk: Path
 ) -> None:
-    """An empty-looking list with no explanation is the confusing part."""
-    no_confirmation._songs.setCurrentRow(0)
-    no_confirmation._on_list_button()
-    assert "hidden" in no_confirmation._status.text().lower(), no_confirmation._status.text()
+    """A delete that could not happen is a real outcome, and it is not silent.
 
-
-def test_hidden_survives_a_restart_through_the_real_path(
-    no_confirmation: SongSelect, context, tmp_path
-) -> None:
-    """Settings file -> a brand new context -> the screen, which is what a relaunch is.
-
-    Not `is_hidden` on the same object, which would pass even if the save silently
-    did nothing — and a song hidden from the screen but not from the file comes back
-    on the next launch with no explanation.
+    Otherwise the row sits there looking deletable, the button does nothing when
+    pressed, and the player has no idea why.
     """
-    from guitaroids.context import AppContext
+    _select(scanned, "Beta")
+    tab = on_disk / "beta.gp5"
+    # A directory where the file should be: `unlink` on a directory is an OSError,
+    # which is the shape of failure this has to survive -- a read-only folder, a
+    # permissions problem, a file another process holds open.
+    tab.unlink()
+    tab.mkdir()
+    try:
+        scanned._on_delete_clicked()
+        assert "could not delete" in scanned._status.text().lower(), scanned._status.text()
+        assert _rows_matching(scanned, "Beta"), "the row vanished even though it failed"
+    finally:
+        tab.rmdir()
 
-    no_confirmation._songs.setCurrentRow(0)
-    no_confirmation._on_list_button()
-    assert context.settings.hidden_songs, "precondition: something was hidden"
-    slug = context.settings.hidden_songs[0]
 
-    reloaded = AppContext(
-        library=context.library,
-        settings=Settings.load(context.settings_path),
-        songs_dir=context.songs_dir,
-        settings_path=context.settings_path,
-        audio_enabled=False,
+def test_a_tab_path_outside_the_songs_folder_is_refused(
+    scanned: SongSelect, tmp_path: Path
+) -> None:
+    """The boundary that a test fixture walked straight into.
+
+    The shared `context` fixture's entries carry the *relative* path
+    `songs/beta.gp5`, so deleting one resolves against the repository's own songs
+    directory. That is how this guard was found: the first version of the delete tests
+    pointed a real `unlink` at a path outside tmp_path, and nothing was lost only
+    because no tab in this repository is named `beta.gp5`.
+
+    "The path we were handed" is not a boundary worth trusting when the cost of being
+    wrong is somebody's tab, so the delete refuses anything outside `songs_dir`.
+    """
+    from dataclasses import replace
+
+    outside = tmp_path / "outside.gp5"
+    outside.write_bytes(b"not a tab")
+    entry = next(e for e in scanned.context.library.entries if e.slug == "beta")
+    scanned._songs.setCurrentRow(_rows_matching(scanned, "Beta")[0])
+    scanned._selected_entry = lambda: replace(entry, tab_path=outside)
+
+    scanned._on_delete_clicked()
+
+    assert outside.is_file(), "a file outside the songs folder was deleted"
+    assert "outside" in scanned._status.text().lower(), scanned._status.text()
+    assert (scanned.context.songs_dir / "beta.gp5").is_file(), "and the real tab survived"
+
+
+def test_the_button_says_delete_and_not_remove(scanned: SongSelect) -> None:
+    """The label is the last thing standing between this and a misunderstanding.
+
+    "Remove from list" is read as "take it off the list"; "Delete song" is not.
+    """
+    assert scanned._delete.text() == "Delete song"
+    _select(scanned, "Beta")
+    assert scanned._delete.isEnabled()
+    scanned._songs.setCurrentRow(-1)
+    assert not scanned._delete.isEnabled(), (
+        "an enabled Delete with nothing selected is a control that does nothing"
     )
-    assert reloaded.settings.is_hidden(slug), "the hidden song came back on reload"
-    assert reloaded.settings.hidden_songs == [slug], "and with nothing else invented"

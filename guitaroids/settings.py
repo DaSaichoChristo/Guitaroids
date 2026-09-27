@@ -47,11 +47,7 @@ from pathlib import Path
 #:
 #: 5 -- ``song_best_accuracy`` is new (§34). Nothing is dropped, so a v4 file gains
 #: the key with an empty dict and every older file loads unchanged.
-#:
-#: 6 -- ``hidden_songs`` is new (§46). Also additive: an empty list, so every older
-#: file loads with nothing hidden, which is the correct default -- a song is visible
-#: until the player says otherwise.
-SETTINGS_VERSION = 6
+SETTINGS_VERSION = 5
 
 #: Files below this version had their ``collapse_chords`` key dropped on load, so
 #: that the flip in version 2 reaches an existing installation.
@@ -196,26 +192,6 @@ class Settings:
     later edited. Set from song select, before the song starts (§19.1).
     """
 
-    hidden_songs: list[str] = field(default_factory=list)
-    """Slugs the player has taken out of the song list, in the order they were hidden.
-
-    **This hides; it does not delete.** A tab in ``songs/`` is the player's own work
-    and the folder is gitignored precisely because it is not the repository's to
-    manage, so a button that unlinks someone's tab file is a button that can lose it.
-    The file stays exactly where it was and the entry comes back from the Hidden
-    toggle.
-
-    Keyed by slug like its three neighbours, with the same consequence: hiding is per
-    *file*, not per track, so hiding a tab hides all of its tracks. That is the same
-    unit the offsets, tempi and bests are keyed on, and a per-track key would be more
-    precise at the cost of disagreeing with them.
-
-    A **list rather than a set** because a settings file that can be hand-edited reads
-    better as an ordered list, and because the order is the order the player hid them,
-    which is what the Hidden panel shows. Membership tests are over a list of a dozen
-    slugs, not a hot path.
-    """
-
     version: int = SETTINGS_VERSION
 
     # --- serialisation ----------------------------------------------------
@@ -314,18 +290,6 @@ class Settings:
                         # would report that song as never having been played.
                         bests[slug] = max(0.0, min(1.0, number))
                 values[name] = bests
-            elif name == "hidden_songs":
-                # A list of slugs, tolerantly: a hand-edited file may hold anything,
-                # and the one thing that must not happen is an entry that is not a
-                # string quietly becoming a slug nothing will ever match.
-                hidden: list[str] = []
-                if isinstance(given, list):
-                    for slug in given:
-                        if isinstance(slug, str) and slug:
-                            hidden.append(slug)
-                # De-duplicated while keeping order, so a hand-edited file with the
-                # same slug twice does not make the Hidden panel list it twice.
-                values[name] = list(dict.fromkeys(hidden))
             elif name == "version":
                 # A file older than this build has been *migrated* on the way in,
                 # so it now reports itself as current. Without that, a
@@ -417,31 +381,6 @@ class Settings:
         get a 20 BPM song, and the clamp is for *positive* nonsense (1 BPM, 9999).
         """
         self.song_bpm[slug] = 0.0 if bpm <= 0.0 else _clamp_float(bpm, MIN_BPM, MAX_BPM, MIN_BPM)
-
-    # --- hiding a song from the list (§46) ---------------------------------------
-
-    def is_hidden(self, slug: str) -> bool:
-        """Whether the player has taken this tab out of the song list."""
-        return bool(slug) and slug in self.hidden_songs
-
-    def hide_song(self, slug: str) -> bool:
-        """Hide a tab from the list. Returns whether anything changed.
-
-        Idempotent, so the caller does not have to check first -- and an empty slug is
-        refused, because a nameless entry in a per-song store is a bug waiting to be
-        read. Hiding twice is not an error, it is a no-op that does not also re-save.
-        """
-        if not slug or self.is_hidden(slug):
-            return False
-        self.hidden_songs.append(slug)
-        return True
-
-    def show_song(self, slug: str) -> bool:
-        """Put a hidden tab back. Returns whether anything changed."""
-        if not slug or not self.is_hidden(slug):
-            return False
-        self.hidden_songs.remove(slug)
-        return True
 
     def best_accuracy_for(self, slug: str, default: float = 0.0) -> float:
         """The best accuracy recorded for one tab, or ``default`` if it has never been.
