@@ -35,7 +35,7 @@ supersedes §2" resolves without ambiguity.
 
 ## The sections
 
-38 sections, in the order they were written. Dates are all 2026-09-26 or
+39 sections, in the order they were written. Dates are all 2026-09-26 or
 -27 and are in the headings, so they are left out here.
 
 | Section | What it records |
@@ -78,6 +78,7 @@ supersedes §2" resolves without ambiguity.
 | §37 | Auditing `README.md`, and a test that was one word too narrow |
 | §38 | The screenshot tool's false defect, and the one it was hiding |
 | §39 | "Low tempo doesn't work", which was the input-latency setting |
+| §40 | "Reload the app for less latency", and the counter nobody read |
 
 **§33 is missing**, and §36.3 explains why rather than back-filling it: the number was
 reserved for work that was planned, approved and then overtaken by other work, so no
@@ -4633,3 +4634,103 @@ fixes an overshoot — dial it back negative — was unreachable in the UI.
 - **No test asserts the tooltip is not merely present but correct** beyond the
   not-backwards check. The wrong-direction claim survived §29.2 to §39 because the
   tooltip was written once and never re-derived from the arithmetic.
+
+---
+
+## §40 — "Reload the app for less latency", and the counter nobody read (2026-09-27)
+
+Reported after §39: the latency is not a constant. Sometimes the same song, same
+settings, same machine needs the application restarted before the timing is playable
+again. So the residual `L` is not a property of the sound card, and §39.2's
+explanation — that `stream.latency` under-reports a fixed acoustic lag — is only half
+of it.
+
+### §40.1 What was ruled out, by measurement
+
+Four candidate accumulations across attempts, each checked rather than assumed:
+
+- **A sample-rate mismatch forcing a resampler into the graph.** `sd.query_devices(kind='output')`
+  reports a native **44100** on this machine's `default`, and the renderer produces
+  44100. No mismatch, so no resampler, so nothing to accumulate.
+- **`stream.latency` varying between opens in one process.** Opened and closed the
+  output stream six times, the way `Transport.play`/`stop` does per song: **46.44ms
+  every single time**, `blocksize` 1024 every time. Rock steady.
+- **An output stream leaked per attempt.** `Transport.stop()` swaps the handle out,
+  then `stop()` and `close()` inside `try`, with `self._t0 = None` in `finally`. Clean.
+- **A microphone accumulated per attempt.** `_start_microphone` opens once and returns
+  early on `self._mic is not None`, and `MainWindow._widget_for` caches every built
+  screen, so a session has exactly one `Microphone` — not one per song.
+
+`stream.time` also reported **1790498868.16** on this machine's PipeWire, which is the
+fifty-five-years figure the transport's `play()` already documents. The clock really is
+nonsense in absolute terms here; it is only a position as a difference, which is why
+`t0` is read from the device.
+
+### §40.2 The instrument existed and was not connected
+
+`Transport.underruns` counts "callbacks the device asked for before we could fill
+them", and its docstring says it is "worth counting rather than ignoring: it is the
+audio equivalent of a dropped frame." **Nothing has ever read it.** A grep for
+`underrun` across the package returns five hits: the reset, the increment, the
+property, and the two in `play`. No caller, no UI, no test.
+
+That counter is the one measurement that speaks directly to the report. An underflow
+means the device had nothing to play, so **the sound slipped while `stream.time` carried
+on** — the mechanism by which the reported latency stays perfectly correct and the music
+still arrives late. That is not visible in `stream.latency` at all, and it is exactly
+the failure that "reload and it is better" looks like: a busy process recovers when
+you give it a clean start.
+
+So the game screen now shows, under the timing readout:
+
+```
+timing  180ms late
+device 46ms  ·  3 underruns
+```
+
+Both numbers, because the timing error is their sum and neither alone explains it.
+`device` is what has *already* been subtracted from the clock, printed so the residual
+above reads as a difference rather than as a mystery. The underrun count appears only
+when non-zero, since a run with none should not add a zero to worry about.
+
+### §40.3 The double that was not shaped like the thing
+
+`_FakePlayback` first declared `underruns` as a method. The real `Transport` exposes
+it as a **property** and `latency()` as a **method** — the class is itself
+inconsistent. So `int(playback.underruns)` raised `TypeError`, the caller's `except`
+swallowed it, and the test asserted against an empty string instead of a number.
+
+Worth writing down because the failure mode is silent in both directions: a double
+tidied the *other* way would have passed here and failed against the real object. The
+shape is the contract, and a test double that does not match it is testing the double.
+
+**Tests: 1020 in total — 1004 excluding `tests/test_docs.py`.** Two clean runs.
+
+### Not done — §40
+
+- **The underrun hypothesis is untested.** It is a mechanism that fits the report, and
+  the counter is now visible, but nobody has run a session where the latency degraded
+  and read the count while it happened. **The obvious next step is free:** play a few
+  songs in one session, watch the underrun count and the "Nms late" readout together,
+  then reload and compare. If the count climbs while the latency does, it is the CPU.
+  If the count stays at zero and the residual still grows, it is somewhere neither
+  `stream.latency` nor the callback describes, and this section has bought a readout
+  rather than an answer.
+- **A stream can be late without underflowing.** The counter only fires when the device
+  actually runs dry. A callback that is consistently a little late and always just
+  makes it is invisible to it, and would still make the music late. The direct
+  measurement is a loopback: play a known burst, record it, difference the two clocks.
+- **That loopback was attempted here and could not be done.** A known 1kHz burst was
+  played at a known buffer offset and the microphone searched for it by correlation:
+  the captured signal was **silence**, correlation peak `0.0`, four runs out of four.
+  PipeWire is not routing the `default` sink back into the `default` source in this
+  environment. The input is a real device — `HD-Audio Generic: ALC257 Analog (hw:1,0)`,
+  exposed as 32-channel `default` at 44100 — so this is a routing/policy fact and not a
+  missing microphone, but until it is worked around `L` remains unmeasured by machine.
+- **The device line is not on the results screen**, so the numbers are gone when the
+  song ends. For "was that run clean" the per-run underrun count is the more useful
+  figure and it is exactly what a results screen is for.
+- **`Transport`'s own shape is inconsistent** — `latency()` a method, `underruns` a
+  property, `is_running` and `finished` properties — and this section tripped over it.
+  Worth normalising, but it touches every fake of the class, so it is a change of its
+  own rather than a footnote to this one.

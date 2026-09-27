@@ -155,6 +155,14 @@ class Game(ScreenBase):
         self._timing.setObjectName("gameTiming")
         self._timing.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
 
+        # What the sound card said it was doing, and whether it kept up. Sits under
+        # the timing readout because the two are halves of one question -- "why is
+        # this run 200ms off" -- and the answer is the sum of a device figure nobody
+        # can see and a residual nobody can explain. §40.
+        self._device = heading("", kind="dim", parent=self)
+        self._device.setObjectName("gameDevice")
+        self._device.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+
         self._flash = heading("", kind="heading", parent=self)
         self._flash.setObjectName("gameFlash")
         self._flash.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -195,6 +203,7 @@ class Game(ScreenBase):
         # Under the tally, not beside it: the tally is already the full half-width
         # and is monospaced, so anything appended to it would break its columns.
         self._timing.setGeometry(width // 2, px(12) + px(40), width // 2 - pad, px(30))
+        self._device.setGeometry(width // 2, px(12) + px(70), width // 2 - pad, px(28))
         self._flash.setGeometry(0, height // 5, width, px(80))
         self._banner.setGeometry(pad, height // 2 - px(40), width - pad * 2, px(80))
         # The bottom row holds Back and nothing else. The key legend used to sit here
@@ -521,6 +530,7 @@ class Game(ScreenBase):
             self._state.update(position)
         self._view.set_position(position)
         self._refresh_tally()
+        self._refresh_device()
         if self._state is not None and not self._finished:
             if self._state.outstanding == 0:
                 self._finished = True
@@ -711,6 +721,39 @@ class Game(ScreenBase):
             return
         self._recent_timing.append(delta)
         self._refresh_timing()
+
+    def _refresh_device(self) -> None:
+        """Report what the sound card claimed, and whether it kept its promise.
+
+        Two numbers, because the timing error is their sum and neither alone explains
+        it. `latency` is what PortAudio says the device has buffered, and
+        `position()` already subtracts it, so it is *not* the residual -- it is the
+        part already handled, shown so the residual can be read as a difference rather
+        than as a mystery. `underruns` is the number of times the device asked for a
+        block before the callback had one, which means the sound slipped while the
+        clock carried on: the one mechanism by which the reported latency stays
+        correct and the music still arrives late. §40.
+
+        The counter has existed since the transport was written and was documented as
+        "worth counting rather than ignoring", and nothing read it. A measurement
+        nobody can see is the same as no measurement -- §39's whole subject, one layer
+        down.
+        """
+        playback = self.context.playback
+        if playback is None:
+            self._device.setText("")
+            return
+        try:
+            latency_ms = float(playback.latency()) * 1000.0
+            underruns = int(playback.underruns)
+        except Exception:  # noqa: BLE001 - a device that will not answer is not fatal
+            self._device.setText("")
+            return
+        text = f"device {latency_ms:.0f}ms"
+        if underruns:
+            text += f"  ·  {underruns} underrun{'s' if underruns != 1 else ''}"
+        if text != self._device.text():
+            self._device.setText(text)
 
     def _refresh_timing(self) -> None:
         """Say how far off the player's playing is, in the direction that helps.

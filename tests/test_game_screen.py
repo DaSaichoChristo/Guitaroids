@@ -1826,3 +1826,100 @@ def test_the_timing_readout_does_not_overlap_the_tally_or_the_flash(game: Game) 
     assert not timing.intersects(flash), f"timing {timing} overlaps flash {flash}"
     assert timing.top() >= tally.bottom(), "the readout belongs under the tally"
     assert timing.right() <= game.width(), f"{timing} runs off a {game.width()}px window"
+
+
+# --- what the sound card claimed, and whether it kept up (§40) ---------------
+
+
+class _FakePlayback:
+    """Stands in for a Transport with the two numbers the device line reads.
+
+    Shaped exactly as the real class, which is inconsistent: `latency()` is a method
+    and `underruns` is a property. A double that "tidied" that -- both methods, say --
+    passes a test and then fails against the real object, or here, failed the other
+    way: `int(<bound method>)` raised, the caller's `except` swallowed it, and the
+    assertion saw an empty string instead of a number. The shape is the contract.
+    """
+
+    def __init__(self, latency: float = 0.04644, underruns: int = 0) -> None:
+        self._latency = latency
+        self._underruns = underruns
+
+    def latency(self) -> float:
+        return self._latency
+
+    @property
+    def underruns(self) -> int:
+        return self._underruns
+
+
+def test_the_device_line_is_empty_without_a_device(game: Game) -> None:
+    """No device, no claim. Same rule as the timing readout."""
+    assert game.context.playback is None
+    game._refresh_device()
+    assert game._device.text() == ""
+
+
+def test_the_device_line_reports_the_buffer_the_card_admitted_to(game: Game) -> None:
+    """Measured on this machine: PortAudio grants 46.44ms, stably, on every open.
+
+    Worth asserting the shape rather than the number, because the number is this
+    machine's -- but the *point* is that the figure is shown at all, so the residual
+    on the line above can be read as a difference. §40.
+    """
+    game.context.playback = _FakePlayback()
+    game._refresh_device()
+    assert game._device.text() == "device 46ms"
+
+
+def test_the_device_line_counts_underruns(game: Game) -> None:
+    """The sound slipping while the clock carries on is the mechanism worth seeing.
+
+    A non-zero count means the callback fell behind, so `stream.latency` stayed
+    correct and the music still arrived late -- which is otherwise indistinguishable
+    from a player with bad timing. This counter has existed since the transport was
+    written and nothing read it.
+    """
+    game.context.playback = _FakePlayback(underruns=3)
+    game._refresh_device()
+    assert game._device.text() == "device 46ms  ·  3 underruns"
+
+
+def test_one_underrun_is_not_pluralised(game: Game) -> None:
+    game.context.playback = _FakePlayback(underruns=1)
+    game._refresh_device()
+    assert game._device.text() == "device 46ms  ·  1 underrun"
+
+
+def test_a_device_that_will_not_answer_does_not_break_the_tick(game: Game) -> None:
+    """A device that raises is a device that is not there. The line goes empty.
+
+    `_refresh_device` runs inside the frame timer, so anything it lets escape would
+    take the tick down sixty times a second.
+    """
+
+    class Broken:
+        def latency(self):
+            raise RuntimeError("device went away")
+
+        def underruns(self):
+            raise RuntimeError("device went away")
+
+    game.context.playback = Broken()
+    game._refresh_device()
+    assert game._device.text() == ""
+
+
+def test_the_device_line_does_not_overlap_the_timing_readout(game: Game) -> None:
+    """Three stacked HUD lines now, all placed by hand. `setGeometry` will not stop
+    them colliding; only this will. §19.2 by hand."""
+    game.resize(960, 640)
+    game._place_hud()
+    timing, device, flash = (
+        game._timing.geometry(),
+        game._device.geometry(),
+        game._flash.geometry(),
+    )
+    assert not timing.intersects(device), f"timing {timing} overlaps device {device}"
+    assert not device.intersects(flash), f"device {device} overlaps flash {flash}"
+    assert device.right() <= game.width()
