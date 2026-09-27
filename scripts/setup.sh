@@ -2,12 +2,12 @@
 # Reproducible setup: venv, pins, the --no-deps package, a soundfont, and the
 # M0 gate, in one command.
 #
-# This is the *supported* path, and it used to be the only working one. It no longer
-# is: a bare `pip install -r requirements.txt` now installs everything and the app
-# runs, verified in a clean venv. What this script adds is tinysoundfont (which
-# cannot be installed normally, point 2 below), a soundfont, and the gate. See the
-# top of requirements.txt for what a bare install costs you -- the numpy pluck synth
-# instead of a sampled guitar.
+# This is the *supported* path, and it is the only working one. `requirements.txt` is
+# `pip freeze` output, so it lists tinysoundfont -- and tinysoundfont cannot be
+# installed normally, because pyaudio has no Linux wheel and no portaudio.h to build
+# against. So `pip install -r requirements.txt` FAILS, verified rather than assumed.
+# This script is what filters that one package out and installs it with --no-deps, and
+# it also fetches a soundfont and runs the gate. See the top of requirements.txt.
 #
 # PowerShell equivalent: scripts/setup.ps1
 # KEEP THE TWO IN SYNC -- tests/test_setup_scripts.py asserts they agree on the
@@ -50,14 +50,20 @@ if [ "$PYVER" != "3.12" ] && [ "$PYVER" != "3.10" ]; then
 fi
 
 echo "==> Installing pinned dependencies"
-$PY -m pip install -r requirements-dev.txt --quiet
+# Everything except tinysoundfont, which cannot be installed normally: it depends on
+# pyaudio, which has no Linux wheel and no portaudio.h to build against. So the one
+# package in the list is filtered out here and installed separately with --no-deps.
+EXCL=$(mktemp)
+trap 'rm -f "$EXCL"' EXIT
+grep -v '^tinysoundfont==' requirements.txt > "$EXCL"
+$PY -m pip install -r "$EXCL" --quiet
 
-echo "==> Installing optional packages that need --no-deps (requirements-optional.txt)"
-if $PY -m pip install -r requirements-optional.txt --no-deps --quiet; then
-    echo "    ok - $(grep -c '^[a-zA-Z]' requirements-optional.txt || echo 0) package(s)"
+echo "==> Installing tinysoundfont with --no-deps (its pyaudio dep cannot build)"
+if $PY -m pip install tinysoundfont==0.3.7 --no-deps --quiet; then
+    echo "    ok"
 else
     echo "    FAILED - continuing. The numpy pluck synth is the fallback, so audio"
-    echo "    still renders without it. See requirements-optional.txt."
+    echo "    still renders without it. See the top of requirements.txt."
 fi
 
 echo "==> Fetching a soundfont (optional, used by tinysoundfont)"

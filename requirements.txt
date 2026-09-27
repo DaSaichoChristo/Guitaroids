@@ -1,115 +1,45 @@
-# Guitaroids — runtime dependencies.
+# Guitaroids -- every dependency, one file.
 #
-# Seven pins: four direct, two deliberate transitives, one named milestone. Read
-# this file before changing it, because the interesting parts are the
-# comments and the ones that used to be warnings.
+# GENERATED: `pip freeze` from the working .venv. Do not hand-edit: regenerate it
+# instead, or the list stops describing the environment it came from. `tests/
+# test_requirements.py` asserts this file matches the venv, so a stale one fails.
 #
-#   ==> `scripts/setup.sh` is the supported path, and it is now a convenience
-#       rather than a necessity. A bare `pip install -r requirements.txt` WORKS.
+# This is an INVENTORY, not an install spec, and one pin proves the difference:
 #
+#   ==> `pip install -r requirements.txt` FAILS on this machine, and this is the
+#       reason this file is an inventory rather than an install spec.
+#       tinysoundfont depends on `pyaudio`, which has no Linux wheel and cannot be
+#       built here (no portaudio.h). Verified in a clean venv, not assumed: a real
+#       install fails with: Failed building wheel for pyaudio
+#       And `pip install --dry-run` exits 0 on tinysoundfont, so a dry-run is not
+#       evidence either way -- do not use one to decide this.
 #
-# A BARE INSTALL NOW WORKS. Verified, not assumed: in a clean venv, a plain
-# `pip install -r requirements.txt` installs everything above, the app's modules
-# import, and a window opens and renders on the offscreen platform. There is no
-# ordering constraint left, so the long warning that used to live here is gone.
+#   Use `scripts/setup.sh` (or setup.ps1). It installs tinysoundfont with --no-deps,
+#   which is safe because pyaudio is a lazy import used only for real-time playback
+#   and this project renders offline with sfload() instead. Everything else in this
+#   file installs normally.
 #
-# It used to say that a bare install was unusable, and that was true: mediapipe
-# required the GUI build of OpenCV, whose bundled Qt plugins hijack
-# QT_PLUGIN_PATH and break PySide6, and both OpenCV builds write to the same
-# cv2/ directory, so the GUI one had to be uninstalled BEFORE the headless one was
-# installed. The reverse order leaves headless's dist-info with its files deleted,
-# pip reports "already satisfied", and `import cv2` stays broken. That cost a real
-# afternoon, and it existed for a webcam tracker that was never built
-# (DESIGN.md §25). Dropping mediapipe dropped the trap with it.
+# Python 3.12 specifically: tinysoundfont ships cp310 and cp312 wheels only, so 3.13
+# and 3.14 need a C++ toolchain and dev headers to build it from source.
 #
-# WHAT A BARE INSTALL COSTS YOU: the numpy *pluck* synth instead of the
-# soundfont-backed one. It is a real synth, not a beep -- six harmonics under a
-# plucked envelope -- and it is what plays if you have no soundfont. setup.sh
-# additionally installs tinysoundfont and fetches a soundfont, so the app has a
-# sampled guitar.
-#
-#
-# TWO THINGS THAT ARE NOT PYTHON PACKAGES
-#
-# 1. tinysoundfont — installed with --no-deps
-#    Its declared dependency is pyaudio, which has NO Linux wheel in any release
-#    and cannot be built here (portaudio.h is absent; only the libportaudio2
-#    runtime is installed). Installing it normally therefore fails outright, so it
-#    lives in requirements-optional.txt and setup.sh installs it that way.
-#
-#    We never need pyaudio. It is imported in exactly ONE place in the whole
-#    package, `Synth.start()`, which is a convenience loader we do not use: we
-#    load soundfonts with `sfload()`, which does not touch it. (An earlier version
-#    of this file said the way round pyaudio was `generate_simple()`. That is half a
-#    route: `generate_simple()` is clean, but the only ways to reach a *loaded*
-#    soundfont are `start()` -- which explodes -- and `sfload()`.)
-#
-# 2. The soundfont
-#    Not a package. Fetched by scripts/fetch_soundfont.sh, and gitignored. Absent
-#    is fine: the pluck synth takes over.
-#
-#
-# WHY THIS FILE IS SHORTER THAN THE VENV
-#
-# Transitive dependencies live in requirements-lock.txt, which is `pip freeze` of
-# one working environment. A transitive may be pinned here only with a stated
-# reason, and exactly one is (`attrs`, below). Use the lock file to reproduce an
-# environment; use this one to know what we actually depend on. A clean install from
-# this file alone pulls twelve packages; the venv has eighteen, the difference being
-# tinysoundfont, pytest, and four that are only there because tinysoundfont's
-# install path is unusual.
-#
-#
-# WHY A PIN IS HERE
-#
-# "Imported today" means some module in guitaroids/ does `import <it>`. A pin
-# marked for a milestone is deliberate and named: it is the dependency the next
-# piece of work needs, pinned now so the version is decided before the code that
-# relies on it exists. Both kinds belong here, and pretending otherwise is how
-# requirements.txt becomes either a `pip freeze` in disguise or a wish list.
-#
-# Seven pins, which is three kinds of thing:
-#
-#   imported today      PySide6, numpy, sounddevice, PyGuitarPro
-#   deliberate          shiboken6, attrs -- transitive packages pinned on purpose, so
-#                       a release cannot change a tested code path underneath us.
-#                       Nothing imports either: shiboken6 is PySide6's binding layer
-#                       and attrs is PyGuitarPro's frozen models.
-#   audio milestone     soundfile (§3.1, decoding) -- not imported yet. The synth
-#                       renders straight from the Chart and nothing decodes a file,
-#                       so this is pinned for the day a song has backing audio.
-#
-# The three labels are load-bearing: `tests/test_requirements.py` reads them out of
-# this file to decide whether each pin is explained, so paraphrasing them ("transit",
-# "planned") silently un-justifies a pin. The test also fails if a pin is neither
-# imported nor explained, which is the rule this list exists to satisfy.
+# Soundfonts are not in here because they are not packages: scripts/fetch_soundfont.sh
+# fetches one, and with none the numpy pluck synth in audio/render.py takes over.
 
-PySide6==6.11.2
-shiboken6==6.11.2
-numpy==2.2.6
-soundfile==0.14.0
-sounddevice==0.5.6
-PyGuitarPro==0.11
-
-# The one transitive we pin on purpose. It is a dependency of PyGuitarPro, which
-# uses it for its frozen models, and pinning it means a future attrs release
-# cannot change how tabs are read out from under a tested parser. Everything else
-# transitive is in requirements-lock.txt.
 attrs==26.1.0
-
-# Runtime: installed with --no-deps by scripts/setup.sh, listed in
-# requirements-optional.txt rather than above, because a plain install fails.
-#   pip install -r requirements-optional.txt --no-deps
-#   tinysoundfont==0.3.7
-#
-# Development-only (pytest) is in requirements-dev.txt.
-#
-# Considered and NOT used:
-#   mido             .mid export. Taken off the table (DESIGN.md §9) — the synth
-#                    reads the Chart directly, so there is no MIDI round trip.
-#   pyfluidsynth     rejected: libfluidsynth links 60 shared libraries (§7.5).
-#   pyaudio          never imported; only `Synth.start()` would need it, and we
-#                    load soundfonts with `sfload()` instead.
-#   av, pydub        rejected: need Python 3.11+ / an ffmpeg binary (§3.1).
-#   opencv           with it went mediapipe and the whole install-order trap. See
-#                    the top of this file and DESIGN.md §25.
+cffi==2.1.1
+iniconfig==2.3.0
+numpy==2.2.6
+packaging==26.3
+pluggy==1.6.0
+pycparser==3.0
+Pygments==2.21.0
+PyGuitarPro==0.11
+PySide6==6.11.2
+PySide6_Addons==6.11.2
+PySide6_Essentials==6.11.2
+pytest==9.1.1
+shiboken6==6.11.2
+sounddevice==0.5.6
+soundfile==0.14.0
+tinysoundfont==0.3.7
+typing_extensions==4.16.0

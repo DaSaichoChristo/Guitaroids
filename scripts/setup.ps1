@@ -5,11 +5,12 @@
 .DESCRIPTION
     venv, pins, the --no-deps package, a soundfont, and the M0 gate, in one command.
 
-    This is the *supported* path, and it used to be the only working one. A bare
-    `pip install -r requirements.txt` now installs everything and the app runs,
-    verified in a clean venv. What this script adds is tinysoundfont (which cannot
-    be installed normally) and a soundfont -- without them the app plays the numpy
-    pluck synth instead of a sampled guitar. See the top of requirements.txt.
+    This is the *supported* path, and it is the only working one.
+    `requirements.txt` is `pip freeze` output, so it lists tinysoundfont -- and
+    tinysoundfont cannot be installed normally, because pyaudio has no wheel here and
+    cannot be built. So `pip install -r requirements.txt` FAILS. This script filters
+    that one package out and installs it with --no-deps, then fetches a soundfont and
+    runs the gate. See the top of requirements.txt.
 
     PowerShell equivalent of scripts/setup.sh.
     KEEP THE TWO IN SYNC -- tests/test_setup_scripts.py asserts they agree on the
@@ -117,17 +118,23 @@ if ($PyVer -ne '3.12' -and $PyVer -ne '3.10') {
 # --- dependencies ---------------------------------------------------------------
 
 Write-Step 'Installing pinned dependencies'
-Invoke-Native -Exe $Py -NativeArgs @('-m', 'pip', 'install', '-r', 'requirements-dev.txt', '--quiet') | Out-Null
+# Everything except tinysoundfont, which cannot be installed normally -- it depends on
+# pyaudio, which has no wheel here and cannot be built. The one package is filtered out
+# of the list and installed separately with --no-deps.
+$Excl = Join-Path ([System.IO.Path]::GetTempPath()) 'guitaroids-reqs.txt'
+Get-Content requirements.txt | Where-Object { $_ -notmatch '^tinysoundfont==' } |
+    Set-Content -Path $Excl
+Invoke-Native -Exe $Py -NativeArgs @('-m', 'pip', 'install', '-r', $Excl, '--quiet') | Out-Null
 
-Write-Step 'Installing optional packages that need --no-deps (requirements-optional.txt)'
+Write-Step 'Installing tinysoundfont with --no-deps (its pyaudio dep cannot build)'
 if (Invoke-Native -Exe $Py -NativeArgs @(
-        '-m', 'pip', 'install', '-r', 'requirements-optional.txt', '--no-deps', '--quiet'
+        '-m', 'pip', 'install', 'tinysoundfont==0.3.7', '--no-deps', '--quiet'
     ) -AllowFailure) {
     Write-Note 'ok - sampled soundfonts available'
 }
 else {
     Write-Note 'FAILED - continuing. The numpy pluck synth is the fallback,'
-    Write-Note 'so audio still renders without it. See requirements-optional.txt.'
+    Write-Note 'so audio still renders without it. See the top of requirements.txt.'
 }
 
 # --- assets ---------------------------------------------------------------------

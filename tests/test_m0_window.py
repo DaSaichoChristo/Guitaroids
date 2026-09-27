@@ -74,7 +74,7 @@ def test_opencv_and_mediapipe_are_not_declared_dependencies() -> None:
         assert not any(package in line for line in declared(ROOT / "requirements.txt")), (
             f"{package} is declared in requirements.txt again"
         )
-        assert not any(package in line for line in declared(ROOT / "requirements-lock.txt")), (
+        assert not any(package in line for line in declared(ROOT / "requirements.txt")), (
             f"{package} is in the lock file: the venv still has it installed"
         )
 

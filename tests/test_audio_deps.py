@@ -1,7 +1,7 @@
 """Locks in the --no-deps install decision for tinysoundfont.
 
 `pyaudio` has no Linux wheel and cannot be built on a plain box, so tinysoundfont
-must be installed with --no-deps (see requirements-optional.txt). That is only
+must be installed with --no-deps (see the top of requirements.txt). That is only
 safe because pyaudio is imported in exactly one place, `Synth.start()`, which we do
 not call -- soundfonts are loaded with `sfload()` instead.
 
@@ -76,7 +76,7 @@ def test_sfload_loads_a_soundfont_without_pyaudio() -> None:
     at the top of the function body, so on this box it raises ModuleNotFoundError.
     `sfload()` does not, and it is the only loader we can use. If a future
     tinysoundfont moved the import somewhere reachable, this is the test that says
-    so -- and requirements-optional.txt is what would need rewriting.
+    so -- and requirements.txt is what would need rewriting.
     """
     import numpy as np
 

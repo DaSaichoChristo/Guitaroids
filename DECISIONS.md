@@ -58,7 +58,7 @@ is true today, and `planned` is a statement of intent.
 | soundfile 0.14.0 decodes audio; **no resampler needed** — the stream opens at the file's own rate | live | §3.1 |
 | ~~Never `pip install -r requirements.txt`; use `scripts/setup.sh`~~ — **withdrawn**: a bare install works, verified in a clean venv. `setup.sh` is still the supported path, for tinysoundfont, a soundfont and the M0 gate | superseded | §27.2, supersedes §2.2 |
 | Requirements stay **curated**, with `pip freeze` kept separately as a lock file | live | §6.2 |
-| tinysoundfont 0.3.7, installed **`--no-deps`** from a separate step | live | §7.5, §9 |
+| tinysoundfont 0.3.7, installed **`--no-deps`**, and filtered out of the bulk install so the pyaudio build never starts | live | §7.5, §9, §31 |
 | ~~mido~~ — **taken off the table**; no MIDI round trip, the synth reads the `Chart` | live | §9 |
 | FluidR3 mono soundfont, fetched rather than committed (MIT) | live | §7.5 |
 | Soundfonts **do not clip** — a six-note chord peaks at 0.22; `sfload(gain=…)` is not a level control, so boost the **rendered buffer** | live | §22.2 |

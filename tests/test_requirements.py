@@ -29,9 +29,15 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 REQUIREMENTS = ROOT / "requirements.txt"
-OPTIONAL = ROOT / "requirements-optional.txt"
-DEV = ROOT / "requirements-dev.txt"
-LOCK = ROOT / "requirements-lock.txt"
+
+#: There used to be four files: a curated list, a lock, an optional set and a dev set.
+#: There is one now -- `pip freeze` -- because knowing every dependency in one place is
+#: worth more than the separation was. What that costs is this file's other job: the
+#: curated list could say *why* a pin was there, and a freeze cannot. So the tests below
+#: assert the properties a generated file can actually have (it matches the venv, it
+#: carries no stale claims, the install caveat is stated) and the ones that needed a
+#: curated file are gone rather than rewritten to pass.
+LOCK = REQUIREMENTS
 
 PIN = re.compile(r"^([A-Za-z0-9_.\-]+)==([^\s#]+)")
 
@@ -155,13 +161,13 @@ def test_the_opencv_caveat_stays_gone() -> None:
     """
     declared = _pin_lines(REQUIREMENTS)
     assert not any("opencv" in line.lower() for line in declared), (
-        "OpenCV is a dependency again"
+        "OpenCV is a dependency again. It was pulled in by mediapipe, which was "
+        "removed in §25: the input is a microphone, not a webcam."
     )
-    assert "opencv-contrib-python-headless" not in declared
-    # ...and the historical note stays, so nobody re-adds it without reading why.
-    assert "OpenCV" in REQUIREMENTS.read_text(), (
-        "the file should still say the trap existed and why it is gone"
-    )
+    # The *history* of that caveat used to be asserted here, so nobody re-added the
+    # package without reading why. It is not asserted any more, because this is a
+    # generated file and a comment above `pip freeze` output is a lie waiting to
+    # happen. The history lives in DESIGN.md §25 and the absence in test_m0_window.py.
 
 
 # --- no transitives -------------------------------------------------------------
@@ -177,148 +183,124 @@ TRANSITIVE = {"attrs", "matplotlib", "pillow", "contourpy", "cycler", "fonttools
               "python-dateutil", "pyside6-addons", "pyside6-essentials", "pycparser"}
 
 
-def test_no_transitive_is_pinned_without_saying_why(requirements: dict[str, str]) -> None:
-    """The lock file exists for these, so a pin here must justify itself.
+# --- a generated file's invariants, which are fewer ---------------------------
+#
+# Four tests that used to live here are gone rather than rewritten, and the loss is
+# real. A curated list could demand that every pin justify itself, that no transitive
+# be pinned without a reason, that at most two be, and that every pin be imported or
+# carry a named milestone. `pip freeze` satisfies none of those -- it lists nine
+# transitives and a test framework -- so the honest options were to keep tests that
+# cannot pass, or to drop them. They were dropped, and this is the note saying so.
 
-    This replaced a hard ban on `attrs`, which was the wrong shape: pinning a
-    transitive on purpose is a legitimate call, and a test that forbids the
-    package instead of the *silence* cannot be satisfied honestly. The test now
-    asks the useful question -- is the reason written down next to the pin?
+
+def test_it_matches_the_venv_it_was_generated_from() -> None:
+    """The one property a generated file can be held to, and the one that matters.
+
+    `requirements.txt` is `pip freeze` output, so its whole value is describing the
+    environment. The moment it stops matching, it is a stale list that looks current --
+    which is what §21.2 is about, one level up from code.
     """
-    unjustified = [
-        name for name in set(requirements) & TRANSITIVE if not justified(name)
-    ]
-    assert not unjustified, (
-        f"{unjustified} are transitive and pinned with no reason next to them; "
-        "add one or drop the pin"
+    import subprocess
+    import sys
+
+    def canonical(name: str) -> str:
+        """PEP 503: `PySide6-Addons`, `pyside6_addons` and `pyside6.addons` are one.
+
+        `pip freeze` writes underscores and the file was written with hyphens, so a
+        plain lowercase comparison reports three phantom missing packages. That is not a
+        detail: it is why the first version of this test failed on a file that matched
+        perfectly.
+        """
+        return re.sub(r"[-_.]+", "-", name).lower()
+
+    out = subprocess.run(
+        [sys.executable, "-m", "pip", "freeze"],
+        capture_output=True,
+        text=True,
+        check=True,
     )
+    frozen = {}
+    for line in out.stdout.splitlines():
+        if "==" in line:
+            name, version = line.split("==", 1)
+            frozen[canonical(name)] = version.strip()
+
+    recorded = {canonical(k): v for k, v in parse(REQUIREMENTS).items()}
+    assert recorded, "no pins parsed at all"
+
+    missing = sorted(set(frozen) - set(recorded))
+    extra = sorted(set(recorded) - set(frozen))
+    wrong = {
+        name: (recorded[name], frozen[name])
+        for name in set(recorded) & set(frozen)
+        if recorded[name] != frozen[name]
+    }
+    assert not missing, f"in the venv but not in requirements.txt: {missing}"
+    assert not extra, f"in requirements.txt but not the venv: {extra}"
+    assert not wrong, f"version drift from the venv: {wrong}"
 
 
-def test_the_transitive_pins_are_few(requirements: dict[str, str]) -> None:
-    """One is a decision. Five is a freeze that has not admitted it yet."""
-    assert len(set(requirements) & TRANSITIVE) <= 2, (
-        "more than two transitive pins: at this point requirements.txt is a lock "
-        "file with comments, and requirements-lock.txt already exists"
-    )
+def test_the_file_says_pip_install_cannot_work_here() -> None:
+    """The one fact that makes this file an inventory rather than an install spec.
 
+    `tinysoundfont` depends on `pyaudio`, which has no Linux wheel and cannot be built
+    without `portaudio.h`. **Verified**: a clean venv plus `pip install
+    tinysoundfont==0.3.7` exits with "Failed building wheel for pyaudio". So a bare
+    `pip install -r requirements.txt` fails, and a file that lists 18 pins without
+    saying so is a trap for whoever tries it next.
 
-# --- every pin is justified -----------------------------------------------------
-
-
-def test_every_pin_is_imported_or_has_a_milestone(requirements: dict[str, str]) -> None:
-    """A pin with neither a use nor a plan is a version nobody chose.
-
-    The check is deliberately weak in one direction: a package whose *only* mention
-    is in a comment passes if that comment is a milestone heading or a
-    section reference, which is the weakest thing that still counts as a reason.
-    """
-    sources = "\n".join(
-        path.read_text()
-        for path in ROOT.rglob("*.py")
-        if ".venv" not in path.parts
-    )
-    unjustified = []
-    for name in requirements:
-        needed_by = COMPANION.get(name)
-        if needed_by and any(
-            re.fullmatch(re.escape(needed_by), other, re.I) for other in requirements
-        ):
-            continue
-        # Case-insensitive, because a distribution name and a module name differ:
-        # `PyGuitarPro` in the file, `import guitarpro` in the code, and the pin
-        # compares lowercased against the lock.
-        module = re.escape(MODULE_NAME.get(name, name))
-        imported = re.search(rf"^\s*(?:import|from)\s+{module}\b", sources, re.M | re.I)
-        if imported or justified(name):
-            continue
-        unjustified.append(name)
-    assert not unjustified, (
-        f"{unjustified} are pinned but neither imported nor explained; "
-        "add a milestone reference or drop the pin"
-    )
-
-
-def test_every_module_name_alias_is_real() -> None:
-    """The alias table is documentation, so it has to be true.
-
-    A distribution renamed or replaced, and the map goes stale -- and then
-    `test_every_pin_is_imported_or_has_a_milestone` starts passing for the wrong
-    reason, which is the failure mode this whole file exists to prevent.
-    """
-    sources = "\n".join(
-        path.read_text() for path in ROOT.rglob("*.py") if ".venv" not in path.parts
-    )
-    for distribution, module in MODULE_NAME.items():
-        if distribution not in parse(REQUIREMENTS):
-            continue
-        assert re.search(
-            rf"^\s*(?:import|from)\s+{re.escape(module)}\b", sources, re.M
-        ), f"{distribution} is pinned as {module}, but nothing imports {module}"
-
-
-def test_the_audio_pins_are_marked_as_unbuilt(requirements: dict[str, str]) -> None:
-    """`soundfile` is still a milestone pin, and it still is not imported.
-
-    The docstring here used to say "`sounddevice` and `soundfile` are for §1.5, and
-    nothing plays audio yet", which stopped being true in §23 -- the synth renders a
-    real tab and the transport plays it. `sounddevice` is now imported by
-    `audio/transport.py` and earns its place; `soundfile` is not imported anywhere,
-    because the app synthesises audio from a Chart and never decodes a file.
-
-    So the test keeps exactly the half that is still true, and the marker it checks
-    ("audio milestone") is what stops `soundfile` from being an unexplained pin. If
-    backing-track support or a WAV export ever lands, that pin becomes "imported
-    today" and this test should be deleted rather than relaxed.
+    `pip install --dry-run` reports success on this package, so the check cannot be
+    automated as an install -- which is why the claim is written into the file and
+    asserted here rather than proven on every run.
     """
     text = REQUIREMENTS.read_text()
-    for name in ("sounddevice", "soundfile"):
-        if name in requirements:
-            assert f"audio milestone" in text, "the audio pins lost their milestone note"
+    assert "pyaudio" in text
+    assert "portaudio.h" in text
+    assert "--no-deps" in text
+    assert "FAILS" in text or "fails" in text, (
+        "the file does not say that installing it with pip does not work"
+    )
 
 
-# --- the curated list and the lock agree ----------------------------------------
+def test_the_pins_that_matter_are_all_there() -> None:
+    """A freeze could lose a package and still look like a tidy list of eighteen.
+
+    These are the ones the app actually imports, plus the one that cannot be installed
+    normally. If any is missing the file no longer answers the question it exists for.
+    """
+    pins = {k.lower() for k in parse(REQUIREMENTS)}
+    for required in (
+        "pyside6", "shiboken6", "numpy", "soundfile", "sounddevice",
+        "pyguitarpro", "tinysoundfont",
+    ):
+        assert required in pins, f"{required} is missing from requirements.txt"
 
 
-def test_the_pins_are_all_in_the_lock(requirements: dict[str, str], lock: dict[str, str]) -> None:
-    """Otherwise the curated list and the frozen snapshot describe two projects."""
-    missing = sorted(set(requirements) - set(lock))
-    assert not missing, f"pinned here but absent from the lock: {missing}"
+def test_the_python_constraint_is_stated() -> None:
+    """3.12 is a real constraint -- cp310/cp312 wheels only -- and a freeze hides it.
 
-
-def test_every_pin_matches_the_lock(requirements: dict[str, str], lock: dict[str, str]) -> None:
-    wrong = {
-        name: (version, lock[name])
-        for name, version in requirements.items()
-        if name in lock and lock[name] != version
-    }
-    assert not wrong, f"version drift between requirements.txt and the lock: {wrong}"
-
-
-def test_the_optional_and_dev_files_are_small_and_deliberate() -> None:
-    """One package each, both explained, both installed differently."""
-    assert set(parse(OPTIONAL)) == {"tinysoundfont"}
-    assert set(parse(DEV)) == {"pytest"}
-    assert "no-deps" in OPTIONAL.read_text()
-    assert "requirements.txt" in DEV.read_text(), "dev installs the runtime too"
+    Nothing in a list of 18 pins says which interpreter it works on, so the fact has to
+    live in the header or a newcomer on 3.13 discovers it by failing to build.
+    """
+    text = REQUIREMENTS.read_text()
+    assert "3.12" in text
+    assert "cp310" in text and "cp312" in text
 
 
 def test_the_obsolete_bare_install_warning_is_gone() -> None:
-    """**The absence is the assertion**, and it is the whole point of this update.
+    """**The absence is the assertion.**
 
-    A bare `pip install -r requirements.txt` now installs everything and the app
-    runs: verified in a clean venv, where the modules import and a window opens. The
-    file used to say it could not, which was true once and stopped being true when
-    mediapipe went (§25).
-
-    Leaving the warning in place is worse than leaving it out. People would avoid a
-    path that works, and the next person to hit a real install problem would discount
-    everything else in the file too.
+    The file used to say a bare `pip install` was "NOT equivalent" and named
+    `scripts/setup.sh` the only supported path -- which was true when mediapipe pulled in
+    the GUI OpenCV build (§25) and stopped being true when mediapipe went. Leaving a
+    warning in place is worse than leaving it out: people avoid a path that works, and
+    the next person to hit a real problem discounts everything else in the file too.
     """
     text = REQUIREMENTS.read_text()
     flat = re.sub(r"\s+", " ", text)
     assert "ONLY supported install path" not in flat
     assert "is not equivalent" not in flat, "the old claim is still in here"
-    assert "A BARE INSTALL NOW WORKS" in text, "and the replacement is not"
+    assert "INVENTORY" in text, "and it does not say what the file now is"
 
 
 def test_the_one_install_caveat_that_remains_is_still_stated() -> None:

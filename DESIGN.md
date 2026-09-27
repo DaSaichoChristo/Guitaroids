@@ -3790,3 +3790,95 @@ it is a precondition.
   learned to guard against and this one did not.
 - **The keyboard is still the default input**, and §24.4's reason for keeping it is no
   longer the plan.
+
+## §31 — One requirements file, and the claim that flipped with it (2026-09-27)
+
+**Tests: 928 in total — 915 excluding `tests/test_docs.py`.** A deliberate simplification:
+`requirements.txt` is now `pip freeze` output, and `requirements-lock.txt`,
+`requirements-optional.txt` and `requirements-dev.txt` are deleted. The reason is a good
+one — knowing every dependency for the whole project in one place is worth more than the
+separation was.
+
+**It is not impact-free, and the one consequence is worth stating plainly.**
+`pip install -r requirements.txt` now **fails** on this machine. §27.2 verified that a
+bare install worked, and that was true of the *curated* list, which left tinysoundfont
+out. A freeze includes it, and tinysoundfont depends on `pyaudio`, which has no Linux
+wheel and cannot be built without `portaudio.h`.
+
+Verified rather than assumed, in a clean venv:
+
+```
+$ pip install tinysoundfont==0.3.7
+ERROR: Failed building wheel for pyaudio
+```
+
+And `pip install --dry-run` exits 0 on it, so a dry run is not evidence either way —
+which is §7.5's warning, still true, and the reason this cannot be a test.
+
+So the file is now an **inventory, and says so in its own header**, with the failure
+quoted. A list of eighteen packages that does not say it cannot be installed is a trap
+for whoever tries it next, and the previous version of `test_the_bare_install_claim_is_
+verified_not_asserted` asserted the *opposite* claim — so it would have passed straight
+over the change that made it wrong. It now asserts the flipped claim, the evidence, and
+that a dry run is not evidence.
+
+### 31.1 The setup scripts became the install path, properly
+
+They had to do more than rename their arguments. Both now **filter tinysoundfont out of
+the bulk install** and install it separately with `--no-deps`, because installing the
+whole list first would fail on pyaudio and never reach the second step. `mktemp` and a
+`trap` in the shell; `Join-Path $env:TEMP` in PowerShell.
+
+So §27's "a bare install works, and here is what it costs you" became "a bare install
+fails, and here is exactly why", and the scripts are once again the only working path —
+which is what they were before §27, for a different reason and with better evidence.
+
+### 31.2 Four guards were dropped, not rewritten
+
+A curated list could demand that every pin justify itself, that no transitive be pinned
+without a reason, that at most two be pinned at all, and that every pin be imported or
+carry a named milestone. `pip freeze` satisfies none of those — it lists nine
+transitives and a test framework.
+
+The honest options were to keep tests that cannot pass, or to drop them. They were
+dropped, and the loss is real:
+
+- **`test_no_transitive_is_pinned_without_saying_why`** — a freeze cannot say why.
+- **`test_the_transitive_pins_are_few`** — a freeze lists them all.
+- **`test_every_pin_is_imported_or_has_a_milestone`** — `pytest` and `pluggy` are pins
+  that nothing imports.
+- **`test_the_audio_pins_are_marked_as_unbuilt`** — the milestone scheme it enforced is
+  gone with the curated file.
+
+What replaced them is the set of things a generated file *can* be held to:
+
+- **`test_it_matches_the_venv_it_was_generated_from`** — the only property that matters
+  for a freeze, and the one that makes it worth having. It needs PEP 503 name
+  normalisation: `pip freeze` writes `pyside6_addons` and the file said
+  `PySide6-Addons`, so a plain lowercase comparison reported three phantom missing
+  packages. That was not a detail, it was the first version of the test failing on a
+  file that matched perfectly.
+- **`test_the_file_says_pip_install_cannot_work_here`** — pyaudio, `portaudio.h`,
+  `--no-deps` and the failure.
+- **`test_the_pins_that_matter_are_all_there`** — a freeze can lose a package and still
+  look like a tidy list of eighteen.
+- **`test_the_python_constraint_is_stated`** — nothing in eighteen pins says which
+  interpreter it works on, and 3.12 is a real constraint (cp310/cp312 wheels only).
+
+The comment header is now above generated output, which is a compromise: it is
+hand-written and will not survive a naive `pip freeze > requirements.txt`. It says so in
+its own first line, and `test_it_matches_the_venv` catches the case where the pins are
+stale even if the prose is not.
+
+### Not done — §31
+
+- **The comment header is not regenerated with the pins.** A `pip freeze >` would
+  silently drop it. A Makefile target, or a script that re-emits header-then-freeze,
+  would make it durable; nothing does that yet.
+- **Four guards are gone and not replaced in spirit.** The next person to add a
+  dependency has no test asking why. That was the point of the curated file.
+- **The dry-run trap is still a trap.** Nothing in CI can catch it, because the failure
+  only appears on a real install, which needs a network and a venv.
+- **`setup.ps1` has still never been run.** No PowerShell on this machine, so its
+  filter-then-install change is verified only by `tests/test_setup_scripts.py` asserting
+  the two scripts agree.

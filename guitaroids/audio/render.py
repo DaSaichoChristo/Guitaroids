@@ -175,7 +175,7 @@ def _render_soundfont(
 
     synth = tsf.Synth(samplerate=sample_rate)
     # sfload, not Synth.start(): start() imports pyaudio, which has no wheel here
-    # and cannot be built (requirements-optional.txt). sfload does not.
+    # and cannot be built (see the top of requirements.txt). sfload does not.
     soundfont_id = synth.sfload(str(soundfont_path), gain=0.0)
     if soundfont_id < 0:
         raise RenderError(f"could not load the soundfont at {soundfont_path}")

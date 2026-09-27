@@ -68,10 +68,29 @@ def executable_lines(text: str) -> str:
     return "\n".join(lines)
 
 
-def test_both_use_requirements_optional_with_no_deps(sh: str, ps1: str) -> None:
-    for text in (sh, ps1):
-        assert "requirements-optional.txt" in text
-        assert "--no-deps" in text, "the --no-deps install is mandatory for tinysoundfont"
+def test_both_install_tinysoundfont_with_no_deps(sh: str, ps1: str) -> None:
+    """The --no-deps install is mandatory, and it is the reason these scripts exist.
+
+    `requirements.txt` is one `pip freeze` file, so tinysoundfont is *in* it -- and
+    installing it normally fails, because pyaudio has no wheel and cannot be built.
+    Both scripts therefore have to take it out of the list and install it separately.
+    The `requirements-optional.txt` this used to name is gone.
+    """
+    for name, text in (("setup.sh", sh), ("setup.ps1", ps1)):
+        assert "--no-deps" in text, f"{name} lost the --no-deps install"
+        assert "tinysoundfont" in text, f"{name} no longer installs tinysoundfont"
+        assert "requirements-optional.txt" not in text, (
+            f"{name} still points at requirements-optional.txt, which is deleted"
+        )
+        assert "requirements-dev.txt" not in text, (
+            f"{name} still points at requirements-dev.txt, which is deleted"
+        )
+        # And it must be *filtered out* of the bulk install, not just installed after:
+        # installing the whole list first would fail on pyaudio and never reach the
+        # --no-deps step.
+        assert "-notmatch '^tinysoundfont=='" in text or (
+            "-v '^tinysoundfont=='" in text
+        ), f"{name} does not exclude tinysoundfont from the bulk install"
 
 
 def test_both_fetch_the_same_soundfont(ps1: str) -> None:
@@ -156,18 +175,25 @@ def test_both_point_at_requirements_for_what_they_add(sh: str, ps1: str) -> None
 
 
 def test_the_bare_install_claim_is_verified_not_asserted() -> None:
-    """The file states a bare install works. That is a fact about a clean venv.
+    """The claim flipped: `pip install -r requirements.txt` now **fails**.
 
-    It cannot be checked in this suite -- it needs a venv and a network, and a test
-    that creates one would be slow and flaky -- so what is pinned here is that the
-    claim is *recorded*, including how it was checked, so a reader can repeat it and
-    so nobody quietly deletes the evidence.
+    It worked in §27, when the curated list left tinysoundfont out. `requirements.txt`
+    is `pip freeze` now, so tinysoundfont is in the list, and it cannot be installed
+    normally. So what is pinned here is the *opposite* claim, with the evidence, because
+    a file that lists 18 packages and does not say it cannot be installed is a trap for
+    whoever tries it next -- and the previous version of this test asserted the opposite
+    claim, so it would have passed over the change that made it wrong.
     """
     text = (ROOT / "requirements.txt").read_text()
     flat = re.sub(r"\s+", " ", text)
-    assert "A BARE INSTALL NOW WORKS" in text
+    assert "FAILS" in flat, "the file does not say that installing it with pip fails"
+    # Flattened, because the evidence is quoted across two comment lines and a reader
+    # sees it as one sentence.
+    assert "Failed building wheel for pyaudio" in flat, "say what the failure was"
     assert "clean venv" in flat, "say how it was checked"
-    assert "pluck" in flat and "sampled" in flat, "say what you lose without setup.sh"
+    assert "dry-run" in flat, (
+        "and say that a dry run is not evidence, or the next person will use one"
+    )
 
 
 def test_powershell_reports_native_exit_codes(ps1: str) -> None:

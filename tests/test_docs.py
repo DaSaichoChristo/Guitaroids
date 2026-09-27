@@ -207,15 +207,17 @@ def test_the_documented_python_minor_version_is_the_one_in_the_venv() -> None:
         )
 
 
-def test_the_documented_package_count_matches_the_lock() -> None:
-    """The lock is the artefact; the docs are the claim about it."""
-    lock = (ROOT / "requirements-lock.txt").read_text()
-    pins = len(re.findall(r"^[A-Za-z0-9_.-]+==", lock, re.M))
+def test_the_documented_package_count_matches_the_file() -> None:
+    """The artefact is the one `pip freeze` file; the docs are the claim about it.
+
+    There is no lock beside it any more (§31), so this is what a "18 packages" in
+    DECISIONS.md has to be true of."""
+    pins = len(re.findall(r"^[A-Za-z0-9_.-]+==", (ROOT / "requirements.txt").read_text(), re.M))
     assert pins > 0
     for path in FRONT_DOOR:
         for m in re.finditer(r"(\d+) packages", _read(path)):
             assert int(m.group(1)) == pins, (
-                f"{path.name} says {m.group(1)} packages; requirements-lock.txt pins "
+                f"{path.name} says {m.group(1)} packages; requirements.txt pins "
                 f"{pins}"
             )
 
