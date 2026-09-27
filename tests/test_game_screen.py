@@ -1257,3 +1257,88 @@ def test_the_click_level_is_the_click_volume_setting(shell, chart, monkeypatch) 
     screen._on_audio_ready(_fake_render())
 
     assert seen.get("level") == pytest.approx(0.9), seen
+
+
+# --- the practice tempo actually slowing something (§29.2) --------------------
+#
+# The rate was saved, carried in `PlayRequest`, read into `screen._rate`, printed by
+# `rate` and asserted by a dozen tests -- and applied to `position()` on ONE of its
+# two branches, the wall-clock fallback. A playing song takes the other branch, so a
+# practice tempo changed nothing at all. Every existing test checked the arithmetic
+# (`rate_for`) or the field (`screen.rate`); none checked the seam. This is §21.2's
+# failure for the third time in this project.
+
+
+def test_slowing_the_tempo_slows_the_notes_itself(shell, chart) -> None:
+    """The chart the game hands to the judge and the view is a slower chart.
+
+    Not a field check: these are the note times `GameState` will judge against.
+    """
+    written = [n.time for n in chart.notes]
+    screen = game_via_shell(shell, chart, bpm=chart.tempo / 2)
+    assert screen.rate == pytest.approx(0.5)
+    assert [n.time for n in screen.chart.notes] == pytest.approx([t / 0.5 for t in written])
+    assert screen.chart.tempo == max(1, round(chart.tempo * 0.5))
+
+
+def test_slowing_the_tempo_makes_the_rendered_audio_longer(shell, chart) -> None:
+    """The music has to slow, or the bar crawls under a song playing at full speed.
+
+    This is the half that makes the bug audible rather than merely measurable: the
+    rendered buffer is what the sound card plays, and until §29 it was rendered from
+    the un-retimed chart while the clock was the audio clock.
+    """
+    from guitaroids.settings import Settings
+
+    screen = prepared_screen(shell, chart, Settings())
+    record_playback_calls(screen.context)
+    rendered: list = []
+    real_render = screen._render_audio
+
+    def spy(chart_arg, request):  # noqa: ANN001
+        rendered.append(chart_arg)
+        return real_render(chart_arg, request)
+
+    screen._render_audio = spy  # type: ignore[method-assign]
+    screen.context.settings.set_bpm_for("test", chart.tempo / 2)
+    screen.context.request_play("test", 1, bpm=chart.tempo / 2)
+    screen._load_request()
+
+    assert rendered, "no render was started"
+    assert rendered[-1].notes[-1].time == pytest.approx(chart.notes[-1].time / 0.5)
+
+
+def test_the_written_tempo_is_not_the_slowed_one(shell, chart) -> None:
+    """`rate_for` divides by the tab's written tempo, so it must not see the slow one.
+
+    Both orderings are load-bearing and one of them is counter-intuitive: resolving
+    the rate *after* retiming asks a chart already halved for a half-speed request and
+    gets 1.0 back, which is exactly what three tests reported until this was run.
+    """
+    screen = game_via_shell(shell, chart, bpm=chart.tempo / 2)
+    assert screen.written_bpm() == max(1, round(chart.tempo * 0.5))
+    # The *rate* was computed from the written tempo, which is why it is 0.5 and not
+    # 0.25 (asking a halved chart for half of itself) or 1.0.
+    assert screen.rate == pytest.approx(0.5)
+
+
+def test_a_song_at_its_written_tempo_is_untouched(shell, chart) -> None:
+    """`retime` returns the same object at 1.0, so the common case allocates nothing."""
+    from guitaroids.model.chart import retime
+
+    assert retime(chart, 1.0) is chart
+    screen = game_via_shell(shell, chart)
+    assert screen.chart.notes == chart.notes
+
+
+def test_the_count_in_slows_with_the_song(shell, chart) -> None:
+    """At half speed a four-beat count-in is twice as long, and that is the intent.
+
+    §29 records the cost honestly: at 0.5 of a 76 BPM tab a bar is 6.3 seconds, so
+    the wait before the first note is long. It is a constant offset rather than one
+    that grows, and the click slowing with the music is what makes the bar line land
+    where the player is expecting it.
+    """
+    written = game_via_shell(shell, chart)._count_in_seconds()
+    screen = game_via_shell(shell, chart, bpm=chart.tempo / 2)
+    assert screen._count_in_seconds() == pytest.approx(written / 0.5)

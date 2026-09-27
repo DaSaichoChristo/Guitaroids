@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..audio.click import add_count_in, beats_per_bar
-from ..model.chart import Chart
+from ..model.chart import Chart, retime
 from ..session.judge import GameState, Verdict
 from .render_task import ChartRenderer, estimate_seconds
 from .screens import ScreenBase, constrained_button, content_column, heading
@@ -207,6 +207,22 @@ class Game(ScreenBase):
             self._flash.setText("")
             return
 
+        # The rate is resolved from the tab's *written* tempo, so the chart has to be
+        # in place first -- and the rate has to be resolved *before* the chart is
+        # retimed. Both orderings are load-bearing: ask a chart already scaled to 0.5
+        # for a half-speed request and it reports 1.0, and three existing tempo tests
+        # did exactly that until they were run. 0.0 in the request means "as written",
+        # which is a rate of 1.0.
+        self._chart = chart
+        self._rate = self.rate_for(request.bpm if request else 0.0)
+        # One insertion point for the practice tempo. The chart is slowed here rather
+        # than the clock being divided, so the *rendered audio* is slower too: the
+        # music, the bar and the judge all speak the same slowed time. Until §29 this
+        # did nothing on the audio path, which is the path a playing song takes -- the
+        # rate was applied only to the wall-clock fallback, so a practice tempo
+        # changed nothing at all.
+        chart = retime(chart, self._rate)
+
         self._chart = chart
         self._state = GameState(chart)
         self._offset = float(request.offset_seconds) if request else 0.0
@@ -216,10 +232,6 @@ class Game(ScreenBase):
         self._title.setText(chart.title or chart.track_name)
         self._banner.setText("")
         self._flash.setText("")
-        # The rate before the clock starts, so the first frame is already at the
-        # right speed rather than snapping to it on the next tick. 0.0 means the
-        # request asked for the tab's own tempo, which is a rate of 1.0.
-        self._rate = self.rate_for(request.bpm if request else 0.0)
         self._render_audio(chart, request)
         self._timer.start()
         self._refresh_tally()

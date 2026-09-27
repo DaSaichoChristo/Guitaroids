@@ -424,3 +424,68 @@ def test_an_empty_chart_has_no_onsets_and_no_rate() -> None:
     empty = replace(make_chart([(1.0, 0, 0)]), notes=())
     assert empty.onset_count == 0
     assert empty.onsets_per_second == 0.0
+
+
+# --- retime (§29.2) ------------------------------------------------------------
+
+
+def test_retime_stretches_every_time_by_the_rate() -> None:
+    """Times divide by the rate: 0.5 means the same song taking twice as long."""
+    from guitaroids.model.chart import retime
+
+    chart = make_chart([(0.0, 0, 0), (1.0, 1, 2), (2.5, 2, 3)], tempo=76)
+    slower = retime(chart, 0.5)
+    assert [n.time for n in slower.notes] == pytest.approx([0.0, 2.0, 5.0])
+    assert [b.time for b in slower.bar_lines] == pytest.approx(
+        [b.time / 0.5 for b in chart.bar_lines]
+    )
+
+
+def test_retime_lowers_the_tempo_so_the_count_in_follows() -> None:
+    from guitaroids.model.chart import retime
+
+    assert retime(make_chart(tempo=76), 0.5).tempo == 38
+    assert retime(make_chart(tempo=76), 0.75).tempo == 57
+
+
+def test_retime_at_one_returns_the_same_object() -> None:
+    """The common case must allocate nothing, and must not hand back a copy."""
+    from guitaroids.model.chart import retime
+
+    chart = make_chart()
+    assert retime(chart, 1.0) is chart
+
+
+def test_retime_never_produces_a_zero_tempo() -> None:
+    """A one-BPM tab at a 1% rate would round to 0, and tempo 0 divides by zero."""
+    from guitaroids.model.chart import retime
+
+    assert retime(make_chart(tempo=60), 0.01).tempo >= 1
+
+
+def test_retime_refuses_a_rate_above_one() -> None:
+    """Slowing down is the point; a tab cannot be practised faster and stay in tune.
+
+    §18.3 clamps the control to 1.0, so this is a second line of defence rather than
+    a likely caller error -- which is exactly why it should raise rather than guess.
+    """
+    from guitaroids.model.chart import ChartError, retime
+
+    with pytest.raises(ChartError):
+        retime(make_chart(), 1.5)
+    with pytest.raises(ChartError):
+        retime(make_chart(), 0.0)
+
+
+def test_retime_preserves_the_notes_themselves() -> None:
+    """Only times move. Lane, fret, pitch and chord size are the song, not the clock."""
+    from guitaroids.model.chart import retime
+
+    chart = make_chart([(0.0, 0, 3), (0.0, 1, 5)], tempo=90, collapse=False)
+    slower = retime(chart, 0.5)
+    for before, after in zip(chart.notes, slower.notes):
+        assert after.lane == before.lane
+        assert after.fret == before.fret
+        assert after.pitch == before.pitch
+        assert after.string == before.string
+        assert after.chord_size == before.chord_size

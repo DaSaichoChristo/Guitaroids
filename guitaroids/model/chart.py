@@ -105,6 +105,48 @@ def count_chord_sizes(notes: list[Note]) -> dict[float, int]:
     return {onset[0].time: len(onset) for onset in group_by_onset(notes)}
 
 
+def retime(chart: Chart, rate: float) -> Chart:
+    """A copy of ``chart`` to be played at ``rate`` times its written tempo.
+
+    ``rate`` is the same number the game screen's clock uses: 1.0 is the tab as
+    written, 0.75 is three quarters of it. Every time is divided by the rate and the
+    tempo is multiplied by it, so a chart at 0.5 is the same song taking twice as
+    long — the bar lines, the note times and the count-in all move together.
+
+    **This is how the practice tempo slows the music, and it is the only place that
+    needs to change.** The alternative was to time-stretch the rendered buffer, which
+    is wrong twice over: resampling shifts the pitch of every guitar note, and a
+    phase vocoder is a large piece of machinery for a problem that does not exist
+    here, because the app *generates* the audio and can simply be given a slower
+    chart. Doing it here rather than in the renderer means one insertion point: the
+    game screen, the judge and the tab view are all handed this chart, so they agree
+    by construction.
+
+    Dividing the clock by the rate instead would have been worse than doing nothing.
+    The bar would crawl while the music played at the written tempo, and the two
+    would drift apart by half a second per minute of song.
+
+    Returns ``chart`` unchanged for a rate of 1.0, so the common case allocates
+    nothing and a caller cannot accidentally compare two different objects.
+    """
+    if rate == 1.0:
+        return chart
+    if not 0 < rate <= 1.0:
+        raise ChartError(f"rate must be in (0, 1], got {rate!r}")
+    return replace(
+        chart,
+        notes=tuple(replace(note, time=note.time / rate) for note in chart.notes),
+        bar_lines=tuple(
+            replace(bar, time=bar.time / rate) for bar in chart.bar_lines
+        ),
+        # Rounded because `tempo` is an int, and because the count-in and the click
+        # are computed from it. 0.5 of 76 BPM is 38 either way; a rate of 0.99 of an
+        # odd tempo is 75.24, and a count-in at 75 BPM is indistinguishable from one
+        # at 75.24.
+        tempo=max(1, round(chart.tempo * rate)),
+    )
+
+
 def collapse_chords(notes: list[Note], rule: CollapseRule = CollapseRule.HIGHEST) -> list[Note]:
     """Reduce each onset to a single note, per ``rule``.
 
