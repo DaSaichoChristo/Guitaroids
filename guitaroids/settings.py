@@ -44,7 +44,10 @@ from pathlib import Path
 #: any more, so there is one input and nothing to choose between. The key is dropped
 #: on load, and ``"keyboard"`` -- the old default, and the value in every existing
 #: file -- needs no mapping, because reading any file now means the microphone.
-SETTINGS_VERSION = 4
+#:
+#: 5 -- ``song_best_accuracy`` is new (§34). Nothing is dropped, so a v4 file gains
+#: the key with an empty dict and every older file loads unchanged.
+SETTINGS_VERSION = 5
 
 #: Files below this version had their ``collapse_chords`` key dropped on load, so
 #: that the flip in version 2 reaches an existing installation.
@@ -164,6 +167,18 @@ class Settings:
     song_offsets_ms: dict[str, float] = field(default_factory=dict)
     """Per-tab audio alignment, keyed by slug, so a manual tweak sticks."""
 
+    song_best_accuracy: dict[str, float] = field(default_factory=dict)
+    """Best accuracy per tab, keyed by slug. 0.0-1.0.
+
+    There are no points (§34.1), so this is the one number in a run worth comparing
+    between attempts, and it is what the results screen means by "best".
+
+    Keyed by slug like its two neighbours above, which means the best is across *all*
+    tracks in a tab. A per-track key would be more precise and is not what the
+    existing per-song data does, so consistency won; a tab whose tracks are wildly
+    different is the case that notices.
+    """
+
     song_bpm: dict[str, float] = field(default_factory=dict)
     """Per-tab practice tempo, keyed by slug.
 
@@ -261,6 +276,20 @@ class Settings:
                             continue
                         tempos[slug] = max(MIN_BPM, min(MAX_BPM, number))
                 values[name] = tempos
+            elif name == "song_best_accuracy":
+                bests: dict[str, float] = {}
+                if isinstance(given, dict):
+                    for slug, value in given.items():
+                        if not isinstance(slug, str):
+                            continue
+                        number = _parse_number(value)
+                        if number is None:
+                            continue
+                        # Clamped rather than discarded: a stored 1.4 is nonsense, but
+                        # it is obviously meant to be the best run, and dropping it
+                        # would report that song as never having been played.
+                        bests[slug] = max(0.0, min(1.0, number))
+                values[name] = bests
             elif name == "version":
                 # A file older than this build has been *migrated* on the way in,
                 # so it now reports itself as current. Without that, a
@@ -352,3 +381,39 @@ class Settings:
         get a 20 BPM song, and the clamp is for *positive* nonsense (1 BPM, 9999).
         """
         self.song_bpm[slug] = 0.0 if bpm <= 0.0 else _clamp_float(bpm, MIN_BPM, MAX_BPM, MIN_BPM)
+
+    def best_accuracy_for(self, slug: str, default: float = 0.0) -> float:
+        """The best accuracy recorded for one tab, or ``default`` if it has never been.
+
+        The caller's default rather than a constant, like :meth:`bpm_for`: "no run
+        recorded" is not the same claim as "a run that scored nothing", and a screen
+        that prints 0% for both would tell a player who has never played the song that
+        their first attempt was their worst.
+        """
+        return self.song_best_accuracy.get(slug, default)
+
+    def record_accuracy_for(self, slug: str, accuracy: float) -> bool:
+        """Record a run's accuracy, keeping the best. Returns whether it is a new best.
+
+        **The first run for a song is always a new best**, including one that scored
+        nothing. The test is against a *missing* key rather than against 0.0, because
+        the two differ exactly here: a first attempt at 0% has nothing to beat, so it
+        establishes the bar. Comparing against 0.0 instead made the first run of a
+        song report "not a best" while still storing it, which is a contradiction a
+        screen would have to explain.
+
+        Strictly greater after that, so replaying an identical run does not announce a
+        new best -- a screen that congratulated you every time you retried the same
+        attempt would be teaching the player to ignore it.
+
+        An empty slug records nothing, because there is no song to attach it to and a
+        per-song store with one nameless entry is a bug waiting to be read.
+        """
+        if not slug:
+            return False
+        value = _clamp_float(accuracy, 0.0, 1.0, 0.0)
+        previous = self.song_best_accuracy.get(slug)
+        if previous is None or value > previous:
+            self.song_best_accuracy[slug] = value
+            return True
+        return False
