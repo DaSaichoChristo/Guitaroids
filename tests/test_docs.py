@@ -409,3 +409,60 @@ def test_code_fences_are_balanced(path: Path) -> None:
         f"{path.name} has {len(fences)} code fences, which is odd, so everything "
         f"after fence {len(fences) - 1} renders inside a code block"
     )
+
+
+# --- DESIGN.md's own index -----------------------------------------------------
+
+
+def _design_sections() -> list[str]:
+    """Section numbers in order, from the ``## §N`` headings themselves."""
+    return re.findall(r"^## §(\d+) —", _read(DESIGN), re.M)
+
+
+def _indexed_sections() -> list[str]:
+    """Section numbers as the preamble's index table lists them."""
+    block = _read(DESIGN).split("## The sections", 1)[1].split("\n---", 1)[0]
+    return re.findall(r"^\| §(\d+)\s*\|", block, re.M)
+
+
+def test_the_section_index_lists_every_section_and_nothing_else() -> None:
+    """Thirty-five sections and a four-thousand-line file with no index is a file
+    nobody can navigate, and an index that goes stale is worse than none.
+
+    So the table and the headings are compared as ordered lists: adding §37 without a
+    row for it fails here, and so does a row for a section that does not exist.
+    """
+    headings = _design_sections()
+    indexed = _indexed_sections()
+    assert len(headings) > 30, f"only {len(headings)} sections found; the parse broke"
+    assert indexed == headings, (
+        f"the index is out of date. Headings: {headings}\nindex:    {indexed}"
+    )
+
+
+def test_the_index_says_how_many_sections_there_are() -> None:
+    """A count in prose is a count that goes stale, so it is checked rather than
+    trusted — this is the whole argument for §28.4's test counts, applied to the
+    index's own summary line."""
+    headings = _design_sections()
+    block = _read(DESIGN).split("## The sections", 1)[1].split("\n---", 1)[0]
+    claimed = re.search(r"^(\d+) sections,", block, re.M)
+    assert claimed, "the index no longer states how many sections there are"
+    assert int(claimed.group(1)) == len(headings), (
+        f"the index says {claimed.group(1)} sections and there are {len(headings)}"
+    )
+
+
+def test_the_missing_section_is_explained_rather_than_silently_absent() -> None:
+    """§33 is a real gap, and a reader hitting §32 then §34 deserves to know why.
+
+    The gap is not a defect to be tidied away — addresses are stable, so §33 cannot be
+    reused — which means the only honest handling is to say so where the gap is
+    visible.
+    """
+    headings = [int(n) for n in _design_sections()]
+    gaps = [n for n in range(min(headings), max(headings) + 1) if n not in headings]
+    for gap in gaps:
+        assert f"§{gap} is missing" in _read(DESIGN), (
+            f"section {gap} is absent from the sequence and nothing explains it"
+        )

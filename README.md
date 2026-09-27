@@ -78,7 +78,6 @@ Screenshots render at scale 1.0 into a 960x640 frame by default — the 1080p de
 size — so they stay comparable run to run whatever display you are on. Pass
 `--scale` to inspect the enlarged layout.
 
-
 ## Adding songs
 
 Drop a `.gp5` tab into `songs/`, or use **Import GP** in the app, which copies one
@@ -142,7 +141,6 @@ Both have bitten this project and both are enforced by tests:
 ```
 guitaroids/
   model/     Chart, Note, repeat unrolling      pure data, zero I/O
-  devices/   (empty; the transport is in audio/)
   session/   PlayRequest, judge                  what to play, and how it scores
   ui/        screens, library loader, theme     menu screens are built
   audio/     render, click, transport            the master clock lives here

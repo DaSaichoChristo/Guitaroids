@@ -1,15 +1,20 @@
 # DESIGN.md — design & work log
 
-Guitaroids. A Guitar Hero-style app that tracks your hands via webcam and walks you
-through Guitar Pro tabs at tempo, counting misses.
+Guitaroids. A Guitar Hero-style app that listens to your **guitar** and walks you
+through Guitar Pro tabs at tempo, judging every note.
+
+> **This sentence is the only part of this preamble that has been rewritten.** It said
+> the app "tracks your hands via webcam", which §25 removed along with mediapipe and
+> OpenCV, and §32 removed the keyboard that stood in for a microphone. The preamble is
+> the file's front door and it was describing a design three sections out of date; §1
+> keeps the original plan as history, which is what the append-only rule is for.
 
 **This file is the project's memory.** §1 is the original plan. Everything after that
 is dated work entries.
 
 > **Want the decisions, not the history?** Read [`DECISIONS.md`](DECISIONS.md) — a
 > one-screen index of every current decision with a status and a link to the
-> section here that justifies it. The pointer is the only navigational addition
-> this preamble has ever received; no section has been edited.
+> section here that justifies it.
 
 ## The convention (this file's rule about itself)
 
@@ -27,6 +32,54 @@ assumption, in those words.
 
 Sections are addressed as `§N` and `§N.M`. They are stable addresses, so "§4.1
 supersedes §2" resolves without ambiguity.
+
+## The sections
+
+35 sections, in the order they were written. Dates are all 2026-09-26 or
+-27 and are in the headings, so they are left out here.
+
+| Section | What it records |
+|---|---|
+| §1  | Plan |
+| §2  | Dependency research |
+| §3  | Backing audio pipeline |
+| §4  | Input latency, and a revised milestone order |
+| §5  | M0 executed: the gate passes |
+| §6  | Song import system |
+| §7  | Real tab, track choice, and generated audio |
+| §8  | Track choice and chord collapse implemented |
+| §9  | MIDI removed; the dependency set is now complete |
+| §10 | PowerShell port, and an intermittent test failure |
+| §11 | The menu screens, built |
+| §12 | Full screen, and a self-test that was lying |
+| §13 | Two layout bugs that only appear on a tall screen |
+| §14 | The UI scales with the screen |
+| §15 | The game screen |
+| §16 | The highway is replaced: three bars of tab |
+| §17 | Fret numbers, back inside the mark |
+| §18 | The strings get names, and the tempo is yours to choose |
+| §19 | The practice tempo moves to song select |
+| §20 | Import GP gets a second button, and a real .gp4 gets through |
+| §21 | Chords are kept, because the setting that removed them did nothing |
+| §22 | Soundfonts do not clip: §7.5's measurement read the buffer wrong |
+| §23 | The first sound |
+| §24 | The input is the guitar, not the highway |
+| §25 | Dropping mediapipe, and the cost of proving an absence |
+| §26 | Two crashes and a frozen bar |
+| §27 | A bare `pip install` works, and that is worth saying |
+| §28 | Two searches, three settings that weren't, and tests for the documents |
+| §29 | The song kept playing, the tempo did nothing, and a note detector |
+| §30 | A microphone, and the latency that comes with it |
+| §31 | One requirements file, and the claim that flipped with it |
+| §32 | The keyboard is gone, and so is the mode that chose it |
+| §34 | Results: the last placeholder, built |
+| §35 | A button that was not connected, and the check that would have caught it |
+| §36 | Reconciling this file with itself |
+
+**§33 is missing**, and §36.3 explains why rather than back-filling it: the number was
+reserved for work that was planned, approved and then overtaken by other work, so no
+section was ever written under it. Addresses are stable, so the gap is recorded rather
+than closed.
 
 ---
 
@@ -4179,3 +4232,89 @@ plausible-looking green:
 
 The check now reports exactly one thing across the whole UI package: nothing. It found
 the real defect on its first correct run and has no other output to carry.
+
+## §36 — Reconciling this file with itself (2026-09-27)
+
+**Tests: 983 in total — 967 excluding `tests/test_docs.py`.** No behaviour changed.
+This is an audit of `DESIGN.md` against the repository it describes, and it found that
+the file's own front door was three sections out of date while the sections themselves
+were in good order.
+
+### 36.1 The preamble described an app that was deleted
+
+The first paragraph said Guitaroids "**tracks your hands via webcam** and walks you
+through Guitar Pro tabs at tempo, counting misses."
+
+Both halves of that are historical. The webcam went in **§25** — mediapipe, OpenCV and
+the Qt plugin hijack with it — and the keyboard that stood in for a microphone went in
+**§32**. The app now listens to the guitar and judges a detected pitch.
+
+This is the worst kind of stale, because it is the first thing anyone reads and it
+carries no date to warn you. §28.4 caught two claims in `AGENTS.md` and one in
+`README.md`; the same sweep did not look at this file's own preamble, which is the one
+place a reader is guaranteed to start.
+
+**The preamble was rewritten, and no section was.** The append-only rule covers the
+sections; the preamble is the file's front door, it had already been edited once (the
+`DECISIONS.md` pointer), and leaving it describing a design from §1 while §1 itself is
+kept as history would have made the rule mean the opposite of what it says. The
+rewrite is marked in place, with the sections that made it stale named, so a reader who
+remembers the old sentence can see what happened to it.
+
+### 36.2 A section index, and a test that keeps it honest
+
+Thirty-four sections in 4181 lines with no navigation, and the preamble pointed only at
+`DECISIONS.md` — which indexes *decisions*, not *work entries*, so a reader looking for
+"which section dealt with the tempo" had nothing. There is now a table of every section
+in order, under `## The sections`.
+
+It also removed a claim that was wrong: the preamble said the `DECISIONS.md` pointer
+"is the only navigational addition this preamble has ever received; no section has been
+edited", which had stopped being true and which §36.1 and this index both falsify.
+
+**An index that goes stale is worse than no index**, so `test_docs.py` asserts the
+table and the headings agree — same set of numbers, in the same order. Adding §37
+without a row for it fails a test.
+
+### 36.3 §33 does not exist, and the gap is recorded rather than filled
+
+The sequence runs §1–§32, §34, §35. **§33 was reserved for work that was planned,
+approved and then overtaken**, so nothing was ever written under it:
+
+| What §33 was for | State |
+|---|---|
+| `test_every_import_is_provided_by_a_pin` — every third-party import checked against the pins, which is the direction no test covers (§28.6) | **not written** |
+| `scripts/refresh_requirements.sh` — regenerate the `pip freeze` *underneath* the comment header, so the caveats survive a refresh (§31.2) | **not written** |
+| Moving `app.py`/`context.py`, `paths.py`/`settings.py` and `songlib.py`/`importer.py` into `app/`, `config/` and `library/`, so only `__init__.py` and `__main__.py` sit at the package root — with a structural test to keep it that way | **not done** |
+
+The address is not reused, because sections are stable addresses and "§4.1 supersedes
+§2" has to keep resolving. The work is worth doing and the number is still free for
+whichever of the three lands first; this entry is the record of what it was meant to
+be, so nobody re-plans it from scratch and nobody wonders what happened to the sequence.
+
+The dependency pair is the cheapest of the three and the most load-bearing: it is the
+only check that would catch a new import with no pin behind it, which is the exact
+failure the "one `pip freeze` file" decision (§31) traded away.
+
+### 36.4 §10 is about something that no longer exists
+
+The index shows `§10 — PowerShell port, and an intermittent test failure`, and
+`scripts/setup.ps1` was deleted in §32.1. That is the append-only rule working as
+designed rather than as a defect: §10 records that the port was written and why, and
+a reader who wants to know whether Windows is supported can see both entries. The
+eleven tests that compared the two scripts went with it, and §32.4 says what replaced
+them.
+
+### Not done — §36
+
+- **§33's three items are all still outstanding.** They are listed above rather than
+  quietly dropped, because two of them were approved by the person making decisions and
+  neither has been started.
+- **The §1–§9 sections are untouched and several are known-wrong** — the webcam plan, a
+  Karplus-Strong synth that was never written, a milestone order §4 revised, and an
+  OpenCV install dance §25 removed. That is what append-only means; the corrections are
+  §21, §25, §27 and §28 respectively. A reader arriving at an old section directly
+  should be pointed at the index.
+- **No audit of `DECISIONS.md` or `AGENTS.md` in this pass.** Both were swept in §28.4
+  and both have been edited since; they are covered by `test_docs.py` for counts,
+  section references and paths, but not for the whole of their prose.
