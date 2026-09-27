@@ -570,3 +570,97 @@ def test_stylesheet_mentions_every_colour_token() -> None:
 
 def test_stylesheet_has_balanced_braces() -> None:
     assert STYLESHEET.count("{") == STYLESHEET.count("}")
+
+
+# --- every button does something (§35.1) ---------------------------------------
+#
+# A button that is created, laid out, and never connected looks exactly like one that
+# works. It is the same shape as §21.2's unread preference and §32's dead mode combo,
+# and it shipped: the results screen's "Song select" was built, added to a row, styled,
+# and had no slot, and a test that called the *handler* for the other button did not
+# notice for a week.
+#
+# This is a static check rather than a behavioural one on purpose. Clicking every
+# button and asserting something changed produced three false positives: two correctly
+# *disabled* buttons (Play again with no result; Add to library with no file chosen)
+# and one file dialog that cannot be clicked through in a test. A rule that needs an
+# exception list is a rule that gets edited to pass, and this file records why that
+# happened.
+
+
+BUTTON_BUILDERS = ("constrained_button", "QPushButton")
+
+
+def _unconnected_buttons(path: Path) -> list[str]:
+    """Buttons created in ``path`` whose ``clicked`` is connected nowhere in it.
+
+    Matches on the assigned name rather than the line, so a button wired a dozen lines
+    later counts as wired. Both ``self._x = ...`` and a bare ``x = ...`` are handled,
+    because both spellings are in use: most screens keep buttons as attributes and the
+    simpler ones do not.
+    """
+    import ast
+
+    tree = ast.parse(path.read_text())
+
+    created: dict[str, int] = {}
+    connected: set[str] = set()
+
+    def _collect(body) -> None:
+        for node in body:
+            # A call used as a statement is wrapped in `ast.Expr`, so
+            # `play.clicked.connect(...)` is an Expr and not a Call. Unwrapping it is
+            # the whole difference between finding the connections and finding none of
+            # them -- the first version walked with `ast.walk`, which sees the inner
+            # call, and reported every button in the app as unconnected.
+            call = node.value if isinstance(node, ast.Expr) else node
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+                func = node.value.func
+                name = (
+                    func.attr
+                    if isinstance(func, ast.Attribute)
+                    else getattr(func, "id", "")
+                )
+                if name in BUTTON_BUILDERS:
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            created[target.id] = node.lineno
+                        elif isinstance(target, ast.Attribute):
+                            created[target.attr] = node.lineno
+            elif (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "connect"
+                and isinstance(call.func.value, ast.Attribute)
+                and call.func.value.attr == "clicked"
+            ):
+                base = call.func.value.value
+                if isinstance(base, ast.Name):
+                    connected.add(base.id)
+                elif isinstance(base, ast.Attribute):
+                    connected.add(base.attr)
+            # Recurse, but not into a builder: `constrained_button` is a *factory*, and
+            # the button it constructs is connected by whoever called it. Skipping the
+            # definition is what stops the check from flagging its own helper.
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name not in BUTTON_BUILDERS:
+                    _collect(node.body)
+            elif isinstance(node, ast.ClassDef):
+                _collect(node.body)
+
+    _collect(tree.body)
+
+    return sorted(f"{path.name}:{line} {name}" for name, line in created.items()
+                  if name not in connected)
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted(p for p in (ROOT / "guitaroids" / "ui").glob("*.py")),
+    ids=lambda p: p.name,
+)
+def test_no_button_is_created_without_being_connected(path: Path) -> None:
+    assert not _unconnected_buttons(path), (
+        "these buttons are built and laid out but their `clicked` goes nowhere: "
+        f"{_unconnected_buttons(path)}"
+    )

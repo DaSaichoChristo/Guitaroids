@@ -3999,7 +3999,7 @@ stated in the failure message so the next reader knows which way it went.
 
 ## §34 — Results: the last placeholder, built (2026-09-27)
 
-**Tests: 965 in total — 952 excluding `tests/test_docs.py`.** All six screens are real.
+**Tests: 980 in total — 967 excluding `tests/test_docs.py`.** All six screens are real.
 `Screen.RESULTS` has existed since the first commit with a `PlaceholderScreen` behind
 it, so the flow could be clicked through to a dead end — and the counts the game screen
 has been showing in its HUD went nowhere, which `AGENTS.md` and `README.md` both said
@@ -4116,3 +4116,66 @@ by its nature is rarely exercised, and it was carrying the only broken branch.
   Because the accuracy to record is the result's own, and the answer is only knowable
   after recording. Computing the ratio at the call site instead would put the accuracy
   formula in two places and the two would drift.
+
+## §35 — A button that was not connected, and the check that would have caught it (2026-09-27)
+
+**Tests: 980 in total — 967 excluding `tests/test_docs.py`.** One line of production
+code was missing, and it is the most ordinary bug in this project's history.
+
+### 35.1 The results screen's "Song select" did nothing
+
+`self._select` was created with `constrained_button("Song select", ...)`, added to the
+button row, styled, laid out, and given no `clicked` connection. It looked like a
+button, it was next to one that worked, and pressing it did nothing.
+
+**The test that should have caught it called the wrong thing.** `test_results.py`
+had `test_play_again_goes_back_into_the_song`, which calls `screen._play_again()` and
+asserts the shell navigated. That passes whether or not the *button* is wired, because
+it tests the handler. The defect is in the connection between the control and the
+handler, and the test stepped over it. Two new tests click the buttons instead, and
+they are the ones that would have failed on the day.
+
+This is §21.2's shape for the fourth time — a control that looks like it works and
+does not — and the fourth time the *seam* was what no test covered. §21.2's own
+prescription applies: test the path the player takes, not the object you built.
+
+### 35.2 The general check, and why it is static
+
+`test_ui_shell.py` now asserts, for every module in `guitaroids/ui/`, that **no button
+is created without its `clicked` being connected somewhere in the same file**. It reads
+the AST rather than clicking the buttons, and that choice was made by measurement:
+
+The first version *was* behavioural — walk every screen, click every button, and
+assert the observable state changed. It reported three false positives, and all three
+were correct behaviour:
+
+| flagged | why it is not a bug |
+|---|---|
+| results "Play again" | correctly **disabled** with no result recorded |
+| import_gp "Add to library" | correctly **disabled** with no file chosen |
+| import_gp "Choose a tab..." | opens a **file dialog**, which a test cannot click through |
+
+A rule that needs an exception list is a rule that gets edited to pass. The static
+check has no exceptions and no false positives, and it needs no window, no display and
+no device — which is also why it runs in a file that already exists rather than in a
+new one.
+
+`constrained_button` is skipped explicitly, because it is a *factory*: it constructs a
+`QPushButton` and returns it, and the caller is the one that connects it. Without that
+skip the check flags its own helper.
+
+**Two things it cost to get right**, both recorded because both produced a
+plausible-looking green:
+
+- **`QObject.receivers("clicked()")` does not see Python connections.** It returns 0
+  for a connected button in PySide6, because a Python callable is not a C++ slot. An
+  assertion built on it cannot fail for the right reason, and one was written and
+  deleted rather than kept.
+- **A call used as a statement is wrapped in `ast.Expr`.** The recursive version walked
+  statements and tested `isinstance(node, ast.Call)`, so it found *no* connections at
+  all and reported every button in the app as unconnected. The `ast.walk` version found
+  them but could not tell which function it was inside, and so could not skip the
+  factory. Both facts are in the code as comments.
+
+The check now reports exactly one thing across the whole UI package: nothing. It found
+the real defect on its first correct run and has no other output to carry.

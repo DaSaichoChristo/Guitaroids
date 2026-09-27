@@ -239,6 +239,43 @@ def test_play_again_goes_back_into_the_song(results: Results) -> None:
     assert results.shell.current is Screen.GAME
 
 
+def test_the_song_select_button_works(results: Results) -> None:
+    """The button, not the handler. That distinction is the whole bug.
+
+    `Song select` was created, laid out, styled and never connected. The first version
+    of this file called `_play_again` directly and passed, because it tested the
+    *handler* rather than the control -- so a button that did nothing shipped, and the
+    player found it. Clicking is the only thing that exercises the connection.
+    """
+    results.context.last_result = _result()
+    results.render()
+    results._select.click()
+    assert results.shell.current is Screen.SONG_SELECT
+
+
+def test_both_buttons_are_usable_with_a_result(results: Results) -> None:
+    """Both are enabled once there is something to act on.
+
+    No `receivers()` check here: PySide6 does not report Python-side connections
+    through it, so an assertion using it passes or fails for reasons that have nothing
+    to do with the code. Connectivity is checked statically in `test_ui_shell.py` and
+    behaviour is checked by clicking, which is the thing a player does.
+    """
+    results.context.last_result = _result()
+    results.render()
+    for button in (results._again, results._select):
+        assert button.isEnabled() is True
+
+
+def test_the_song_select_button_works_with_no_result_too(results: Results) -> None:
+    """Only Play again is disabled in the empty state, and that one is deliberate."""
+    results.render()  # no result
+    assert results._again.isEnabled() is False
+    assert results._select.isEnabled() is True
+    results._select.click()
+    assert results.shell.current is Screen.SONG_SELECT
+
+
 def test_back_from_results_lands_on_song_select(shell, context) -> None:
     """The game screen navigates with `remember=False`, so this is what it buys.
 

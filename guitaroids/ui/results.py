@@ -105,6 +105,7 @@ class Results(ScreenBase):
         self._again.clicked.connect(self._play_again)
         self._select = constrained_button("Song select", width=200, parent=self)
         row.addWidget(self._again)
+        self._select.clicked.connect(self._song_select)
         row.addWidget(self._select)
         column.addLayout(row)
 
@@ -236,3 +237,12 @@ class Results(ScreenBase):
         the player back to choose it again, which is what the button says.
         """
         self.shell.navigate(Screen.GAME)
+
+    def _song_select(self) -> None:
+        """Straight to song select, to pick a different song.
+
+        Navigates rather than `go_back()`: history already holds song select from the
+        way in, so `go_back` would arrive there today and somewhere else after any
+        navigation from here, and a button that means "song select" should mean it.
+        """
+        self.shell.navigate(Screen.SONG_SELECT, remember=False)
