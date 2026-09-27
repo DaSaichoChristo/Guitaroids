@@ -38,8 +38,9 @@ is where the "why" belongs.
 |---|---|---|
 | PySide6 6.11, Qt **Widgets + QPainter**, not QML | live | §1.2 |
 | Python **3.12.14** in `.venv` | live | §7.1 |
-| mediapipe 1.0.1, **Tasks API only** — `mp.solutions` is gone | live | §2.1, §5.4 |
-| opencv-contrib-python-**headless**; the GUI build must be removed *before* headless is installed | live | §2.2, §7.2 |
+| ~~mediapipe 1.0.1, Tasks API only~~ — **dropped**; the input is a microphone now | live | §25 |
+| ~~opencv-contrib-python-headless, installed in a strict order after the GUI build~~ — **dropped with it**, and the install trap with that | live | §25.2 |
+| **No webcam, no OpenCV, no cv2** — nothing imports them, and the lock is 18 packages instead of 32 | live | §25.1 |
 | numpy 2.2.6 — the 3.12 ceiling (2.5.3 needs `>=3.12`) | live | §7.1 |
 | soundfile 0.14.0 decodes audio; **no resampler needed** — the stream opens at the file's own rate | live | §3.1 |
 | Install with `scripts/setup.sh`, never a bare `pip install -r requirements.txt` | live | §2.2 |
@@ -54,10 +55,10 @@ is where the "why" belongs.
 | Decision | Status | Ref |
 |---|---|---|
 | Four layers, `ui/` → `session/` → `devices/` → `model/`, strictly one-directional | live | §1.3 |
-| `model/` is **pure**: no Qt, no OpenCV, no sounddevice, no I/O | live | §1.3 |
+| `model/` is **pure**: no Qt, no sounddevice, no audio I/O of any kind | live | §1.3 |
 | `devices/` never imports `session/` or `ui/` | live | §1.3 |
 | Four threads; the GUI thread never blocks on `cap.read()`, audio `write()`, or inference | live | §1.4 |
-| mediapipe **`VIDEO` mode**, not `LIVE_STREAM` — the latter silently drops frames | live | §1.4 |
+| ~~mediapipe `VIDEO` mode, not `LIVE_STREAM`~~ — superseded, there is no capture thread | live | §25 |
 | `QApplication` is a process-wide singleton with a fixed platform — test platforms in **subprocesses** | live | §5.3 |
 | Screens never own game objects; `GameSession` outlives them | live | §1.7 |
 | `AppContext` holds shared state and **outlives every screen**; the shell owns one | live | §11 |
@@ -111,11 +112,19 @@ broken in a way that is hard to diagnose.
 | `song_pos = (stream.time - t0) - stream.latency - count_in - offset` | live | §1.5, §3.3 |
 | Judge against the **audio** clock; never drive note timing from a GUI timer | live | §1.5 |
 | sounddevice owns the audio device; **Qt plays no audio at all** | live | §1.2, §2.3 |
-| One buffer — count-in clicks, then music with clicks overlaid — and one stream | planned | §3.3 |
+| One buffer — count-in clicks, then music with clicks overlaid — and one stream | live | §3.3, §23.2 |
 | `blocksize=0`; never the default `latency='high'` | live | §2.4 |
 | Pre-render the click track before opening the stream; the RT callback must not allocate | live | §2.4 |
 | Hit windows: Perfect ±35ms, Good ±80ms, Miss past 140ms | live | §1.6 |
-| Apply gain **after** rendering — `sfload(gain=...)` is a no-op and soundfonts clip | live | §7.5 |
+| Apply gain **after** rendering — `sfload(gain=...)` is a no-op — and **raise** it, because a chord peaks at 0.22 and a chart at 0.67 | live | §7.5, §22.2, §23.3 |
+| The gain is **measured from the render**, not a fixed multiple, and reported as `gain_applied` | live | §23.3 |
+| The soundfont preset is the **GM programme minus one** — presets are 0-indexed | live | §23.3 |
+| `t0` is **read from the device** in `play()`; `stream.time` is ~1.8e9, not a count since open | live | §23.3 |
+| The stream is **fed from a daemon thread** — `write()` blocks for the whole buffer | live | §23.3 |
+| Only the feeder **closes** the stream; closing it under a write aborts the process | live | §23.3 |
+| The **transport handle lives on `AppContext`**, because §1.7 says screens never own devices | live | §23.2 |
+| Rendering happens on a **worker**, and the clock does not start until it lands | live | §23.2 |
+| `AppContext.audio_enabled` — playing silently is supported, and it is what the tests turn off | live | §23.5 |
 | Count-in configurable, default 1 bar | live | §3.4, §11 |
 | Per-song audio offset via a manual slider | live | §3.4, §11 |
 
@@ -160,7 +169,11 @@ The three `assumed` rows have never been seen hold:
 |---|---|---|
 | Keyboard input **always** works as a fallback — a demo on an unfamiliar laptop has no camera and must not crash | live | §1.1 |
 | Strumming hand's downward wrist velocity fires all active lanes | planned | §1.4 |
-| Input-latency calibration lands **before** hand tracking, not after | planned | §4.1 |
+| The input is a **microphone**, not a webcam: 23ms of block against 30–100ms of camera buffering | live | §24.1 |
+| A detected note is judged on **pitch, not string** — the strings' ranges overlap, and the same note is the same note | live | §24.2 |
+| The keyboard **stays the default** input; a machine with no audio input is a real case | live | §24.4 |
+| `InputMode.CAMERA` is read as **`MICROPHONE`**, so an old settings file keeps its meaning | live | §25.5 |
+| An **absence** test must be written against code, not prose — a comment explaining the history defeats it | live | §25.4 |
 | Camera feed mirroring direction (affects handedness) | planned | §1.6 |
 | Hit windows: Perfect ±35ms, Good ±80ms, **expire past 140ms** | live | §1.6, §15.7 |
 | The 80–140ms band resolves the note as a **MISS**, not a stray — one hit, one outcome | live | §15.7 |
@@ -169,18 +182,18 @@ The three `assumed` rows have never been seen hold:
 | `accuracy` is hits over notes **judged so far**; `song_accuracy` is the whole-chart figure | live | §15.7 |
 | Keys **1–6** for lanes 0–5, hard-coded; the only mapping there is | live | §15 |
 | The game **does not depend on Qt focus** — an app-wide filter catches the lane keys while visible | live | §15.5 |
-| The game clock is a **wall clock** for now; the audio clock of §1.5 is the next milestone | live | §15.6 |
+| ~~The game clock is a wall clock for now~~ — **it is the audio device's clock**, with the wall clock as the no-audio fallback | live | §23.1 |
 
-**⚠ §1.4's "fretting hand x-position → lane" is SUPERSEDED by §15.2.** The highway is
-horizontal, so lanes are rows and lane must come from the player's **y**-position.
-The hand-tracking pipeline is unbuilt, so nothing has to be rewritten — but the
-correction has to be made *before* tracking starts, not after.
+**⚠ The whole hand-tracking input model is SUPERSEDED by §24.** §1.4 wanted lane
+from a fretting hand's **x**-position; §15.2 corrected that to **y**; §24 replaces
+both with a **microphone and a pitch estimate**. Each correction was cheap because
+the pipeline was never built, and this one retires the error term §4.1 called the
+largest in the product.
 
-**Camera latency is expected to dominate all audio-side error.** The chain is
-`camera buffer (~30–100ms) → capture thread → inference → lane decision → judge`,
-and the figure scales with camera hardware rather than with our code. That is why
-calibration is its own milestone rather than a setting buried in the end
-(§4.1).
+**Camera latency no longer dominates anything, because there is no camera.** The
+chain §4.1 worried about was `camera buffer (~30–100ms) → capture thread → inference
+→ lane decision → judge`. A microphone block is 23ms and we choose its size, and
+PortAudio reports the rest (§24.1).
 
 ## The playfield
 

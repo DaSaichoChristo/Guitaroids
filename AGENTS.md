@@ -1,8 +1,9 @@
 # AGENTS.md
 
-Guitaroids — a Guitar Hero-style app. Webcam hand tracking (mediapipe) walks you
-through Guitar Pro `.gp5` tabs at tempo, reading three bars of tab notation at a time.
-Hackathon project.
+Guitaroids — a Guitar Hero-style app. You play your **own guitar** while it reads
+Guitar Pro `.gp5` tabs at tempo, three bars of notation at a time. The app hears what
+you play through a microphone; the six on-screen keys still work for a machine with
+no audio input. Hackathon project.
 
 **Looking for the current design?** Read [`DECISIONS.md`](DECISIONS.md) first — one
 screen, every decision with status and a link to the section that justifies it.
@@ -27,25 +28,27 @@ says what ran.
 
 ## The facts you need before reading anything else
 
-- **Stack:** PySide6 6.11 (Qt Widgets + QPainter, *not* QML) · mediapipe 1.0.1
-  (Tasks API only — `mp.solutions` is gone) · opencv-contrib-python-headless
-  5.0.0.93 · PyGuitarPro 0.11 · numpy 2.2.6 · sounddevice owns audio playback,
-  Qt plays no audio.
+- **Stack:** PySide6 6.11 (Qt Widgets + QPainter, *not* QML) · PyGuitarPro 0.11 ·
+  numpy 2.2.6 · sounddevice owns audio playback, Qt plays no audio · tinysoundfont
+  renders a tab into sound. **No mediapipe and no OpenCV** — the input is a
+  microphone, not a webcam (§24, §25).
 - **Python is 3.12.12 in `.venv`.** 3.12 specifically: `tinysoundfont` has wheels
   for cp310/cp312 only, so 3.13 and 3.14 compile from source and need a C++
   toolchain plus Python dev headers. Check `.venv/bin/python --version`, not the
   system `python3`. `DESIGN.md` §5.1 records a wrong analysis caused by exactly
   this; §7.1 records the version hunt.
-- **Install with `scripts/setup.sh`, never `pip install -r requirements.txt`.** The
-  bare pip install silently reinstalls the GUI OpenCV build and reintroduces §2.2.
-  Both OpenCV builds write the same `cv2/` directory, so the GUI build must be
-  removed *before* headless is installed — otherwise pip sees headless as satisfied
-  and `import cv2` breaks. This happened and is now covered by the M0 test.
+- **Install with `scripts/setup.sh`.** There used to be a `never pip install -r
+  requirements.txt` caveat here — the longest paragraph in this file — because
+  mediapipe pulled in the GUI OpenCV build and both builds write the same `cv2/`
+  directory, so one had to be uninstalled before the other was installed. All of
+  that went with the webcam (§25). The one caveat left is tinysoundfont's
+  `--no-deps`, and `pip install --dry-run` still reports false success on it.
   `scripts/setup.ps1` is the PowerShell equivalent; `tests/test_setup_scripts.py`
-  keeps the two from drifting. `requirements.txt` is **8 direct pins, all `==`**,
+  keeps the two from drifting. `requirements.txt` is **7 direct pins, all `==`**,
   and `tests/test_requirements.py` keeps it honest: no transitive may be pinned
-  there, every pin must be imported today or carry a named milestone, every pin
-  must match the lock, and the three install caveats must all still be present.
+  there without a stated reason, every pin must be imported today or carry a named
+  milestone, every pin must match the lock, and the install caveats must all still
+  be present.
 - **Layers:** `ui/` → `session/` → `devices/` → `model/`, one-directional. `model/`
   is pure data with zero I/O. `devices/` never imports `session/` or `ui/`.
 - **The clock is the crux.** `song_pos = (stream.time - t0) - stream.latency`.
@@ -60,7 +63,9 @@ says what ran.
 - **Timing:** `seconds = beat.start / 960 * (60 / song.tempo)`. `Beat.start` is an
   **absolute** tick, so note times are recomputed against a running offset when
   repeats are unrolled.
-- **Use mediapipe `VIDEO` mode,** not `LIVE_STREAM` — the latter silently drops frames.
+- **The note clock is the audio device's**, `song_pos = (stream.time - t0) -
+  stream.latency`, and `t0` is read from the device at `play()` — `stream.time` is
+  not a count of seconds since you opened the stream (§23.3).
 - **`.gpx` is unreadable.** PyGuitarPro 0.11 handles GP3/GP4/GP5 only; GP7/8's
   default `.gpx` raises `unsupported version`. Surfaced as
   `Status.UNSUPPORTED_VERSION`.
@@ -70,7 +75,7 @@ says what ran.
 
 ## Current state
 
-`tests/` is 694 tests, all passing. **Five of the six screens are real:** the main
+`tests/` is 802 tests, all passing. **Five of the six screens are real:** the main
 menu, song select (tab + track + audio offset + **per-song practice tempo**), import
 GP (choose a file, then Add to library), preferences, and **game** — three bars
 of tab notation with a left-to-right beat line, `E A D G B E` down the left, a six-key keyboard test mode and PERFECT/GOOD/MISS
@@ -146,34 +151,48 @@ All six cost real time, and all six are now enforced by tests.
 
 ## Unblock this first
 
-`DESIGN.md` §2.2: mediapipe hard-requires `opencv-contrib-python` (the GUI build),
-whose bundled Qt plugins break PySide6 with
-`Could not load the Qt platform plugin "xcb"`. Fixed by installing
-`opencv-contrib-python-headless` at the **identical version**; `guitaroids/qtenv.py`
-points `QT_PLUGIN_PATH` at PySide6's plugins as a second line of defence.
-
-**M0 has passed** (`DESIGN.md` §5): a window opens on `xcb` and the plugin
-hijack is gone. Re-verify after any dependency change with
+**M0 has passed** (`DESIGN.md` §5): a window opens on `xcb`, and OpenCV is no longer
+installed at all, so the plugin-hijack that used to need `qtenv.py` cannot happen
+(§25). Re-verify after any dependency change with
 `.venv/bin/python -m pytest tests/test_m0_window.py -q`.
+
+If that ever fails with `Could not load the Qt platform plugin "xcb"`, something has
+reintroduced a package that ships Qt plugins — and the only one that ever did was
+mediapipe's OpenCV. Check `pip list` for `opencv` before anything else.
 
 ## The next blocker
 
-`DESIGN.md` §15.6. **Nothing has ever played audio**, and the note clock (§1.5) is
-still the largest untested risk in the project — the thing most likely to make the
-app feel broken in a way that is hard to diagnose. The game currently runs on a
-`QElapsedTimer`, which is self-consistent but cannot say whether the game *feels*
-right. §3.5 calls the click-placement test "the highest-value test in the project";
-do that next, then the sounddevice transport behind the same interface the game
-screen already calls.
+**The output half is built; the input half is not.** The game screen's clock is the
+audio device's clock (§23), a real tab plays through a real sound card, and §3.5's
+click-placement test — the "highest-value test in the project" — is written. What
+does not exist is `audio/pitch.py`: nothing detects a note yet, so
+`InputMode.MICROPHONE` is a setting that does nothing, and the judge is still
+keyboard-only.
+
+So the next step is a pitch estimator and the judge's pitch-keyed index beside its
+lane-keyed one (§24.2, §24.3). Both are testable with no device, which is why they
+can be built before a microphone is opened. The second thing to fix is that the
+**practice tempo does not slow the music** — the tab crawls and the audio runs at
+the written tempo (§23), which is the one place the two halves meet and currently
+contradict each other.
 
 ## Audio
 
-`sounddevice` owns playback and is the master clock (§1.5). For *generating* the
-backing track, `tinysoundfont` renders offline from an SF2/SF3 soundfont, reading
-the `Chart` directly — **no MIDI round trip, and `mido` is deliberately not a
-dependency** (§9). The numpy Karplus-Strong synth is the zero-dependency fallback
-when `tinysoundfont` or a soundfont is absent. Soundfonts and the model are fetched
-by `scripts/`, not committed.
+`sounddevice` owns playback and is the master clock (§1.5), and the game screen
+reads its position (§23). For *generating* the backing track, `tinysoundfont`
+renders offline from an SF2/SF3 soundfont, reading the `Chart` directly — **no MIDI
+round trip, and `mido` is deliberately not a dependency** (§9). The numpy pluck synth
+is the zero-dependency fallback when `tinysoundfont` or a soundfont is absent. The
+soundfont is fetched by `scripts/`, not committed.
+
+Three things about this path that are measured rather than assumed, and each has a
+way of being got wrong that looks fine:
+
+**Soundfonts do not clip — §7.5 got that backwards.** A six-note chord peaks at
+**0.22**, not 1.0, because the buffer was read as int16 instead of float32 (§22).
+`sfload(gain=...)` really is useless, so apply gain to the rendered buffer — but
+**raise** it by 3-4x, do not tame it. `generate()` returns a `memoryview` of stereo
+float32; read it as anything else and you get NaN or a fake clip.
 
 `tinysoundfont` must be installed with `--no-deps`: its `pyaudio` dependency has no
 Linux wheel and cannot be built (no `portaudio.h`). `pyaudio` is a lazy import used

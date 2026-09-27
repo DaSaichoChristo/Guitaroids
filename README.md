@@ -1,11 +1,12 @@
 # Guitaroids
 
-A Guitar Hero-style app that tracks your hands through the webcam (mediapipe) and
-walks you through Guitar Pro tabs at tempo, counting misses.
+A Guitar Hero-style app. You play your own guitar and it walks you through Guitar
+Pro tabs at tempo, counting misses — it renders the tab into sound and times your
+notes against the audio device's clock.
 
-Hackathon project. In progress — the song import, menu and note-reading layers are
-built, and the keyboard test mode is playable; there is no audio yet, and hand
-tracking is not started.
+Hackathon project. In progress — the song import, note-reading and audio layers are
+built and the keyboard test mode is playable. The microphone input is the next piece
+and is not started: for now the six on-screen keys are the way in.
 
 ## Quick start
 
@@ -22,7 +23,7 @@ Windows (PowerShell):
 ```
 
 Either script creates `.venv` on Python 3.12, installs pinned dependencies, fetches
-the mediapipe model and a soundfont, and runs the M0 gate. The two are kept in
+a soundfont, and runs the M0 gate. The two are kept in
 sync by `tests/test_setup_scripts.py`, which asserts they agree on the critical
 pins — so a change to one is not silently missing from the other.
 
@@ -109,11 +110,10 @@ PLAYABLE
 
 Both have bitten this project and both are enforced by tests:
 
-- **Use `scripts/setup.sh`, never `pip install -r requirements.txt`.** mediapipe
-  hard-requires the *GUI* build of OpenCV, whose bundled Qt plugins break PySide6
-  with `Could not load the Qt platform plugin "xcb"`. The GUI build must be removed
-  *before* the headless one is installed, or pip leaves a half-removed `cv2/`
-  directory. See `requirements.txt` and `DESIGN.md` §2.2, §7.2.
+- **Use `scripts/setup.sh`.** There used to be a companion warning here about
+  OpenCV: mediapipe required the *GUI* build, whose Qt plugins break PySide6, and
+  the two builds had to be installed in a strict order. Mediapipe is gone — the
+  input is a microphone — so the trap went with it (`DESIGN.md` §25).
 - **`pyaudio` cannot be installed here** — no Linux wheel, and no `portaudio.h` to
   build one. `tinysoundfont` is therefore installed with `--no-deps`, which is safe
   because `pyaudio` is a lazy import used only for real-time playback. Locked in by
@@ -126,7 +126,7 @@ Both have bitten this project and both are enforced by tests:
   C++ toolchain and Python dev headers. Override the interpreter with
   `PYTHON=python3.X scripts/setup.sh`.
 - A C++ compiler is **not** needed on 3.12 — every dependency has a wheel.
-- No package manager is needed. Soundfonts and the mediapipe model are fetched by
+- No package manager is needed. Soundfonts are fetched by
   `scripts/`, not installed.
 
 ## Layout
@@ -134,17 +134,16 @@ Both have bitten this project and both are enforced by tests:
 ```
 guitaroids/
   model/     Chart, Note, repeat unrolling      pure data, zero I/O
-  devices/   Transport, HandTracker             (not built yet)
-  session/   PlayRequest                        what to play, not the game
+  devices/   (empty; the transport is in audio/)
+  session/   PlayRequest, judge                  what to play, and how it scores
   ui/        screens, library loader, theme     menu screens are built
-  audio/     synth, soundfont discovery         (not built yet)
+  audio/     render, click, transport            the master clock lives here
   context.py AppContext: shared state, outlives every screen
   importer.py import decisions                  pure, no Qt
   songlib.py library scan, pairing, status
   settings.py user preferences                  pure, no Qt
-  qtenv.py   Qt plugin bootstrap
 scripts/     setup, asset fetchers, import report, screenshots
-tests/       694 tests
+tests/       802 tests
 songs/       your tabs and audio (gitignored)
 ```
 

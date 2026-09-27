@@ -2762,3 +2762,328 @@ soundfont that genuinely does clip fails it and gets handled deliberately.
   case than a single acoustic chord.
 - **§7.5's `audio/soundfont.py` and `audio/synth.py` module sketch is unchanged** —
   only its numbers were wrong, and it is still unbuilt.
+
+## §23 — The first sound (2026-09-26)
+
+**Tests: 802, all passing. Verified by playing a six-minute tab through a real
+output device: it rendered in the background, the stream opened, 46ms of latency was
+reported, and the position tracked real time at 1:1.**
+
+Supersedes the §1.5 / §3.x "nothing has ever played audio" state. §1.5's formula is
+now the game's clock rather than a plan.
+
+### 23.1 What was built, and in what order
+
+| | |
+|---|---|
+| `audio/render.py` | chart → stereo float32; tinysoundfont, or a numpy pluck when there is no soundfont |
+| `audio/click.py` | the count-in, pre-rendered, with §3.5's placement test |
+| `audio/transport.py` | the output stream and §1.5's `song_pos = (stream.time - t0) - stream.latency` |
+| `ui/render_task.py` | `ChartRenderer`, a QRunnable mirroring `LibraryLoader` |
+| `AppContext` | owns the transport, because §1.7 says screens never own devices |
+
+**The game screen's clock is now the audio device's.** That was the actual goal and
+it is a smaller change than it sounds: `position()` asks the context first and falls
+back to the `QElapsedTimer`. The wall clock survives as a fallback, deliberately —
+§1.5 says never drive note timing from a GUI timer, and the honest reading of that is
+"unless there is no audio to drive it from". A rhythm game that will not start
+without a sound card is worse than one that starts slightly wrong.
+
+### 23.2 The integration, not a script
+
+The obvious shape was `scripts/play_tab.py`: take Ayush's prototype, swap pygame for
+sounddevice, done. That is the wrong shape, because the game screen *already is* the
+play-along screen — it draws the tab, it judges, it has the clock. What it lacked was
+a sound, and a clock that could say whether the song felt right. Those are the same
+piece of work.
+
+So the handle lives on `AppContext` (§1.7: a rule you satisfy by leaking the handle
+somewhere else is not satisfied), rendering happens off the GUI thread behind the
+same three-part contract `LibraryLoader` keeps, and the game screen starts its clock
+when the audio arrives rather than when the screen opens.
+
+**The clock does not start while a render is in flight**, and that is not
+caution. Starting it immediately and handing over to the audio clock when the render
+landed would make the song jump *forwards* by however long the render took — seven
+seconds for a five-minute tab — and a forward jump is the direction that makes a
+rhythm game feel broken rather than merely wrong.
+
+### 23.3 Four measurements, each of which produces a plausible wrong answer
+
+**`stream.time` is not a count of seconds since you opened the stream.** On this
+machine's PipeWire default it reports **1790470436.39**, about fifty-five years.
+§1.5's `stream.time - t0` is only a position if `t0` came from the same clock, and a
+`t0` of 0 does not raise: it returns a position of 1.8 billion seconds, which reads
+as a bug in the caller rather than in the clock. `t0` is read from the device in
+`play()`, and there is a test asserting the origin is not zero-based — with a comment
+saying which half to believe if a future device disagrees.
+
+**`OutputStream.write` is blocking.** It returns when the device has *consumed* the
+data, not when it has queued it. Measured: a 0.4s buffer blocked 0.44s, a 5s buffer
+4.97s. Writing a six-minute song in one call therefore freezes the caller for six
+minutes — on the GUI thread, a frozen window and no navigation for the length of the
+track. The stream is fed from a daemon thread a block at a time; `play()` returns in
+30ms whatever the length. The clock is unaffected, because `stream.time` counts what
+the device consumed whether or not we are mid-feed.
+
+**Closing a stream while another thread is blocked inside `write()` on it is a
+use-after-free in C.** It aborted the process — "corrupted double-linked list", a
+PulseAudio refcount assertion, core dump — on a 60-second buffer, where the feeder is
+always mid-write. So only the feeder touches the stream now, *including closing it*:
+`stop()` sets a flag and joins, and the feeder's `finally` does the closing.
+
+**A rendered chart peaks at 0.67, not the 0.22 §22 measured.** §22 measured one
+six-note chord in isolation; a chart stacks six of them, because a note rings until
+the next onset. So §22's prescribed 3.5x boost lands at 2.35 and the limiter
+squashes it back — a louder chart with its dynamics flattened, which is the artefact
+a limiter was supposed to prevent. The gain is now computed from what was actually
+rendered, reported as `gain_applied`, and both backends land on a 0.9 peak.
+
+### 23.4 The two bugs the click track found
+
+§3.5 called the click-placement test *"the highest-value test in the project"*. It
+is written — clicks land on `i * 60 / bpm` for seven tempos and three bar counts,
+with the integer division last so a long count-in cannot drift — and it found two
+things on its first run.
+
+**The count-in was a beat short.** The buffer reserved room for the clicks but not
+for the beat *after* them, so the first chord landed on top of the final downbeat and
+the count-in you hear is not the count-in you asked for. `count_in_seconds()` is now
+the single authority for how long it lasts, and the transport uses the same number to
+know where the music starts — they cannot disagree.
+
+**Beat positions were guessed from the tempo for the final bar**, because there is no
+bar line after it to measure. A song that ends on a held bar — most songs' last
+measure — got its last four clicks bunched into the first half. It now borrows the
+previous bar's measured span, and every bar is divided by its own measured length
+rather than by `4 * 60/bpm`. That is §16.3's lesson arriving in the audio.
+
+### 23.5 The one that was a process problem, not a code problem
+
+Making the game screen render on construction made **the whole suite render on
+construction**: 32s → 231s, with a song-select test starting to fail on timing
+because the thread pool was busy. Fixed by `AppContext.audio_enabled`, which is a
+real user-facing setting — playing silently has to be possible — and which the test
+fixtures set to `False`. The audio path has its own tests that ask for it.
+
+### Not done — §23
+
+- **The practice tempo still does not slow the music.** The control is per-song BPM
+  (§19) and it reaches the chart as a rate, but the *audio* is rendered at the
+  written tempo and played straight. A slower song needs either re-timing the chart
+  before rendering or a time-stretch of the rendered buffer, and neither is built.
+  So at 50 BPM the tab crawls and the music runs at 76.
+- **The click volume and master volume settings are still unread** by the render
+  path — the mix is normalised to a target peak and nothing scales it.
+- **No audio file is decoded or played.** `soundfile` is still pinned for a milestone
+  that has not arrived, and a song with backing audio is still metronome-only.
+- **Nothing is recorded.** No results, no score file, nothing to compare a run to.
+- **The render is 7s for a six-minute tab with no progress.** `estimate_seconds` puts
+  a number on screen and the renderer could report onsets done; the estimate is
+  deliberately pessimistic, which is the right direction and a poor substitute.
+- **Hit feedback is still absent** (§18.5), and it is harder to motivate on a chord.
+- **The transport is not wired to the game screen's judgement yet.** It provides the
+  position; the notes are still judged against the same number, but the two clocks
+  are the same clock now, which is the part that had to happen first.
+
+## §24 — The input is the guitar, not the highway (2026-09-26)
+
+**Tests: 802, all passing. Nothing here is a webcam, and nothing here was ever
+built — see §25 for what changed and §25.2 for why the pivot was cheap.**
+
+The premise of §1.1 was that the player selects a lane with their fretting hand and
+strikes with their strumming hand, watched by a webcam. The premise now is that the
+player plays their **own guitar**, and the app listens.
+
+### 24.1 Why, and the one number that decided it
+
+§4.1 identified the largest error term in the product and it was not the audio:
+
+> A typical webcam buffers more than the entire audio chain above was designed to
+> correct, and the figure scales with camera hardware rather than with our code.
+
+**30–100ms of camera buffering, against a key's 15–20ms** (measured from a rhythm
+game's own input-latency work). The same section concluded that camera latency
+"would plausibly dominate" and that per-device calibration was mandatory.
+
+A microphone is not in that class. A capture block is **23ms at 1024 frames**, we
+choose its size, and PortAudio reports the rest. So this change does not trade one
+problem for another — it retires the one the project had already named as its worst.
+
+The second reason is fidelity, and it is the one §21 made concrete. The tab's whole
+content is a **pitch**; the mic hears exactly that. Everything else about the input
+model was a proxy for it.
+
+### 24.2 A detected pitch is not a lane, and the judge has to stop pretending
+
+Measured on the real library, the six strings' pitch ranges overlap across the middle
+of the guitar:
+
+| string | open | frets in the library | covers |
+|---|---|---|---|
+| 1 (low E) | 40 | 0–5 | 40–45 |
+| 3 (D) | 50 | 0–9 | 50–59 |
+| 4 (G) | 55 | 0–10 | 55–65 |
+| 5 (B) | 59 | 0–10 | 59–69 |
+
+**MIDI 55 is either D-string fret 5 or open G.** A detected fundamental therefore
+does not determine the lane, and the judge today matches on `lane`. So the judge
+grows a second, pitch-keyed index: `GameState.press_pitch(pitch, position)` beside
+`press(lane, position)`, the same nearest-note-in-the-MISS-window algorithm over a
+pending list keyed by MIDI pitch instead of by string. Both paths share `by_note`,
+so a note cannot be judged twice whichever way it is hit, and the returned
+`Judgement.lane` is the *chart note's* lane — so the display stays truthful about
+what the song asked for.
+
+This is **pure**, so it is testable with no audio device, which is why it can be built
+before the microphone exists. It is also the right model for a game about playing a
+real instrument: fretted D-string-5 and open G are the same note, and calling the
+second one a miss would be calling the player wrong for a correct note.
+
+### 24.3 The microphone path, when it is built
+
+The design's shape, and the parts that are decided rather than open:
+
+- **A filter bank per string is the cheap version and it is not enough.** Six
+  bandpass filters at the open pitches, envelope followers, loudest wins: it is
+  twenty lines of numpy and it is only correct for low frets. The library is mostly
+  frets 0–5 (2059 of 4099 notes in Hotel California are open strings), so it would
+  work on this library and fail on the next one. `CollapseRule.COMMON` exists in the
+  model for the same reason.
+- **A fundamental-frequency estimate is the real one.** Autocorrelation or an FFT peak
+  with harmonic suppression, per block, giving a fractional MIDI note. It handles
+  every fret and it is the same problem as the "FFT pitch test for Karplus-Strong"
+  that §9 recorded as never written — so the estimator gets verified against a real
+  rendered guitar note, and the synth gets verified by the code that will judge the
+  player. `audio/pitch.py` is where it goes, with `midi_to_hz`/`hz_to_midi` alongside.
+- **A strum is several notes at once,** which §21 turned out to be exactly right: the
+  chart is every note in the chord, and the judge already resolves each lane
+  independently. A strummed chord is a handful of simultaneous pitches, each of which
+  is a candidate hit.
+- **The output will bleed into the input.** The app knows exactly what it is playing
+  — it rendered it — so this is solvable rather than merely warned about, but the
+  first version should assume **headphones** and say so in the mode's tooltip, which
+  it now does.
+
+### 24.4 What the keyboard is for
+
+It stays, and it is the default. §4.1's rule is unchanged: the keyboard path must
+always work, because a demo on an unfamiliar machine may have no audio input at all,
+which is the same failure as having no camera. `InputMode.MICROPHONE` sits beside it
+rather than replacing it, and `Settings.input_mode` still defaults to `KEYBOARD`.
+
+### Not done — §24
+
+- **`audio/pitch.py` does not exist.** Nothing detects a pitch yet. The judge seam
+  (§24.2) is the part that is built; the detector is next.
+- **No microphone is opened.** `Settings.input_device` is a name and nothing reads
+  it, which is §21.2's failure mode again — acknowledged here rather than discovered
+  later, and it is the first thing to wire up.
+- **No input-latency estimation.** §4.1's tap-along estimator is designed and
+  unbuilt, and it matters less now: 23ms of block against a 140ms miss window is
+  comfortable, where 100ms was not.
+- **Practice tempo still does not slow the audio** (§23), which is the one place the
+  input and output halves of this plan meet: a microphone judge against music at the
+  wrong tempo is worse than no judge at all.
+
+## §25 — Dropping mediapipe, and the cost of proving an absence (2026-09-26)
+
+Supersedes §2.1, §2.2, §5.3's cv2 row, §7.2, and the M0 gate's static section.
+Those sections are the record of a real problem that no longer exists.
+
+**Tests: 802, all passing, and the lock file is down from 32 packages to 18.**
+
+### 25.1 Nothing had to be torn down
+
+The first question was what removing a webcam tracker would cost, and the answer is
+almost nothing:
+
+- `guitaroids/devices/` is a **zero-byte `__init__.py`**.
+- **No module in `guitaroids/` imports `cv2` or `mediapipe`.** The only `import cv2`
+  in the repository was in a test.
+- `qtenv.py` (71 lines) existed only to set `QT_PLUGIN_PATH` ahead of OpenCV's
+  plugin hijack, and `__main__.py` (30 lines) existed only to call it.
+
+So this is a pivot, not a teardown. Everything the webcam implied was prose, three
+settings fields, one disabled combo box, and a model download.
+
+### 25.2 What the pivot actually bought
+
+The install trap. `requirements.txt` carried three caveats and the first was by far
+the longest:
+
+> mediapipe hard-requires the *GUI* build of OpenCV, whose bundled Qt plugins under
+> `cv2/qt/plugins` hijack `QT_PLUGIN_PATH` and break PySide6 with `Could not load the
+> Qt platform plugin "xcb"`. … Both write to the same `cv2/` directory, so the GUI
+> build must be REMOVED BEFORE the headless one is installed. The reverse order
+> deletes the headless files while leaving its dist-info behind, and pip then reports
+> "already satisfied" and restores nothing — leaving `import cv2` broken.
+
+That was the rule `setup.sh` and `setup.ps1` existed to encode, the reason
+`qtenv.py` existed, the reason the M0 gate had a static section at all, and it cost a
+real afternoon once. It is gone, along with `qtenv.py`, `fetch_model.sh`,
+`paths.MODEL_PATH`, the model fetch in both setup scripts, and 14 packages.
+
+**And it retires the error term §4.1 called the largest in the product** — see §24.1
+for why a microphone is not in camera latency's class.
+
+### 25.3 The M0 gate changed its mind
+
+It used to assert the hijack was *inert*: that `cv2/qt` did not exist. That was a
+standing check on a package nothing imported, and it would have kept passing if
+somebody reinstalled the GUI build by hand.
+
+It now asserts the packages are not **declared** — in `requirements.txt` *and* in the
+lock file, so the venv and the file have to agree. That survives a manual
+reinstall, which is the actual failure the old test was watching for. The xcb plugin
+check asks PySide6 directly instead of going through `qtenv`.
+
+### 25.4 An absence test that cannot survive a comment is not an absence test
+
+Three of these tests assert that something is *not* there, and all three were
+defeated by the file **explaining what it used to do** — which is exactly what I
+wanted to leave behind:
+
+| test | defeated by |
+|---|---|
+| "neither setup script installs OpenCV" | the comment explaining the OpenCV ordering |
+| "requirements.txt does not declare OpenCV" | the note explaining the third caveat |
+| "`__main__.py` does not import qtenv" | the docstring explaining what qtenv was |
+
+Grepping the whole file failed on all three. A line filter that strips `#` comments
+fixed the first two and then failed on the third, because a Python docstring is not a
+comment. The third now parses with `ast` and inspects the import nodes, which cannot
+be confused by prose at all.
+
+The general rule, and it is the same shape as §21.2's: **an assertion about a
+seam has to be written against the seam.** "The file does not mention X" is a claim
+about prose. "The file does not *do* X" is a claim about code, and the two come apart
+the moment somebody explains themselves in a comment — which is a good thing to do.
+
+### 25.5 Settings, and the legacy value
+
+`InputMode.CAMERA` → `InputMode.MICROPHONE`, with **`"camera"` still accepted as a
+value meaning the microphone.** A settings file saying `"camera"` recorded a player
+who had deliberately chosen something other than a keyboard, and dropping the member
+without mapping it would fall back to `KEYBOARD` — handing them the one input they
+did not want, silently, with nothing left in the file to explain it later.
+
+`camera_device` is **gone**, not deprecated: an integer index into a camera
+enumeration that never existed, read by nothing (§21.2's failure mode in its purest
+form — parsed, clamped, serialised, round-tripped, inert). `input_device` replaces
+it as a *name*, because "the second input device" is not a setting anybody can check
+on a machine with a guitar interface, a laptop microphone and a monitor loopback.
+Settings go to version 3.
+
+### Not done — §25
+
+- **`settings.json` on this machine is at version 1** and will be migrated on next
+  launch. Not verified in place, because the file is the user's and rewriting it
+  unprompted is not mine to do.
+- **The venv was modified**: mediapipe, both OpenCV builds and 9 orphaned
+  transitives were uninstalled, and the lock regenerated. `typing_extensions` was
+  removed by mistake and restored — `pip check` caught it, and `pip check` is the
+  tool that should have run before each removal.
+- **§1.3's L2 slot still says "HandTracker"** and §1.4 still describes a capture
+  thread. Both are superseded here in prose; the code was never there to change.
+- **`DECISIONS.md` and `AGENTS.md` were updated in place**, as is their policy.
