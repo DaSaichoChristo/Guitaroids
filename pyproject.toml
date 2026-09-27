@@ -1,9 +1,11 @@
 [tool.pytest.ini_options]
-# `tests` and nothing else. A bare `pytest` at the repo root used to walk the whole
-# tree and try to import `guitaroids/audio/play_tab_prototype.py`, because it was
-# named `test_midi_play.py` and imported pygame at module level -- so the documented
-# `pytest tests` worked while the most natural command a person or an IDE would run
-# failed during collection. The rename fixed that file; this fixes the class.
+# `tests` and nothing else. A bare `pytest` at the repo root walks the whole tree and
+# imports every `test_*.py` it finds there, so a module that is a script, a prototype
+# or a scratch file can break collection for the most natural command a person or an
+# IDE would run -- while the documented `pytest tests` works fine and hides it. This
+# happened here: an early audio prototype was named `test_midi_play.py` and imported
+# pygame at module level. It has since been deleted, but the class of mistake is not
+# about that file, which is why the rule stays.
 testpaths = ["tests"]
 
 # Qt builds one QApplication per process and its platform is fixed at

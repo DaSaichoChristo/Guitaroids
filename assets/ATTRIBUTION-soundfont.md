@@ -50,5 +50,8 @@ order is `assets/` → `$GUITAROIDS_SOUNDFONT` → system paths → numpy synth 
 ## If none is present
 
 `scripts/fetch_soundfont.sh` failing is **not** fatal. The app falls back to the
-numpy Karplus-Strong synth (`guitaroids/audio/synth_numpy.py`), which needs nothing
-at all.
+numpy **pluck** synth in `guitaroids/audio/render.py` (`backend="pluck"`), which
+needs nothing at all beyond numpy. It is additive synthesis with a plucked envelope,
+not Karplus-Strong: KS is a per-sample recurrence, so rendering a five-minute chart
+with it in Python takes minutes, and a fallback slower than the thing it stands in
+for is not a fallback.

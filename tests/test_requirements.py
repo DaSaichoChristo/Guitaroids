@@ -331,9 +331,66 @@ def test_the_synth_fallback_is_named_after_what_it_is() -> None:
 
     The fallback is additive synthesis with a plucked envelope, not a per-sample KS
     recurrence, because KS renders a five-minute chart in minutes and a fallback
-    slower than the thing it stands in for is not a fallback (§24). Naming it
-    Karplus-Strong in a requirements file would be the first place a reader meets a
-    synth that does not exist.
+    slower than the thing it stands in for is not a fallback (§23.1, not §24 — §24
+    is the microphone and implements no synth). Naming it Karplus-Strong would be the
+    first place a reader meets a synth that does not exist.
     """
     assert "Karplus-Strong" not in REQUIREMENTS.read_text()
     assert "pluck" in REQUIREMENTS.read_text()
+
+
+def test_every_file_that_names_the_fallback_names_it_the_same_way() -> None:
+    """§27.4 said "all three" and there were four.
+
+    That commit fixed `requirements.txt`, `requirements-optional.txt` and `paths.py`
+    and then wrote down that it had fixed all of them -- while
+    `assets/ATTRIBUTION-soundfont.md` still called it Karplus-Strong *and* pointed at
+    `guitaroids/audio/synth_numpy.py`, a module that has never existed. The test beside
+    this one could not see it, because it looked at a single file.
+
+    **The rule is positive, not an absence**, which is the correction to my first
+    attempt. A blanket "Karplus-Strong must not appear" test fails on the prose that
+    *corrects* the myth -- `render.py` says "**Not** Karplus-Strong", which is the
+    sentence the project most wants to keep. So instead: any file that mentions the
+    fallback at all, by either name, has to use the real one too. A file that calls it
+    Karplus-Strong and never says "pluck" cannot pass.
+
+    DESIGN.md is exempt because it is append-only history; §7.5 and §9.5 describe a
+    synth that was planned and never built, and correcting them in place is the one
+    thing that file's convention forbids.
+    """
+    fallback_files = 0
+    offenders: list[str] = []
+    for path in sorted(ROOT.rglob("*")):
+        if not path.is_file() or path.suffix not in (".md", ".txt", ".py", ".toml"):
+            continue
+        if ".venv" in path.parts or ".git" in path.parts or path.name == "DESIGN.md":
+            continue
+        if path.name == Path(__file__).name:
+            continue  # this file names the myth to assert against it
+        text = path.read_text(errors="replace")
+        if "Karplus" not in text and "pluck" not in text:
+            continue
+        fallback_files += 1
+        if "pluck" not in text:
+            offenders.append(str(path.relative_to(ROOT)))
+    assert fallback_files >= 5, (
+        f"the sweep only found {fallback_files} files describing the fallback, so it "
+        "is not searching where it thinks it is"
+    )
+    assert not offenders, (
+        "these files name the numpy synth without ever calling it a pluck: "
+        f"{offenders}"
+    )
+
+
+def test_the_attribution_points_at_a_module_that_exists() -> None:
+    """A licence file that names a nonexistent module is worse than one that names none.
+
+    `ATTRIBUTION-soundfont.md` is what a person reads to find out what is playing
+    their music. It said the fallback was `guitaroids/audio/synth_numpy.py`, which was
+    never written; the real one is the `backend="pluck"` path in `render.py`.
+    """
+    text = (ROOT / "assets" / "ATTRIBUTION-soundfont.md").read_text()
+    assert "synth_numpy.py" not in text
+    assert "render.py" in text, "name the module that actually does the fallback"
