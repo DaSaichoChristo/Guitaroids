@@ -14,10 +14,11 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from PySide6 import QtWidgets
 
 from guitaroids.context import AppContext
 from guitaroids.settings import Settings
-from guitaroids.ui.preferences import Preferences
+from guitaroids.ui.preferences import DEVICE_COMBO_CHARS, Preferences
 from guitaroids.ui.screens import Screen
 
 
@@ -559,3 +560,102 @@ def test_the_latency_tooltip_does_not_contradict_the_sign(screen) -> None:
     assert "too HIGH" in tooltip
     assert "early" in tooltip
     assert "too high makes every note look late" not in tooltip
+
+
+# --- the device rows: the name gets its own space (§42) -----------------------
+
+
+def _settled(shell, qapp) -> None:
+    """Show the window and let the layout run, or every geometry is Qt's default.
+
+    An unshown shell has every widget at QRect(0, 0, 640, 480), so a geometry
+    assertion on it compares two identical default rectangles and "passes" the
+    intersection check for the wrong reason. §38.1 found the same trap in the
+    screenshot tool.
+    """
+    shell.show()
+    for _ in range(3):
+        qapp.processEvents()
+        shell.current_screen.layout().activate()
+    qapp.processEvents()
+
+
+def _device_rows(screen: Preferences) -> list[tuple[QtWidgets.QLabel, QtWidgets.QComboBox]]:
+    """The (label, combo) pairs of the Devices group, from the live form layout."""
+    rows = []
+    for box in screen.findChildren(QtWidgets.QGroupBox):
+        if box.title() != "Devices":
+            continue
+        for form in box.findChildren(QtWidgets.QFormLayout):
+            for row in range(form.count()):
+                # Either role can be absent -- `itemAt` returns None, not an empty
+                # item -- so this asks for both and checks what came back rather than
+                # assuming a well-formed row.
+                label_item = form.itemAt(row, QtWidgets.QFormLayout.ItemRole.LabelRole)
+                field_item = form.itemAt(row, QtWidgets.QFormLayout.ItemRole.FieldRole)
+                if label_item is None or field_item is None:
+                    continue
+                label, field = label_item.widget(), field_item.widget()
+                if isinstance(label, QtWidgets.QLabel) and isinstance(
+                    field, QtWidgets.QComboBox
+                ):
+                    rows.append((label, field))
+    return rows
+
+
+def test_the_device_name_is_not_drawn_underneath_the_field(
+    screen: Preferences, shell, qapp
+) -> None:
+    _settled(shell, qapp)
+    """The bug, asserted as geometry because that is what it was.
+
+    A `QComboBox` sizes itself for its widest *item*, and this machine's device list
+    makes that 436px out of a 520px group. `QFormLayout` does not clip when a row does
+    not fit -- it hands the surplus to the field, places the field at x=25, and the
+    label's own geometry still ran x=11 to x=134. So the combo was painted *over* the
+    name: "the name is overridden by the field". A QLabel cannot lose that race,
+    because the width being overrun is its own minimum.
+    """
+    rows = _device_rows(screen)
+    assert len(rows) == 2, f"expected the two device pickers, found {len(rows)}"
+    for label, combo in rows:
+        assert not label.geometry().intersects(combo.geometry()), (
+            f"{label.text()!r} occupies {label.geometry()} and "
+            f"{combo.objectName()} occupies {combo.geometry()}"
+        )
+        assert label.geometry().right() < combo.geometry().left(), (
+            f"{label.text()!r} ends at {label.geometry().right()} but the field "
+            f"starts at {combo.geometry().left()}"
+        )
+
+
+def test_the_device_name_gets_its_full_natural_width(
+    screen: Preferences, shell, qapp
+) -> None:
+    _settled(shell, qapp)
+    """Not merely "not overlapping": the name is as wide as it needs to be.
+
+    A label squeezed to fit beside its field and elided to "Microphone inp..." is not
+    fixed, it is smaller.
+    """
+    for label, _combo in _device_rows(screen):
+        assert label.width() >= label.sizeHint().width(), (
+            f"{label.text()!r} is {label.width()}px of the {label.sizeHint().width()}px "
+            "it needs"
+        )
+        assert not label.text().endswith("..."), f"{label.text()!r} is elided"
+
+
+def test_a_device_combo_does_not_demand_its_popup_width(screen: Preferences) -> None:
+    """The closed control and the popup have different requirements.
+
+    The popup shows the same device names and needs the room; the closed control only
+    shows the current one. Sizing the closed control by `minimumContentsLength` gives
+    the label column back its width, and the popup still opens full length because it
+    sizes to its contents when it opens.
+    """
+    for _label, combo in _device_rows(screen):
+        assert combo.sizeAdjustPolicy() == (
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        ), "a combo sized by its widest item will starve its row label"
+        assert combo.minimumContentsLength() == DEVICE_COMBO_CHARS

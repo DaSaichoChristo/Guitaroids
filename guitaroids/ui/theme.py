@@ -200,12 +200,17 @@ QWidget {{
 QLabel#subtitle, QLabel#dim, QLabel#gameBanner {{ font-family: "Sans Serif"; }}
 
 /* --- headings ------------------------------------------------------------- */
-QLabel#heading {{
+QLabel#heading, QLabel#title {{
     font-size: {px(26, f)}px;
     font-weight: 700;
     color: {COLORS["accent_hi"]};
     background: transparent;
 }}
+/* A screen's own title, centred. Split from #heading rather than folded into it
+   because not every heading is a title: the song-select detail card's heading sits
+   above a column of left-aligned fact rows, and centring that one would leave it
+   straddling them. `heading(kind="title")` is the opt-in. */
+QLabel#title {{ font-size: {px(28, f)}px; }}
 QLabel#subtitle {{
     font-size: {px(15, f)}px;
     color: {COLORS["text_dim"]};

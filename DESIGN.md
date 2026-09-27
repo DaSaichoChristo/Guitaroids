@@ -35,7 +35,7 @@ supersedes §2" resolves without ambiguity.
 
 ## The sections
 
-40 sections, in the order they were written. Dates are all 2026-09-26 or
+41 sections, in the order they were written. Dates are all 2026-09-26 or
 -27 and are in the headings, so they are left out here.
 
 | Section | What it records |
@@ -80,6 +80,7 @@ supersedes §2" resolves without ambiguity.
 | §39 | "Low tempo doesn't work", which was the input-latency setting |
 | §40 | "Reload the app for less latency", and the counter nobody read |
 | §41 | A retro palette, and the layout bill that came with it |
+| §42 | Centred titles, and a field drawn on top of its own name |
 
 **§33 is missing**, and §36.3 explains why rather than back-filling it: the number was
 reserved for work that was planned, approved and then overtaken by other work, so no
@@ -4856,3 +4857,99 @@ test was reporting a real fault, and 112 is unreadable.
   sans prose wraps correctly and nothing overlaps. The other five are verified at 1.0
   only, and the game HUD's three hand-placed lines have not been seen at 1.5, which
   is where a 30px gap is most likely to have stopped being one.
+
+---
+
+## §42 — Centred titles, and a field drawn on top of its own name (2026-09-27)
+
+Two requests: centre the titles, and the device pickers' names are being overridden
+by the fields. They turned out to have almost nothing in common, and the second one
+was a §19.2 failure that had been invisible for longer than it should have been.
+
+### §42.1 The device name was being drawn *underneath* the combo
+
+"Audio output" and "Microphone input" were not clipped. They were **overlapped**. The
+geometry, measured on the live form:
+
+| | geometry |
+|---|---|
+| `Audio output` label | `x=11, w=92` — ends at 103 |
+| `Microphone input` label | `x=11, w=123` — ends at 134 |
+| `deviceCombo` | **`x=25`**, w=484 |
+
+The field started at 25 and the label ran to 134, so 109px of a 123px label was
+painted over. **`QFormLayout` does not clip a row that does not fit — it overlaps**,
+and a `QLabel` cannot win that race, because the width being overrun is the label's
+own `minimumWidth`.
+
+The cause is `QComboBox` sizing itself for its widest **item**. This machine's device
+list makes that **436px out of a 520px group**, so the row needed 123 + 14 + 436 = 573
+and had 457. The surplus went to the field, which is what put it at 25.
+
+The fix is not to widen the group. **The closed control and the popup have different
+requirements**: the popup shows the device names and needs the room, and the closed
+control shows only the current one. Sizing the closed control by
+`minimumContentsLength` (18 characters, about 190px) hands the label column back its
+width, and the popup still opens full length because it sizes to its contents when it
+opens. The field now starts at **148**, clear of the widest label at 134.
+
+§38 had already tried to fix this column with `setMinimumWidth` on the label, and it
+did not work, because the label's minimum was never the thing being violated.
+
+### §42.2 Centred titles, as a role rather than an alignment
+
+`heading(kind="title")` is a **new role**, centred and 2px larger, and it is separate
+from `kind="heading"` on purpose: not every heading is a title. The song-select detail
+card's heading sits above a column of left-aligned fact rows, so centring that one
+would leave it straddling them. Anything that wants a centred heading that is not a
+screen title has to ask for it and own the consequences.
+
+Applied to all six: main menu, song select, preferences, import GP, results (title and
+the accuracy number), and the game HUD. The HUD's title is the one that had been
+quietly wrong — it was a `kind="heading"` left-aligned over the left half of the
+highway, and nothing about it looked wrong until it was compared with the other five.
+
+**Song Select needed a structural change, not an alignment.** Its title shared a row
+with the status text, and a title centred in "whatever is left over" is not centred in
+the window. The status moved to its own centred row underneath, with
+`setSpacing(px(2))` — the default item spacing is what pushed the Practice tempo row
+out of the detail card's visible area, and a centred title is not worth a control the
+player now has to scroll to find.
+
+### §42.3 The test that needed the window shown first
+
+`test_the_device_name_is_not_drawn_underneath_the_field` failed on its first run with
+both geometries reading `QRect(0, 0, 640, 480)`: Qt's default, for a screen that had
+been navigated to but never shown. An intersection check on two identical default
+rectangles **passes for the wrong reason** — the assertion was green and meaningless.
+§38.1 found the identical trap in the screenshot tool, where one `processEvents()`
+reported overlaps that did not exist; this is the same lesson in a third place.
+
+Verified to catch the regression: deleting the two `_stop_demanding_the_popup_width`
+calls fails both the geometry test and the policy test.
+
+**Tests: 1032 in total — 1016 excluding `tests/test_docs.py`.** Two clean runs.
+
+### Not done — §42
+
+- **The device popup's width was not checked against a real long name.** The fix sizes
+  the *closed* control by `minimumContentsLength`; the popup sizes itself at open time,
+  and this environment could not confirm what a 50-character device name looks like in
+  the dropdown. It was not measured before or after.
+- **The song-select detail card still scrolls, and still did.** The practice tempo
+  control is now at the very bottom edge of the visible card rather than comfortably
+  inside it. Reclaiming the rest means either a shorter header or a taller card, and
+  both were declined as more disruptive than the problem.
+- **`title` is centred but the subtitles under it mostly are not.** Main menu,
+  preferences and import GP have left-aligned subtitle prose directly under a centred
+  title, which reads as a centred banner over a left-aligned page. Centring the
+  subtitles too was not done because on preferences and import GP the prose is
+  left-aligned for a reason — it wraps to the column width, and a centred ragged-left
+  block of three lines is harder to read than a flush-left one.
+- **The game HUD's centred title now sits between the top-left corner and the tally.**
+  Centred is what was asked for and it is symmetric, but the tally is still hard
+  right, so the two do not read as one row.
+- **`_stop_demanding_the_popup_width` is applied to two combos by hand.** A third
+  device picker, or a combo in another screen with the same problem, will not get it,
+  and nothing generalises it. The helper is one call, but "remember to call it" is
+  §21.2's shape.

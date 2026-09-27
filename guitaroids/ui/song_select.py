@@ -85,12 +85,27 @@ class SongSelect(ScreenBase):
 
         column = content_column(self, margin=24, max_width=980)
 
-        header = QtWidgets.QHBoxLayout()
-        header.addWidget(heading("Song Select"))
+        # Title centred on its own row, status centred beneath it.
+        #
+        # It was one row: title, then the status right-aligned, then a stretch. That
+        # cannot centre the title, because the status is in the same row and the
+        # title is centred in whatever is left over rather than in the window. Two
+        # rows is the only way "Song Select" is actually in the middle.
+        self._header = QtWidgets.QVBoxLayout()
+        header = self._header
+        # No spacing between the title and the status. They are one header, and the
+        # default item spacing is what pushed the Practice tempo row out of the
+        # detail card's visible area -- a centred title is not worth a control the
+        # player now has to scroll to find.
+        header.setSpacing(px(2))
+        title_row = QtWidgets.QHBoxLayout()
+        title_row.addStretch(1)
+        title_row.addWidget(heading("Song Select", kind="title"))
+        title_row.addStretch(1)
+        header.addLayout(title_row)
         self._status = heading("", kind="dim")
-        header.addWidget(self._status, alignment=QtCore.Qt.AlignmentFlag.AlignRight
-                         | QtCore.Qt.AlignmentFlag.AlignVCenter)
-        header.addStretch(1)
+        self._status.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
+        header.addWidget(self._status)
         column.addLayout(header)
 
         body = QtWidgets.QHBoxLayout()
@@ -187,7 +202,7 @@ class SongSelect(ScreenBase):
         self, content: QtWidgets.QWidget, layout: QtWidgets.QVBoxLayout
     ) -> None:
         """Fill ``layout`` with the details. The caller owns the widgets' geometry."""
-        self._detail_title = heading("", kind="heading")
+        self._detail_title = heading("", kind="title")
         self._detail_artist = heading("", kind="subtitle")
         layout.addWidget(self._detail_title)
         layout.addWidget(self._detail_artist)

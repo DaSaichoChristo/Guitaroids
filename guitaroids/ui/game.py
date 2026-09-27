@@ -140,9 +140,11 @@ class Game(ScreenBase):
         **parented to the screen**: a parentless QLabel is a top-level window, and
         showing one opens a second window floating over the game.
         """
-        self._title = heading("", kind="heading", parent=self)
+        self._title = heading("", kind="title", parent=self)
         self._title.setObjectName("gameTitle")
-        self._title.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        # Centred across the full window, so the geometry below gives it the whole
+        # width rather than the left half. §42.
+        self._title.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
 
         self._tally = heading("", kind="stat", parent=self)
         self._tally.setObjectName("gameTally")
@@ -198,7 +200,7 @@ class Game(ScreenBase):
         self._view.setGeometry(self.rect())
         width, height = self.width(), self.height()
         pad = px(20)
-        self._title.setGeometry(pad, px(12), width // 2, px(40))
+        self._title.setGeometry(0, px(12), width, px(40))
         self._tally.setGeometry(width // 2, px(12), width // 2 - pad, px(40))
         # Under the tally, not beside it: the tally is already the full half-width
         # and is monospaced, so anything appended to it would break its columns.

@@ -39,7 +39,7 @@ class MainMenu(ScreenBase):
         # hugging the top.
         column = content_column(self, margin=56, vertical_centred=True)
 
-        column.addWidget(heading("GUITAROIDS"))
+        column.addWidget(heading("GUITAROIDS", kind="title"))
         column.addWidget(
             heading(
                 "Turn your real guitar into the controller and play your favorite tabs live.",

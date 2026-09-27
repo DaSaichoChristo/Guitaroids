@@ -53,7 +53,7 @@ class Results(ScreenBase):
         # with the other three.
         column = content_column(self, margin=44, max_width=620, vertical_centred=True)
 
-        self._title = heading("", parent=self)
+        self._title = heading("", kind="title", parent=self)
         column.addWidget(self._title)
         self._subtitle = heading("", kind="subtitle", parent=self)
         column.addWidget(self._subtitle)
@@ -62,7 +62,7 @@ class Results(ScreenBase):
         # The one number worth reading at a glance, so it is the large one. There is
         # no dedicated "big" label role, and adding one to the stylesheet for a single
         # screen is more than this needs; a heading is already the largest thing here.
-        self._accuracy = heading("", parent=self)
+        self._accuracy = heading("", kind="title", parent=self)
         column.addWidget(self._accuracy)
         self._verdict = heading("", kind="subtitle", parent=self)
         column.addWidget(self._verdict)

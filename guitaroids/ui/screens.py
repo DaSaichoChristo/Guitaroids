@@ -220,10 +220,19 @@ def heading(
     ``parent`` matters for the game HUD, which floats labels over the highway: a
     parentless QLabel is a *top-level window*, so ``show()`` on one would open a
     second window floating over the game rather than drawing into it.
+
+    ``kind="title"`` is a **centred** screen title, and it is a separate role rather
+    than an alignment set on ``"heading"`` because not every heading is a title. The
+    song-select detail card's heading sits above a column of left-aligned fact rows,
+    so centring that one would leave it straddling them; a screen's own title has
+    nothing under it to disagree with. Anything that wants a centred heading that is
+    *not* a screen title has to say ``kind="title"`` and own the consequences.
     """
     label = QtWidgets.QLabel(text, parent)
     label.setObjectName(kind)
     label.setWordWrap(True)
+    if kind == "title":
+        label.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
     return label
 
 

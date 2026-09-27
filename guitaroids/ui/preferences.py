@@ -62,6 +62,34 @@ def _unwrapping(label: QtWidgets.QLabel) -> QtWidgets.QLabel:
     return label
 
 
+#: A closed combo shows the current device, which is a *name* and can be long; the
+#: popup shows the same names and needs the room. Those are different requirements,
+#: and a QComboBox sizes itself for the widest **item** by default, so the closed
+#: control demands 436px on this machine's device list.
+#:
+#: That is 436px out of a 520px group, and it is what pushed the row label out of
+#: existence: `QFormLayout` gave the surplus to the field, placed it at x=25, and the
+#: label's own geometry ran x=11 to x=134 -- so the combo was drawn *over* the name,
+#: which is what "the name is overridden by the field" is. `QFormLayout` does not
+#: clip, it overlaps, and a QLabel cannot lose that race because its width is its
+#: minimum.
+#:
+#: Sizing the closed control by `minimumContentsLength` instead of the widest item
+#: gives the label column back its width, and the popup still opens full length
+#: because the popup sizes to its contents at open time. 18 characters is about
+#: 190px, which leaves the widest label ("Microphone input", 123px) plus spacing
+#: inside the 520px group with room to spare.
+DEVICE_COMBO_CHARS = 18
+
+
+def _stop_demanding_the_popup_width(combo: QtWidgets.QComboBox) -> None:
+    """Size a combo by :data:`DEVICE_COMBO_CHARS` rather than by its widest item."""
+    combo.setSizeAdjustPolicy(
+        QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+    )
+    combo.setMinimumContentsLength(DEVICE_COMBO_CHARS)
+
+
 class Preferences(ScreenBase):
     """A form over a draft of the settings."""
 
@@ -106,7 +134,7 @@ class Preferences(ScreenBase):
 
         column = content_column(inner, margin=40, max_width=520)
 
-        column.addWidget(heading("Preferences"))
+        column.addWidget(heading("Preferences", kind="title"))
         column.addWidget(
             heading("Changes are saved when you press Save.", kind="subtitle")
         )
@@ -280,6 +308,7 @@ class Preferences(ScreenBase):
         # saying picking "arrives with the audio layer", which arrived in §23.
         self._output = QtWidgets.QComboBox()
         self._output.setObjectName("deviceCombo")
+        _stop_demanding_the_popup_width(self._output)
         self._output.currentIndexChanged.connect(self._on_output_changed)
         form.addRow(_unwrapping(heading("Audio output", kind="dim")), self._output)
 
@@ -293,6 +322,7 @@ class Preferences(ScreenBase):
         # player left unable to choose their own microphone.
         self._input = QtWidgets.QComboBox()
         self._input.setObjectName("inputDeviceCombo")
+        _stop_demanding_the_popup_width(self._input)
         self._input.currentIndexChanged.connect(self._on_input_changed)
         form.addRow(_unwrapping(heading("Microphone input", kind="dim")), self._input)
 

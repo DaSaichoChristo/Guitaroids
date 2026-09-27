@@ -68,7 +68,7 @@ class ImportGp(ScreenBase):
 
         column = content_column(self, margin=40, max_width=560, vertical_centred=True)
 
-        column.addWidget(heading("Import GP"))
+        column.addWidget(heading("Import GP", kind="title"))
         column.addWidget(
             heading(
                 "Copy a Guitar Pro tab into the song library.\n\n"

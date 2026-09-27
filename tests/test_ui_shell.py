@@ -744,3 +744,67 @@ def test_the_pin_measures_the_labels_own_width_not_its_size_hint(qapp) -> None:
     assert label.minimumHeight() >= wrapped, (
         f"pinned to {label.minimumHeight()} but needs {wrapped} for its own width"
     )
+
+
+# --- screen titles are centred (§42) ------------------------------------------
+
+
+def test_every_screen_title_is_centred(shell) -> None:
+    """A title is centred, so it sits in the middle of the window.
+
+    Asserted per screen rather than once, because a screen that adds a title by hand
+    can forget the role: the game HUD's title was a `kind="heading"` left-aligned over
+    the left half of the highway, and nothing about it looked wrong until it was
+    compared with the other five.
+    """
+    from PySide6 import QtCore, QtWidgets
+
+    centred = QtCore.Qt.AlignmentFlag.AlignHCenter
+    # "gameTitle" as well as "title": the HUD's title is renamed for its own
+    # stylesheet rule, so the object name a screen ends up with is not a reliable way
+    # to ask "is this a title". The alignment is the thing being asserted.
+    names = ("title", "gameTitle")
+    missing = []
+    for screen_enum in Screen:
+        shell.navigate(screen_enum)
+        titles = [
+            label
+            for label in shell.current_screen.findChildren(QtWidgets.QLabel)
+            if label.objectName() in names
+        ]
+        if not titles:
+            missing.append(screen_enum.value)
+            continue
+        for title in titles:
+            assert title.alignment() & centred, (
+                f"{screen_enum.value}: {title.text()!r} is a title and is not centred"
+            )
+    assert not missing, f"these screens have no title label at all: {missing}"
+
+
+def test_a_centred_title_does_not_sit_beside_its_subtitle(shell) -> None:
+    """Song Select's title used to share a row with the status text.
+
+    A title centred in "whatever is left over" is not centred in the window, so the
+    status moved to its own centred row underneath. This asserts they are not in the
+    same row any more, which is the only structural difference.
+    """
+    from PySide6 import QtWidgets
+
+    shell.navigate(Screen.SONG_SELECT)
+    screen = shell.current_screen
+    header = screen._header
+    assert isinstance(header, QtWidgets.QVBoxLayout), "the header is a column now"
+
+    title_row = header.itemAt(0).layout()
+    assert isinstance(title_row, QtWidgets.QHBoxLayout), (
+        "the title needs a row of its own, with a stretch either side, to be centred "
+        "on the window rather than on the space the status leaves"
+    )
+    # A stretch, the title, a stretch -- and nothing else.
+    kinds = [title_row.itemAt(i).widget() for i in range(title_row.count())]
+    titles = [w for w in kinds if isinstance(w, QtWidgets.QLabel)]
+    assert len(titles) == 1, f"the title row holds {titles}"
+    assert title_row.itemAt(0).widget() is None, "no stretch before the title"
+    assert title_row.itemAt(title_row.count() - 1).widget() is None, "no stretch after"
+    assert header.itemAt(1).widget() is screen._status, "the status is its own row"
