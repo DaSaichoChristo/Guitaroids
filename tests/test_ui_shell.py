@@ -664,3 +664,72 @@ def test_no_button_is_created_without_being_connected(path: Path) -> None:
         "these buttons are built and laid out but their `clicked` goes nowhere: "
         f"{_unconnected_buttons(path)}"
     )
+
+
+# --- wrapped labels that are narrower than their text (§38.3) ------------------
+
+
+def test_no_wrapped_label_is_shorter_than_its_text(shell, qapp) -> None:
+    """Every word-wrapped label is given the height its text needs at its own width.
+
+    The existing squeeze test checks that a layout does not compress a widget *below
+    the minimum it declared*, which a label declares wrongly when its text needs more
+    lines than its ``sizeHint`` predicted. So this asserts the property that actually
+    matters: the height the label ends up with is enough to draw what is in it.
+
+    Caught by rendering the screen rather than by any assertion, which is the point:
+    the Preferences page had "Microphone input" drawn on top of the row beneath it
+    for several commits, and every test on the screen passed.
+    """
+    from PySide6 import QtWidgets
+
+    # Show the window and settle first. An unshown shell has every label at a default
+    # width, so "No song played" measured 100px wide and appeared to need three lines
+    # -- a measurement artefact, and the first version of this test failed on it.
+    shell.show()
+    shell.resize(960, 640)
+
+    for screen_enum in Screen:
+        shell.navigate(screen_enum)
+        qapp.processEvents()
+        for label in shell.current_screen.findChildren(QtWidgets.QLabel):
+            if not label.wordWrap() or not label.text().strip():
+                continue
+            needed = label.heightForWidth(label.width())
+            if needed <= 0:
+                continue
+            assert label.height() >= needed, (
+                f"{screen_enum.value}: {' '.join(label.text().split())[:44]!r} needs "
+                f"{needed}px at {label.width()}px wide and has {label.height()}px, so "
+                "its last line is drawn over whatever is below it"
+            )
+
+
+def test_the_pin_measures_the_labels_own_width_not_its_size_hint(qapp) -> None:
+    """A narrow label that wraps is the case `sizeHint` gets wrong.
+
+    At construction and during `showEvent` a label is often still at its old, wider
+    width, so `sizeHint().height()` answers "one line" for text that is about to wrap
+    to two. `heightForWidth` at the label's current width is the question that was
+    being asked.
+    """
+    from PySide6 import QtWidgets
+
+    from guitaroids.ui.screens import pin_wrapped_label_heights
+
+    holder = QtWidgets.QWidget()
+    layout = QtWidgets.QVBoxLayout(holder)
+    label = QtWidgets.QLabel("A deliberately long sentence that must wrap somewhere")
+    label.setWordWrap(True)
+    layout.addWidget(label)
+    holder.resize(200, 400)
+    label.setFixedWidth(90)  # narrow enough to force a wrap
+    holder.show()
+    qapp.processEvents()
+
+    wrapped = label.heightForWidth(90)
+    assert wrapped > 0
+    assert pin_wrapped_label_heights(holder) >= 1
+    assert label.minimumHeight() >= wrapped, (
+        f"pinned to {label.minimumHeight()} but needs {wrapped} for its own width"
+    )

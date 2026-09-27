@@ -89,6 +89,20 @@ def main(argv: list[str]) -> int:
     written = []
     for screen in targets:
         shell.navigate(screen)
+        # Let the layout actually settle before grabbing. A single processEvents()
+        # is not enough, and the result was a *false* defect: `showEvent` pins
+        # wrapped-label heights, which invalidates the layout, and a grab taken
+        # before that re-run paints rows at stale positions. That is how the
+        # Preferences page appeared to have a paragraph drawn over the row beneath
+        # it, in a layout that measures clean -- and how "Microphone input" looked
+        # like it was wrapping, when at 960x640 its column is wider than the text.
+        # A tool that reports overlaps which do not exist costs more than one that
+        # misses a real one, because it sends you to fix the wrong file.
+        for _ in range(3):
+            app.processEvents()
+            widget = shell.current_screen
+            if widget.layout() is not None:
+                widget.layout().activate()
         app.processEvents()
         path = out / f"{screen.value}.png"
         if not shell.grab().save(str(path)):

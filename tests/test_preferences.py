@@ -164,6 +164,62 @@ def test_reset_does_not_apply_until_saved(screen: Preferences, context) -> None:
     assert context.settings.master_volume == 0.8, "Reset fills the form, not the settings"
 
 
+def test_saving_returns_to_the_main_menu(shell, context) -> None:
+    """Pressing Save and staying put means a second press to leave.
+
+    It also leaves the player on a settings page with nothing to do on it, and
+    "Saved." is not on screen long enough to be worth reading. So Save saves and
+    leaves. Back is a different thing: it *discards* unsaved changes, and calling it
+    after a save would wipe the "Saved." it had just set.
+    """
+    shell.navigate(Screen.PREFERENCES)
+    screen = shell.current_screen
+    assert shell.current is Screen.PREFERENCES
+    screen.save()
+    assert shell.current is Screen.MAIN
+
+
+def test_a_failed_write_keeps_you_on_the_screen(shell, context, monkeypatch) -> None:
+    """The one case where leaving would hide the reason.
+
+    A write that fails is worth seeing, and navigating away would put the explanation
+    somewhere the player is not. The in-memory settings are still correct, so the screen
+    is telling the truth about what is applied and what is not.
+    """
+    shell.navigate(Screen.PREFERENCES)
+    screen = shell.current_screen
+
+    def refuse() -> None:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(context, "save_settings", refuse)
+    screen.save()
+    assert shell.current is Screen.PREFERENCES, "a failed save must not navigate away"
+    assert "no space left" in screen._status.text(), "and must say why"
+
+
+def test_saving_still_writes_the_settings_to_disk(shell, context, tmp_path) -> None:
+    """Leaving on Save must not become leaving *instead of* saving."""
+    path = tmp_path / "settings.json"
+    context.settings_path = path
+    shell.navigate(Screen.PREFERENCES)
+    screen = shell.current_screen
+    screen._draft = replace(screen._draft, master_volume=0.25)
+    screen.save()
+    assert shell.current is Screen.MAIN
+    assert Settings.load(path).master_volume == pytest.approx(0.25)
+
+
+def test_back_still_discards_unsaved_changes(shell, context) -> None:
+    """Save and Back are opposites, and only one of them leaves."""
+    shell.navigate(Screen.PREFERENCES)
+    screen = shell.current_screen
+    screen._draft = replace(screen._draft, master_volume=0.1)
+    screen._leave()
+    assert shell.current is Screen.MAIN
+    assert screen.context.settings.master_volume == pytest.approx(0.8), "the draft was discarded"
+
+
 def test_reset_keeps_the_per_song_offsets(screen: Preferences, context) -> None:
     context.settings.set_offset_for("alpha", -50.0)
     screen._reset.click()
@@ -288,22 +344,110 @@ def test_the_output_picker_is_live_and_lists_the_system_default(screen: Preferen
     assert output.count() >= 1
 
 
-def test_the_microphone_picker_still_admits_it_is_not_ready(screen: Preferences) -> None:
-    """The input side is unchanged: disabled, and honest about why.
+def test_the_microphone_picker_is_live_too(screen: Preferences) -> None:
+    """Both pickers work, and the input one is the second half of that.
 
-    `Settings.input_device` is read by no code, because there is no microphone path to
-    read it for (§24). So unlike the output picker, this one stays disabled -- and
-    "not yet" is more honest than "system default", which would read as a choice the
-    app is honouring when it is not honouring anything.
+    It was disabled and reading "not yet", justified because
+    `Settings.input_device` "is read by no code at all, because there is no microphone
+    path to read it for (§24)". §30 wrote that path: `Game._start_microphone` passes
+    the setting to `Microphone`, which opens `sd.InputStream(device=...)`.
+
+    A justification outliving the fact it justified is §21.2's shape with the code
+    removed, and it left a player unable to choose their own microphone on a machine
+    with several. The control is enabled, and "system default" rather than "not yet",
+    because the app really is honouring it now.
     """
     from PySide6 import QtWidgets
 
     combos = _devices_group(screen).findChildren(QtWidgets.QComboBox)
     assert len(combos) == 2, "one picker per device kind"
-    microphone = [c for c in combos if c is not screen.findChild(QtWidgets.QComboBox, "deviceCombo")]
-    assert len(microphone) == 1
-    assert not microphone[0].isEnabled()
-    assert microphone[0].currentText() == "not yet"
+    microphone = screen.findChild(QtWidgets.QComboBox, "inputDeviceCombo")
+    assert microphone is not None, "the input picker needs a name so tests can find it"
+    assert microphone in combos
+    assert microphone.isEnabled(), "the microphone exists, so the picker must work"
+    assert "not yet" not in microphone.currentText()
+
+
+def test_the_microphone_picker_shows_the_stored_device(screen: Preferences) -> None:
+    """The whole point of the control: a chosen input is remembered and shown."""
+    from guitaroids.settings import Settings
+
+    context = AppContext()
+    context.settings = Settings(input_device="Focusrite Scarlett")
+    screen._load_devices(context.settings)
+    assert "Focusrite Scarlett" in screen._input.currentText()
+
+
+def test_an_unplugged_input_is_shown_rather_than_dropped(screen: Preferences) -> None:
+    """A stored device that is gone is a legitimate value, and hiding it is a silent lie.
+
+    Same reasoning as the output picker: dropping the name would turn an honest failure
+    when the stream cannot open into a silent fall back to the system default, which is
+    the same class of bug as a setting nothing reads.
+    """
+    from guitaroids.settings import Settings
+
+    context = AppContext()
+    context.settings = Settings(input_device="A Microphone That Was Unplugged")
+    screen._load_devices(context.settings)
+    assert "not connected" in screen._input.currentText()
+
+
+def test_both_pickers_write_to_the_draft_not_the_context(screen: Preferences, monkeypatch) -> None:
+    """Otherwise they are the only controls on the screen that ignore Cancel.
+
+    The device list is monkeypatched rather than read from the host, so this does not
+    skip on a machine with one sound card -- and, more to the point, it asserts the
+    **draft receives the value**. The first version only asserted the context had *not*
+    changed, which passes just as happily when the control is not connected to
+    anything at all: un-connecting the input picker's `clicked`-equivalent left all
+    thirty-three tests green.
+    """
+    from PySide6 import QtWidgets
+
+    monkeypatch.setattr(
+        screen,
+        "_device_choices",
+        lambda direction: (
+            [None, f"chosen-{direction}"],
+            ["system default", f"chosen-{direction}  (2ch)"],
+        ),
+    )
+    screen._load_devices(Settings())
+    output = screen.findChild(QtWidgets.QComboBox, "deviceCombo")
+    microphone = screen.findChild(QtWidgets.QComboBox, "inputDeviceCombo")
+
+    output.setCurrentIndex(1)
+    microphone.setCurrentIndex(1)
+
+    assert screen._draft.audio_device == "chosen-out"
+    assert screen._draft.input_device == "chosen-in"
+    assert screen.context.settings.audio_device is None, "and the context is untouched"
+    assert screen.context.settings.input_device is None
+
+
+def test_a_picker_wired_to_nothing_is_caught_by_the_draft_assertion(
+    screen: Preferences, monkeypatch
+) -> None:
+    """The mutation this file exists to prevent, made as a test rather than run by hand.
+
+    Disconnect the input picker and assert something notices. If this ever stops
+    failing, the draft assertions above have become vacuous.
+    """
+    from PySide6 import QtWidgets
+
+    monkeypatch.setattr(
+        screen,
+        "_device_choices",
+        lambda direction: ([None, "only-input"], ["system default", "only-input  (2ch)"]),
+    )
+    screen._load_devices(Settings())
+    screen._input.currentIndexChanged.disconnect()
+    screen._input.setCurrentIndex(1)
+    assert screen._draft.input_device is None, (
+        "the picker is disconnected, so nothing should have been written -- if this "
+        "assertion is what you are reading, the draft checks above are doing their job"
+    )
 
 
 def test_the_devices_group_does_not_claim_to_be_waiting_for_the_audio_layer(

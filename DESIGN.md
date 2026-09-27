@@ -35,7 +35,7 @@ supersedes §2" resolves without ambiguity.
 
 ## The sections
 
-36 sections, in the order they were written. Dates are all 2026-09-26 or
+37 sections, in the order they were written. Dates are all 2026-09-26 or
 -27 and are in the headings, so they are left out here.
 
 | Section | What it records |
@@ -76,6 +76,7 @@ supersedes §2" resolves without ambiguity.
 | §35 | A button that was not connected, and the check that would have caught it |
 | §36 | Reconciling this file with itself |
 | §37 | Auditing `README.md`, and a test that was one word too narrow |
+| §38 | The screenshot tool's false defect, and the one it was hiding |
 
 **§33 is missing**, and §36.3 explains why rather than back-filling it: the number was
 reserved for work that was planned, approved and then overtaken by other work, so no
@@ -4420,3 +4421,107 @@ citation rejected the only citation that needed permitting.
   which is the actual shape of the §37.1 bug: two individually plausible statements
   contradicting each other. The widened claim test catches one of them now, because it
   catches the *wrong* one regardless of what the other says.
+
+---
+
+## §38 — The screenshot tool's false defect, and the one it was hiding (2026-09-27)
+
+Picking up the Preferences work left uncommitted: Save now navigates to the main menu
+on success (staying put on `OSError`), the microphone picker is live, and the two
+pickers share `_device_choices` / `_load_device`. That much was already written and
+passing. What was not finished was the *screenshots*.
+
+### §38.1 A label drawn over the row below it, in a layout that measures clean
+
+`scripts/screenshot_ui.py` renders Preferences with the Input note visibly drawn on
+top of the "Input latency" row. The obvious reading is a §19.2 squeeze. It is not
+one: with the layout settled, the note is 500px wide, 85px tall, and needs 85 — and a
+sibling-geometry sweep over every group box on the screen finds **zero** overlaps.
+
+The cause is the tool. It called `app.processEvents()` once between `navigate()` and
+`grab()`. `showEvent` pins wrapped-label heights, which invalidates the layout, and
+one event-loop turn does not re-run it — so the grab painted rows at stale positions.
+`processEvents()` three times with `layout().activate()` between, then the grab, and
+the overlap is gone.
+
+**A tool that reports overlaps which do not exist costs more than one that misses a
+real one, because it sends you to fix the wrong file.** This one sent me to
+`pin_wrapped_label_heights` — see §38.3 for what that cost.
+
+### §38.2 The test that catches it, and is about geometry rather than prose
+
+`test_no_wrapped_label_is_shorter_than_its_text` asserts that every word-wrapped
+`QLabel` holds at least `heightForWidth(width)`. That is the property that matters,
+and it is *not* what the existing squeeze test checks: the squeeze test asserts a
+layout does not compress a widget below the minimum it **declared**, and a wrapped
+label declares a minimum that is wrong in exactly the case that matters. Asserting
+the declared minimum cannot catch a bad declaration.
+
+It is also the first check in this suite on what gets **drawn** rather than on
+behaviour or on a handler. It fails on the old pin and passes on the new one, both
+verified by reverting each in turn.
+
+Its first version failed on a screen that was fine: it measured an unshown shell,
+where every label sits at a default width, and reported Results' "No song played" as
+needing 93px at 100px wide. Show the window and settle it first, or the test measures
+the harness.
+
+### §38.3 `heightForWidth` is the right question and the wrong fix
+
+The natural fix for a wrapped label that is too short is to pin its height from
+`heightForWidth` at its current width — the label's `sizeHint` answers "how tall at
+the width I am *now*", and during `showEvent` a label about to be squeezed into a
+narrow form column is still at its old, wider width, so it reports one line. That
+argument is correct and I implemented it. It broke **ten** clipping assertions across
+Preferences, Import GP and Results.
+
+The taller label makes `QFormLayout` narrow the label column further, which wraps the
+*other* row labels, which need more height, which narrows it again. **A layout
+economising hands out widths as well as heights, so demanding more room at one label
+shrinks everyone else's.** Reverted; `pin_wrapped_label_heights` keeps `sizeHint`.
+
+What actually fixed the Preferences label was fixing it at the source: `_unwrapping`
+turns wrapping off for a form row label *and* floors it at its own text width. Both
+halves are needed — wrapping gives a second line drawn over the row below, and
+no-wrap without a width clips the word off at the column edge. Measured afterwards:
+"Audio output" 92px of 92px, "Microphone input" 123px of 123px, both fitting exactly.
+
+### §38.4 A justification that outlived its fact, again
+
+The `preferences.py` module docstring still said both device pickers were
+**disabled**, and said enumerating devices "must not happen just to render a settings
+page". §23 wrote the playback path and §30 the microphone path, and each left the
+greyed-out control and its note behind. Enumerating devices opens PortAudio but not a
+stream, so it costs nothing the audio layer was not already paying. Rewritten.
+
+This is §21.2's shape for the third time — a stale justification is worse than no
+justification, because it reads as a decision. The check that would catch it is
+absent: no test asserts a docstring's claims.
+
+**Tests: 993 in total — 977 excluding `tests/test_docs.py`.** Two consecutive clean
+runs.
+
+### Not done — §38
+
+- **The `_unwrapping` minimum width is `sizeHint().width()` at construction**, before
+  the stylesheet owns typography, so it is measured against default fonts. It happens
+  to be right and both labels fit exactly, but it is the same "cannot be pinned at
+  construction" trap the pin function's docstring describes, one level over. A
+  screenshot of Preferences at `--scale 1.5` was not compared against 1.0.
+- **The layout settle is now in `screenshot_ui.py` and nowhere else.** `tests/`'s
+  `shell` fixture still does a single `processEvents()` in most tests, so any test
+  that measures geometry can still measure a stale one. The new test had to work
+  around this explicitly.
+- **The sweep for sibling overlaps was a throwaway diagnostic**, not a test. It is the
+  check that would have caught §38.1's *symptom* directly and it costs ten lines.
+- **The one anomalous test run is unexplained.** Verifying the new test against the
+  reverted pin reported a pass; two later attempts at the identical command reported
+  the expected failure. `pytest-randomly` is not installed, so ordering is
+  deterministic and that is not the explanation. The failure itself reproduces
+  reliably, and the fixed code passes reliably, so the guard is sound — but I did not
+  find out why the first run disagreed, and an unexplained disagreement in a test
+  result is worth understanding before trusting the guard in a later session.
+- **`AGENTS.md` still has not been swept** (§37), and now also understates the count
+  of screens' work in a way this section does not change.
+- **No test asserts a docstring's claims**, so §38.4's class of error is still
+  unguarded.

@@ -11,10 +11,11 @@ on Save. Two other designs were rejected:
 A draft plus an explicit Save is the boring, predictable one: Cancel really
 discards, and nothing is on disk until the user says so.
 
-The audio and input device pickers are present but **disabled**, and say why.
-Enumerating devices means opening PortAudio, which is M2/M3 work and
-must not happen just to render a settings page. A control that looks live and does
-nothing is worse than one that admits it is not ready.
+Both device pickers are live. Enumerating devices opens PortAudio, which was
+M2/M3 work when the input picker was a disabled placeholder; §23 wrote the
+playback path and §30 the microphone path, and each of those left the greyed-out
+control and its justification behind. Opening PortAudio to *enumerate* is not
+opening a stream, so it costs nothing the audio layer was not already paying.
 """
 
 from __future__ import annotations
@@ -30,6 +31,35 @@ from .screens import ScreenBase, constrained_button, content_column, heading
 
 if TYPE_CHECKING:  # pragma: no cover - types only
     from ..context import AppContext
+
+
+def _unwrapping(label: QtWidgets.QLabel) -> QtWidgets.QLabel:
+    """A row label in a form column, which must not wrap.
+
+    ``heading()`` returns a word-wrapped label, which is right for a paragraph and
+    wrong for a form row. In a 92px column "Microphone input" wrapped to two lines
+    while the stylesheet's own ``sizeHint`` said one, and the row's second line was
+    drawn over the text beneath it -- a clipped label that no test caught, because
+    every test on this screen checked behaviour rather than what got drawn.
+
+    Turning wrapping *off* fixes the overlap, and the label then needs a minimum
+    width as wide as its text or the form clips it sideways instead. Both are
+    needed, and neither is enough alone: wrapping makes a second line that is
+    drawn over the row below, and no-wrap without a width cuts the word off at
+    the column edge.
+
+    Why not pin the height from ``heightForWidth``, which is right in principle?
+    Because it was measured to be worse. A taller label makes ``QFormLayout``
+    narrow the label column further, which wraps the *other* row labels, and ten
+    clipping assertions on three other screens went with it. A layout economising
+    hands out widths as well as heights, so demanding more room at one label
+    shrinks everyone else's.
+    """
+    label.setWordWrap(False)
+    # The width the text actually needs, as a floor. `sizeHint` on an unwrapped
+    # label is the text width, so this is asking the form for a column that fits.
+    label.setMinimumWidth(label.sizeHint().width())
+    return label
 
 
 class Preferences(ScreenBase):
@@ -239,38 +269,51 @@ class Preferences(ScreenBase):
         self._output = QtWidgets.QComboBox()
         self._output.setObjectName("deviceCombo")
         self._output.currentIndexChanged.connect(self._on_output_changed)
-        form.addRow(heading("Audio output", kind="dim"), self._output)
+        form.addRow(_unwrapping(heading("Audio output", kind="dim")), self._output)
 
-        # Input picking still has nothing to pick. `Settings.input_device` is read by
-        # no code at all, because there is no microphone path to read it for (§24) --
-        # so this stays disabled and says so, rather than offering a choice that
-        # cannot be honoured.
+        # Both pickers are live and both reach a stream. This used to be a disabled
+        # combo reading "not yet", justified because "`Settings.input_device` is read by
+        # no code at all, because there is no microphone path to read it for (§24)".
+        # §30 wrote that path: `Game._start_microphone` passes the setting to
+        # `Microphone`, which opens `sd.InputStream(device=...)`. The control was
+        # greyed out for a reason that had stopped being true, which is the same shape
+        # as §21.2's unread setting -- a justification outliving the fact, and a
+        # player left unable to choose their own microphone.
         self._input = QtWidgets.QComboBox()
-        self._input.addItem("not yet")
-        self._input.setEnabled(False)
-        form.addRow(heading("Microphone input", kind="dim"), self._input)
+        self._input.setObjectName("inputDeviceCombo")
+        self._input.currentIndexChanged.connect(self._on_input_changed)
+        form.addRow(_unwrapping(heading("Microphone input", kind="dim")), self._input)
 
         # Short enough not to wrap at this column width. A word-wrapped QLabel in a
         # tight vertical stack reports a height for the width it happens to have,
         # and the text then spills over whatever is below it -- which is how the
         # first version of this screen ended up with three overlapping widgets.
         note = heading(
-            "Choosing an output affects the game only; it is read when a song starts.",
+            "Both are read when a song starts, not while this page is open.",
             kind="dim",
         )
         note.setWordWrap(False)
         layout.addWidget(note)
         return box
 
-    def _output_choices(self) -> tuple[list[str | None], list[str]]:
-        """``(values, labels)`` for the output combo: system default, then each device.
+    def _device_choices(self, direction: str) -> tuple[list[str | None], list[str]]:
+        """``(values, labels)`` for a device combo: system default, then each device.
+
+        ``direction`` is ``"out"`` or ``"in"``, which is the only thing that differs
+        between the two combos -- the enumeration, the labels and the failure
+        behaviour are identical, so they are one function. It was two copies when
+        only the output picker existed, and the input picker was a disabled placeholder
+        saying device picking "arrives with the audio layer" (which arrived in §23) and
+        then "is read by no code" (which stopped being true in §30, when
+        `Settings.input_device` reached `sd.InputStream`).
 
         ``sounddevice`` is imported inside the function, exactly as
         `transport.device_report` does it, so that merely building this screen never
-        opens PortAudio. A machine with no audio at all gets the single "system
-        default" row rather than an empty box, which is what the real failure looks
-        like anyway.
+        opens PortAudio. A machine with no device in this direction gets the single
+        "system default" row rather than an empty box, which is what the real failure
+        looks like anyway.
         """
+        channel_key = "max_output_channels" if direction == "out" else "max_input_channels"
         values: list[str | None] = [None]
         labels: list[str] = ["system default"]
         try:
@@ -282,24 +325,59 @@ class Preferences(ScreenBase):
         except Exception:  # noqa: BLE001 - a broken host still gets a usable screen
             return values, labels
         for device in devices:
-            if device["max_output_channels"] < 1:
+            channels = device[channel_key]
+            if channels < 1:
                 continue
             values.append(device["name"])
-            labels.append(f"{device['name']}  ({device['max_output_channels']}ch)")
+            labels.append(f"{device['name']}  ({channels}ch)")
         return values, labels
 
-    def _on_output_changed(self, _index: int) -> None:
-        """Writes to the **draft**, like every other control here.
+    def _load_device(
+        self,
+        combo: QtWidgets.QComboBox,
+        chosen: str | None,
+        direction: str,
+    ) -> None:
+        """Point a device combo at the stored name, adding the row if it is not listed.
 
-        `_save` commits with `replace(self._draft)`, so writing to
-        `context.settings` directly would change the setting behind a Cancel button
-        -- and the two volume sliders would then be the only controls on this screen
-        that ignore it.
+        A device that has been unplugged since the setting was written is still a
+        legitimate stored value, and the stream will fail loudly on it if it is really
+        gone. Dropping the name from the combo would turn that honest failure into a
+        silent fall back to the system default, which is the same class of bug as a
+        setting that nothing reads.
+
+        With no device stored, the combo shows the system default and the draft keeps
+        `None` -- so merely opening and saving this screen cannot invent a device.
         """
-        values, _labels = self._output_choices()
-        index = self._output.currentIndex()
+        values, labels = self._device_choices(direction)
+        combo.clear()
+        combo.addItems(labels)
+        if chosen is None:
+            combo.setCurrentIndex(0)
+            return
+        if chosen in values:
+            combo.setCurrentIndex(values.index(chosen))
+            return
+        combo.addItem(f"{chosen}  (not connected)")
+        combo.setCurrentIndex(combo.count() - 1)
+
+    def _on_device_changed(self, combo: QtWidgets.QComboBox, direction: str, attribute: str) -> None:
+        """Record a device choice on the **draft**, like every other control here.
+
+        `save` commits with `replace(self._draft)`, so writing to `context.settings`
+        directly would change the setting behind a Cancel button -- and these would then
+        be the only controls on the screen that ignore it.
+        """
+        values, _labels = self._device_choices(direction)
+        index = combo.currentIndex()
         if 0 <= index < len(values):
-            self._draft.audio_device = values[index]
+            setattr(self._draft, attribute, values[index])
+
+    def _on_output_changed(self, _index: int) -> None:
+        self._on_device_changed(self._output, "out", "audio_device")
+
+    def _on_input_changed(self, _index: int) -> None:
+        self._on_device_changed(self._input, "in", "input_device")
 
     def _build_button_bar(self) -> QtWidgets.QHBoxLayout:
         """The pinned action row, centred without a fixed width.
@@ -354,7 +432,7 @@ class Preferences(ScreenBase):
             self._latency.setValue(round(settings.input_latency_ms))
             self._count_in.setCurrentIndex(max(0, self._count_in.findData(settings.count_in_bars)))
             self._collapse.setChecked(settings.collapse_chords)
-            self._load_output(settings.audio_device)
+            self._load_devices(settings)
         finally:
             for widget in (
                 self._master,
@@ -369,29 +447,10 @@ class Preferences(ScreenBase):
         self._refresh_value_labels()
         self._sync_enabled()
 
-    def _load_output(self, chosen: str | None) -> None:
-        """Point the combo at the stored device, adding the row if it is not listed.
-
-        A device that has been unplugged since the setting was written is still a
-        legitimate stored value, and `Transport` will fail loudly on it if it is
-        really gone. Dropping the name from the combo would turn that honest failure
-        into a silent fall back to the system default, which is the same class of bug
-        as a setting that nothing reads.
-
-        With no device stored, the combo shows the system default and the draft keeps
-        `None` -- so merely opening and saving this screen cannot invent a device.
-        """
-        values, labels = self._output_choices()
-        self._output.clear()
-        self._output.addItems(labels)
-        if chosen is None:
-            self._output.setCurrentIndex(0)
-            return
-        if chosen in values:
-            self._output.setCurrentIndex(values.index(chosen))
-            return
-        self._output.addItem(f"{chosen}  (not connected)")
-        self._output.setCurrentIndex(self._output.count() - 1)
+    def _load_devices(self, settings: Settings) -> None:
+        """Point both device combos at what the settings say."""
+        self._load_device(self._output, settings.audio_device, "out")
+        self._load_device(self._input, settings.input_device, "in")
 
     def _refresh_value_labels(self) -> None:
         self._master_value.setText(f"{self._master.value()}%")
@@ -437,7 +496,18 @@ class Preferences(ScreenBase):
     # --- actions -------------------------------------------------------------
 
     def save(self) -> None:
-        """Commit the draft to the context and to disk.
+        """Commit the draft to the context and to disk, then leave.
+
+        **Leaving is part of saving.** Pressing Save and staying put means the next
+        thing to do is press Back, which is a second press that reads as "I have not
+        finished" when the settings are already written. It also left the player on a
+        settings page with nothing to do on it, and "Saved." is not visible long enough
+        to be worth anything.
+
+        **But not when the write failed.** A failed write is the one case where the
+        player has to see the reason, and navigating away would hide it behind a menu.
+        The in-memory settings are still correct in that case, so the screen is showing
+        the truth about what is applied and what is not.
 
         ``song_offsets_ms`` is deliberately **not** taken from the draft. This
         screen has no control for it -- song select owns it -- and a draft built
@@ -454,6 +524,12 @@ class Preferences(ScreenBase):
             self._status.setText(f"Applied, but could not write {self.context.settings_path}: {exc}")
             return
         self._status.setText("Saved.")
+        # `go_back`, not `_leave`: that method exists to *discard* unsaved changes
+        # before going back, and calling it after a successful save would wipe the
+        # "Saved." it had just set and reload a draft nobody needs reloaded. The
+        # status is set first anyway, so a navigation that went nowhere would still
+        # leave the truth on screen.
+        self.shell.go_back()
 
     def _reset_to_defaults(self) -> None:
         """Fill the form with the defaults. Still needs Save to take effect."""
