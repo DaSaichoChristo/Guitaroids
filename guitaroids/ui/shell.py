@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..context import AppContext
 from .game import Game
@@ -105,6 +105,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._history: list[Screen] = []
 
         self.navigate(Screen.MAIN)
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802 - Qt naming
+        """Stop the audio on the way out.
+
+        There was no close handler anywhere in the project, so quitting mid-song
+        relied on process teardown to release the output device. That works, but it is
+        a device being closed by a process that is already dying, which is the
+        situation §26.3's two core dumps came from. `stop_playback` is idempotent and
+        cheap when nothing is open, so this is the belt to `hideEvent`'s braces.
+        """
+        self.context.stop_playback()
+        super().closeEvent(event)
 
     # --- screen construction ---------------------------------------------------
 

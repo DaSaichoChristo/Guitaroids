@@ -80,7 +80,7 @@ says what ran.
 
 ## Current state
 
-`tests/` is 832 tests, all passing (not counting `tests/test_docs.py` itself --
+`tests/` is 835 tests, all passing (not counting `tests/test_docs.py` itself --
 that file checks this number, and a test that counts itself never matches). **Five of the six screens are real:** the main
 menu, song select (tab + track + audio offset + **per-song practice tempo**), import
 GP (choose a file, then Add to library), preferences, and **game** — three bars

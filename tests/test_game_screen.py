@@ -361,6 +361,77 @@ def test_leaving_stops_the_clock(shell, chart) -> None:
     assert shell.current is Screen.MAIN
 
 
+def test_leaving_stops_the_sound(shell, chart) -> None:
+    """The bug: the song carried on playing into the main menu.
+
+    `hideEvent` stopped the QTimer and the clock and nothing else. The only
+    `stop_playback()` in the UI was in `_render_audio`, which runs when a *new* song
+    starts, so nothing ever stopped what was already playing. The timer assertion
+    above passed the whole time the music did not.
+    """
+    from guitaroids.audio.transport import silence
+
+    screen = game_via_shell(shell, chart)
+    try:
+        screen.context.start_playback(
+            silence(30.0, 44100), sample_rate=44100, volume=1.0, device=None
+        )
+        assert screen.context.is_playing is True
+
+        shell.navigate(Screen.MAIN)
+
+        assert screen.context.is_playing is False
+        assert screen.context.playback is None, "the stream was not closed"
+    finally:
+        screen.context.stop_playback()
+
+
+def test_leaving_mid_render_cancels_it(shell, chart) -> None:
+    """The worse half of the same bug, and it is the one you would hear.
+
+    `ChartRenderer` has had a `cancel()` since it was written and `should_stop` is
+    polled at every onset -- and `test_render_task.py` has proved that a cancelled
+    render emits `cancelled` and never delivers a buffer. But nothing in the UI ever
+    called `cancel()`. So pressing Back during a six-second render let the render
+    finish, and `_on_audio_ready` -- whose only guard was `if self._chart is None` --
+    opened the stream. The song started in the menu.
+
+    The seam is what is asserted here: that leaving *calls* `cancel`. Asserting
+    `is_running` went false would be vacuous, because a render that simply finished
+    would satisfy it too.
+    """
+    screen = game_via_shell(shell, chart)
+    calls: list[bool] = []
+    real = screen._renderer.cancel
+
+    def recorder() -> None:
+        calls.append(True)
+        real()
+
+    screen._renderer.cancel = recorder  # type: ignore[method-assign]
+    shell.navigate(Screen.MAIN)
+    assert calls, "leaving did not cancel the render in flight"
+
+    # And the late result, if one were already queued, must not open a stream.
+    screen._on_audio_ready(_fake_render())
+    assert screen.context.playback is None, "a late render started a song on a hidden screen"
+
+
+def test_quitting_stops_the_sound(shell, chart) -> None:
+    """No close handler existed at all, so quitting mid-song relied on teardown."""
+    from guitaroids.audio.transport import silence
+
+    screen = game_via_shell(shell, chart)
+    try:
+        screen.context.start_playback(
+            silence(30.0, 44100), sample_rate=44100, volume=1.0, device=None
+        )
+        shell.close()
+        assert screen.context.playback is None
+    finally:
+        screen.context.stop_playback()
+
+
 def test_revisiting_starts_a_fresh_run(shell, chart) -> None:
     """The shell keeps built screens, so GAME is not new the second time."""
     screen = game_via_shell(shell, chart)

@@ -304,6 +304,13 @@ class Game(ScreenBase):
         """The audio exists. Count it in, open the stream, start the audio clock."""
         if self._chart is None:
             return
+        if not self.isVisible():
+            # The render finished after the player left. Opening a stream now would
+            # start the song on a screen nobody is looking at -- the audible half of
+            # the bug `hideEvent` fixes, for the narrow case where the render landed
+            # in the event queue between the cancel and this slot running.
+            self.context.stop_playback()
+            return
         count_in = int(self.context.settings.count_in_bars)
         settings = self.context.settings
         mixed, _clicks = add_count_in(
@@ -546,14 +553,30 @@ class Game(ScreenBase):
         self._clock.invalidate()
 
     def hideEvent(self, event: QtGui.QHideEvent) -> None:  # noqa: N802 - Qt naming
-        """Stop the clock and uninstall the key filter when navigated away from.
+        """Stop everything this screen is responsible for when navigated away from.
 
         A QTimer left running would keep calling ``_tick`` -- and keep mutating the
         tally -- on a screen the player is no longer looking at. The filter has to go
         with it or the keys keep driving the game from the menu.
+
+        **The audio stream has to stop here too, and did not.** The song carried on
+        playing into the main menu, because the only `stop_playback()` in the UI was in
+        `_render_audio`, which runs when a *new* song starts. Nothing stopped what was
+        already playing. `Transport.stop()` closes PortAudio's stream and waits for it
+        to stop; there is no join and no other thread, so it is safe on the GUI thread.
+
+        **And the render is cancelled**, which is the worse half. `ChartRenderer` has
+        had a `cancel()` since it was written, and `should_stop` is polled at every
+        onset -- but nothing called it. So leaving during a six-second render let it
+        finish, and `_on_audio_ready` started the song *in the menu*. Cancelling here
+        closes that window; the visibility check in `_on_audio_ready` closes the rest
+        of it, for a render that finished in the moment between the two.
         """
         self._stop()
         self._stop_filter()
+        self.context.stop_playback()
+        self._renderer.cancel()
+        self._audio_live = False
         super().hideEvent(event)
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # noqa: N802 - Qt naming
