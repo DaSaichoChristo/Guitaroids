@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from guitaroids.context import AppContext
-from guitaroids.settings import InputMode, Settings
+from guitaroids.settings import Settings
 from guitaroids.ui.preferences import Preferences
 from guitaroids.ui.screens import Screen
 
@@ -62,10 +62,9 @@ def test_loading_the_form_does_not_alter_the_draft(shell, context) -> None:
     fire a dozen valueChanged handlers and rewrite the draft with values read out
     of half-built widgets.
     """
-    context.settings = Settings(master_volume=0.8, input_mode=InputMode.MICROPHONE)
+    context.settings = Settings(master_volume=0.8)
     shell.navigate(Screen.PREFERENCES)
     assert shell.current_screen._draft.master_volume == 0.8
-    assert shell.current_screen._draft.input_mode is InputMode.MICROPHONE
 
 
 # --- the draft ---------------------------------------------------------------
@@ -208,23 +207,43 @@ def test_revisiting_shows_the_saved_values(screen: Preferences, shell, qapp) -> 
     assert shell.current_screen._master.value() == 20
 
 
-# --- input-mode dependent controls -------------------------------------------
+# --- the microphone, which is now the only input -----------------------------
 
 
-def test_latency_is_disabled_in_keyboard_mode(screen: Preferences) -> None:
-    assert not screen._latency.isEnabled()
+def test_the_latency_trim_is_always_enabled(screen: Preferences) -> None:
+    """It used to be dimmed for a keyboard run, and there is no keyboard run.
 
-
-def test_latency_is_enabled_with_a_microphone(screen: Preferences) -> None:
-    screen._mode.setCurrentIndex(screen._mode.findData(InputMode.MICROPHONE.value))
+    Disabling the only input control in the group would be a control that looks broken
+    rather than a control that is unavailable (§32).
+    """
     assert screen._latency.isEnabled()
-    assert screen._draft.input_mode is InputMode.MICROPHONE
 
 
-def test_choosing_keyboard_disables_latency_again(screen: Preferences) -> None:
-    screen._mode.setCurrentIndex(screen._mode.findData(InputMode.MICROPHONE.value))
-    screen._mode.setCurrentIndex(screen._mode.findData(InputMode.KEYBOARD.value))
-    assert not screen._latency.isEnabled()
+def test_there_is_no_mode_control_any_more(screen: Preferences) -> None:
+    """A control with one legal value is a control pretending to be a choice."""
+    from PySide6 import QtWidgets
+
+    assert not hasattr(screen, "_mode")
+    combos = [
+        c for c in screen.findChildren(QtWidgets.QComboBox)
+        if c.objectName() == "" and c is not screen.findChild(QtWidgets.QComboBox, "deviceCombo")
+    ]
+    assert not any(c.findData("keyboard") >= 0 or c.findData("microphone") >= 0 for c in combos)
+
+
+def test_the_headphone_warning_is_visible_not_just_a_tooltip(screen: Preferences) -> None:
+    """Through speakers the app hears itself and scores PERFECT for nothing.
+
+    That was a tooltip when the microphone was one of two options. It is now the only
+    input, so it is a precondition, and a precondition should not be hidden behind a
+    hover.
+    """
+    from PySide6 import QtWidgets
+
+    texts = " ".join(
+        label.text() for label in screen.findChildren(QtWidgets.QLabel)
+    )
+    assert "headphones" in texts.lower(), texts
 
 
 def test_count_in_offers_exactly_the_allowed_values(screen: Preferences) -> None:

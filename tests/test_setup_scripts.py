@@ -1,18 +1,23 @@
-"""Keeps scripts/setup.sh and scripts/setup.ps1 from drifting apart.
+"""Keeps `scripts/setup.sh` honest about what it installs.
 
-They are hand-maintained duplicates of the same install procedure, which is the
-worst-case arrangement: nothing fails when one is updated and the other is not,
-the install just quietly does the wrong thing on one platform.
+This file used to be about **two** scripts. `scripts/setup.ps1` was a hand-maintained
+PowerShell duplicate of the same install procedure -- the worst-case arrangement, since
+nothing fails when one is updated and the other is not, and the install quietly does
+the wrong thing on one platform. The agreement was pinned by eleven tests here, and
+§31 made that pinning necessary rather than fussy: `requirements.txt` became one
+`pip freeze` file, so both scripts had to learn to filter tinysoundfont out of the bulk
+install and install it separately with `--no-deps`.
 
-So the shared facts are pinned here rather than trusted:
+Then `setup.ps1` was deleted, and so was the reason for those eleven tests. There is
+no second script to drift from, so there is nothing left to compare against -- and a
+test that compares a file to itself is a test that cannot fail, which §25.4 calls out by
+name.
 
-  * the headless OpenCV version both scripts install
-  * the model and soundfont URLs both scripts fetch
-  * that both install requirements-optional.txt with --no-deps
-  * that both remove BOTH OpenCV builds before installing headless (the order
-    bug in DESIGN.md §7.2 -- removing only the GUI build leaves a half-deleted
-    cv2/ directory that pip believes is installed)
-  * that each mentions the other
+What replaces them is the set of things the one script can be held to on its own:
+that it does the tinysoundfont dance in the right order, that it says the things a
+reader needs before running it, and that its claims about the environment are the ones
+§31 verified. The pins it used to keep in step with the PowerShell copy are now
+ordinary assertions about `setup.sh`.
 """
 
 from __future__ import annotations
@@ -24,171 +29,122 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SH = ROOT / "scripts" / "setup.sh"
-PS1 = ROOT / "scripts" / "setup.ps1"
-
-pytestmark = pytest.mark.skipif(
-    not SH.is_file() or not PS1.is_file(), reason="both setup scripts must exist"
-)
-
-MODEL_URL = "storage.googleapis.com/mediapipe-models/hand_landmarker"
-SOUNDFONT_URL = "fluidr3mono-gm-soundfont"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def sh() -> str:
+    assert SH.is_file(), "scripts/setup.sh is the install path; it must exist"
     return SH.read_text()
 
 
-@pytest.fixture(scope="module")
-def ps1() -> str:
-    return PS1.read_text()
+# --- what it installs ----------------------------------------------------------
 
 
-def test_both_scripts_mention_each_other(sh: str, ps1: str) -> None:
-    assert "setup.ps1" in sh
-    assert "setup.sh" in ps1
+def test_it_installs_the_requirements_file(sh: str) -> None:
+    assert "requirements.txt" in sh, "the install reads nothing at all"
 
 
-def executable_lines(text: str) -> str:
-    """A script with its comments and doc-comments removed.
+def test_it_filters_tinysoundfont_out_of_the_bulk_install(sh: str) -> None:
+    """Installing the whole list first would fail on pyaudio and never reach step two.
 
-    The absence assertions below have to look at what a script *does*, and both
-    scripts explain in prose why they no longer do the OpenCV dance. Stripping the
-    comments is what lets a script say "we used to" without the test reading it as
-    "we still do".
-
-    ``#`` starts a comment in both bash and PowerShell, and PowerShell block
-    comments are ``<# ... #>``.
+    `requirements.txt` is `pip freeze` output, so tinysoundfont is in it, and it cannot
+    be installed normally. So the order is load-bearing: bulk install with the package
+    excluded, then the package itself with `--no-deps`.
     """
-    without_blocks = re.sub(r"<#[\s\S]*?#>", "", text)
-    lines = [
-        line for line in without_blocks.splitlines()
-        if not line.lstrip().startswith("#")
-    ]
-    return "\n".join(lines)
+    exclude = re.search(r"grep -v '\^tinysoundfont==' requirements\.txt", sh)
+    bulk = sh.index("pip install -r") if "pip install -r" in sh else -1
+    alone = sh.index("install tinysoundfont==0.3.7 --no-deps")
+    assert exclude, "the bulk install does not exclude tinysoundfont"
+    assert exclude.start() < alone, (
+        "the bulk install must come after the exclusion, or it fails on pyaudio before "
+        "reaching the --no-deps step"
+    )
+    assert "--no-deps" in sh[alone : alone + 80], "and the separate step needs --no-deps"
 
 
-def test_both_install_tinysoundfont_with_no_deps(sh: str, ps1: str) -> None:
-    """The --no-deps install is mandatory, and it is the reason these scripts exist.
+def test_the_bulk_install_temp_file_is_cleaned_up(sh: str) -> None:
+    """A mktemp with no trap leaves a file behind on every run of a setup script."""
+    assert "mktemp" in sh
+    assert re.search(r"trap .*rm -f", sh), "the temp file is never removed"
 
-    `requirements.txt` is one `pip freeze` file, so tinysoundfont is *in* it -- and
-    installing it normally fails, because pyaudio has no wheel and cannot be built.
-    Both scripts therefore have to take it out of the list and install it separately.
-    The `requirements-optional.txt` this used to name is gone.
+
+def test_it_fetches_a_soundfont_but_survives_without_one(sh: str) -> None:
+    assert "fetch_soundfont.sh" in sh
+    line = next(ln for ln in sh.splitlines() if "fetch_soundfont.sh" in ln and "||" in ln)
+    assert "||" in line, "a soundfont fetch failure must not abort the whole script"
+
+
+def test_it_runs_the_m0_gate(sh: str) -> None:
+    """The gate is the one thing that proves the install worked, so it runs last."""
+    assert "test_m0_window.py" in sh
+
+
+def test_no_opencv_step_remains(sh: str) -> None:
+    """§25 removed the webcam, and with it the install-order trap the step existed for.
+
+    The trap was real: mediapipe pulled the GUI build, whose Qt plugins break PySide6,
+    and both builds write the same `cv2/` directory. Nothing pulls OpenCV now, so a
+    step that uninstalls it would be cargo cult.
     """
-    for name, text in (("setup.sh", sh), ("setup.ps1", ps1)):
-        assert "--no-deps" in text, f"{name} lost the --no-deps install"
-        assert "tinysoundfont" in text, f"{name} no longer installs tinysoundfont"
-        assert "requirements-optional.txt" not in text, (
-            f"{name} still points at requirements-optional.txt, which is deleted"
-        )
-        assert "requirements-dev.txt" not in text, (
-            f"{name} still points at requirements-dev.txt, which is deleted"
-        )
-        # And it must be *filtered out* of the bulk install, not just installed after:
-        # installing the whole list first would fail on pyaudio and never reach the
-        # --no-deps step.
-        assert "-notmatch '^tinysoundfont=='" in text or (
-            "-v '^tinysoundfont=='" in text
-        ), f"{name} does not exclude tinysoundfont from the bulk install"
+    body = "\n".join(
+        line for line in sh.splitlines() if not line.strip().startswith("#")
+    )
+    for gone in ("opencv", "cv2", "mediapipe"):
+        assert gone not in body.lower(), f"the script still has a {gone} step"
 
 
-def test_both_fetch_the_same_soundfont(ps1: str) -> None:
-    """The .ps1 inlines the URL; setup.sh delegates to the fetch script.
+# --- what it tells you ---------------------------------------------------------
 
-    The fetch script is the source of truth, and the .ps1 is compared against it so
-    a URL change in one place cannot silently miss the other.
+
+def test_it_says_which_interpreter_is_known_good(sh: str) -> None:
+    """3.12 is a real constraint -- cp310/cp312 wheels only -- and 3.13/3.14 are not.
+
+    A setup script that installs the wrong version and then fails on a build is a bad
+    first experience, so the version check is asserted rather than assumed.
     """
-    soundfont = (ROOT / "scripts" / "fetch_soundfont.sh").read_text()
-
-    def url_of(text: str, marker: str) -> str:
-        match = re.search(rf'["\']?(https?://[^"\'\s]*{marker}[^"\'\s]*)', text)
-        assert match, f"no {marker} URL found"
-        return match.group(1)
-
-    assert url_of(soundfont, "fluidr3mono") in ps1
-
-
-def test_neither_script_mentions_opencv_or_mediapipe(sh: str, ps1: str) -> None:
-    """**The absence is the assertion**, and it is the point of §25.
-
-    Both scripts used to uninstall the GUI OpenCV build and install the headless one
-    in a strict order, because both write to the same cv2/ directory and mediapipe
-    insists on the GUI build. Dropping mediapipe dropped the whole dance -- the trap
-    that cost an afternoon, the third install caveat, and the reason this file existed.
-
-    If OpenCV comes back, it comes back with an ordering requirement, and these
-    scripts have to grow it again. Until then, a mention of either package means
-    something was re-added without thinking about the install.
-    """
-    for name, text in (("setup.sh", sh), ("setup.ps1", ps1)):
-        code = executable_lines(text)
-        for package in ("opencv", "mediapipe", "hand_landmarker", "fetch_model"):
-            assert package not in code.lower(), (
-                f"{name} still has a {package} step outside its comments"
-            )
+    assert "PYVER" in sh and "3.12" in sh
+    # 3.14 is named explicitly (no wheel at all) and every other unsupported version
+    # falls through to the generic warning below it. So the assertion is the *guard*,
+    # not a list of versions -- a script that only warned about 3.14 would be wrong for
+    # 3.13, which has no wheel either.
+    assert re.search(r'if \[ "\$PYVER" != "3\.12" \]', sh), (
+        "an unlisted version is not warned about at all"
+    )
+    assert "3.14" in sh, "and 3.14 is not named, though it is the worst case"
+    assert "C++ toolchain" in sh, "the script should say what an unsupported version costs"
 
 
-def test_both_run_the_m0_gate_last(sh: str, ps1: str) -> None:
-    for text in (sh, ps1):
-        assert "test_m0_window.py" in text
+def test_it_warns_when_the_soundfont_is_missing(sh: str) -> None:
+    assert "pluck" in sh, "the fallback synth is not mentioned as the failure path"
 
 
-def test_both_warn_about_the_pyaudio_trap(sh: str, ps1: str) -> None:
-    """pyaudio is unbuildable here, and --dry-run reports false success."""
-    for text in (sh, ps1):
-        assert "pyaudio" in text.lower()
-    # The dry-run trap is bash-specific advice, so only the shell script must
-    # mention it -- but the .ps1 must still explain the --no-deps requirement.
-    assert "dry-run" in sh
+def test_it_does_not_claim_a_bare_pip_install_works(sh: str) -> None:
+    """§31 flipped this. The script IS the install path, and it must not imply otherwise."""
+    flat = re.sub(r"\s+", " ", sh)
+    assert "ONLY supported install path" not in flat
+    assert "is not equivalent" not in flat
+    assert "FAILS" in flat or "fails" in flat, (
+        "the script does not say why a bare pip install does not work"
+    )
 
 
-def test_both_offer_the_numpy_fallback(sh: str, ps1: str) -> None:
-    """The soundfont step is allowed to fail, so something has to take over.
-
-    Named "pluck" rather than Karplus-Strong: the fallback really is additive
-    synthesis, because a per-sample KS recurrence renders a five-minute chart in
-    minutes and a fallback slower than the thing it stands in for is not a fallback
-    (DESIGN.md §24). The name is asserted so the two scripts cannot drift apart
-    about which synth is meant.
-    """
-    for name, text in (("setup.sh", sh), ("setup.ps1", ps1)):
-        assert "pluck synth" in text, f"{name} does not mention the numpy fallback"
-
-
-def test_both_point_at_requirements_for_what_they_add(sh: str, ps1: str) -> None:
-    """Both scripts say what they are *for*, and it is no longer "the only way".
-
-    A bare `pip install -r requirements.txt` now works -- verified in a clean venv,
-    where the app installs, imports, and opens a window. So the scripts cannot keep
-    claiming a bare install is broken; that claim was true and cost a day, and
-    leaving it in place would have people avoiding a path that is fine.
-    """
-    for name, text in (("setup.sh", sh), ("setup.ps1", ps1)):
-        assert "requirements.txt" in text, f"{name} does not reference requirements.txt"
-        flat = re.sub(r"\s+", " ", text)
-        assert re.search(r"only supported install path", flat, re.I) is None, (
-            f"{name} still says a bare install is not usable; it is"
-        )
-        # ...and it has to say what it does add, or the change is silent.
-        assert re.search(r"tinysoundfont", flat, re.I), f"{name} does not say why to use it"
+# --- the one that reads requirements.txt ---------------------------------------
 
 
 def test_the_bare_install_claim_is_verified_not_asserted() -> None:
-    """The claim flipped: `pip install -r requirements.txt` now **fails**.
+    """The claim is that installing the file with pip FAILS. That needs evidence.
 
-    It worked in §27, when the curated list left tinysoundfont out. `requirements.txt`
-    is `pip freeze` now, so tinysoundfont is in the list, and it cannot be installed
-    normally. So what is pinned here is the *opposite* claim, with the evidence, because
-    a file that lists 18 packages and does not say it cannot be installed is a trap for
-    whoever tries it next -- and the previous version of this test asserted the opposite
-    claim, so it would have passed over the change that made it wrong.
+    It cannot be checked here -- it needs a venv and a network, and a test that creates
+    one would be slow and flaky -- so what is pinned is that the claim is *recorded*,
+    with how it was checked, so a reader can repeat it and nobody quietly deletes the
+    evidence. §27's version of this test asserted the opposite claim, so it would have
+    passed straight over the change that made it wrong.
     """
     text = (ROOT / "requirements.txt").read_text()
     flat = re.sub(r"\s+", " ", text)
     assert "FAILS" in flat, "the file does not say that installing it with pip fails"
-    # Flattened, because the evidence is quoted across two comment lines and a reader
-    # sees it as one sentence.
+    # Flattened, because the evidence is quoted across comment lines and a reader sees
+    # it as one sentence.
     assert "Failed building wheel for pyaudio" in flat, "say what the failure was"
     assert "clean venv" in flat, "say how it was checked"
     assert "dry-run" in flat, (
@@ -196,26 +152,18 @@ def test_the_bare_install_claim_is_verified_not_asserted() -> None:
     )
 
 
-def test_powershell_reports_native_exit_codes(ps1: str) -> None:
-    """$ErrorActionPreference does not trap a non-zero exit from a native exe.
+# --- what is gone --------------------------------------------------------------
 
-    Without an explicit $LASTEXITCODE check, every pip failure in setup.ps1 would
-    pass silently and the script would report success having installed nothing.
+
+def test_there_is_only_one_setup_script() -> None:
+    """The PowerShell copy is deleted, and nothing has quietly replaced it.
+
+    Recorded as a test because the deletion is a decision: §31 had just changed both
+    scripts, and `setup.ps1` had still never been run on a machine that has PowerShell.
+    A test that cannot fail is worse than no test (§25.4), so there is no point
+    comparing one script to a second one that is not there.
     """
-    assert "LASTEXITCODE" in ps1
-    assert re.search(r"function\s+Invoke-Native", ps1)
-    # pip *install* and *uninstall* calls must go through the wrapper. `pip show`
-    # is exempt: it is a probe whose exit code is the point, and it is guarded.
-    bare_pip = [
-        line for line in ps1.splitlines()
-        if re.search(r"(?<!&)\$Py\s+-m\s+pip\s+(install|uninstall)", line)
-    ]
-    assert not bare_pip, f"pip invoked without exit-code checking: {bare_pip}"
-    # The pip show probe was the OpenCV version check, and OpenCV is gone (§25), so
-    # there is no probe left to guard. Asserting it would pin a step we deleted on
-    # purpose; the bare-pip assertion above still covers every install and uninstall.
-
-
-def test_powershell_handles_windows_venv_layout(ps1: str) -> None:
-    """Windows puts the interpreter in .venv/Scripts, not .venv/bin."""
-    assert "Scripts" in ps1
+    assert not (ROOT / "scripts" / "setup.ps1").exists(), (
+        "setup.ps1 was deleted. If a Windows install path is wanted again, it needs a "
+        "machine with PowerShell to be verified on -- §31's version of it never had one."
+    )

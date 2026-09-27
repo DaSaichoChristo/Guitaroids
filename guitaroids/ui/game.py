@@ -38,7 +38,6 @@ from ..audio.click import add_count_in, beats_per_bar
 from ..audio.mic import SAMPLE_RATE, Microphone
 from ..model.chart import Chart, retime
 from ..session.judge import GameState, Verdict
-from ..settings import InputMode
 from .render_task import ChartRenderer, estimate_seconds
 from .screens import ScreenBase, constrained_button, content_column, heading
 from .theme import COLORS, px
@@ -51,14 +50,7 @@ if TYPE_CHECKING:  # pragma: no cover - types only
 _CENTRED = QtCore.Qt.AlignmentFlag.AlignHCenter
 
 #: Digit keys 1-6 for lanes 0-5.
-KEY_LANES: dict[int, int] = {
-    QtCore.Qt.Key.Key_1: 0,
-    QtCore.Qt.Key.Key_2: 1,
-    QtCore.Qt.Key.Key_3: 2,
-    QtCore.Qt.Key.Key_4: 3,
-    QtCore.Qt.Key.Key_5: 4,
-    QtCore.Qt.Key.Key_6: 5,
-}
+
 
 #: The frame timer. 60Hz is the display; nothing here needs more, and the widget
 #: draws from a position rather than integrating anything.
@@ -161,10 +153,10 @@ class Game(ScreenBase):
         # practice tempo is actually for.
         self._quit = constrained_button("Back to menu", width=200, parent=self)
         self._quit.clicked.connect(self._leave)
-        # Deliberately no setFocus here. The shell focuses the screen after building
-        # it, and that is what should hold focus -- a key press goes to the focused
-        # widget, so focus on this screen is what makes the six keys work at all.
-        # Escape already navigates back, so the button does not need the keyboard.
+        # Deliberately no setFocus here. The shell focuses the screen after building it,
+        # and Escape already navigates back through ScreenBase, so the button does not
+        # need the keyboard either. Nothing on this screen reads a key now: the input
+        # is a microphone (§32).
 
     def _place_hud(self) -> None:
         """Float the HUD, and make the tab view fill the window.
@@ -242,8 +234,7 @@ class Game(ScreenBase):
         self._title.setText(chart.title or chart.track_name)
         self._banner.setText("")
         self._flash.setText("")
-        if self.context.settings.input_mode is InputMode.MICROPHONE:
-            self._start_microphone()
+        self._start_microphone()
         self._render_audio(chart, request)
         self._timer.start()
         self._refresh_tally()
@@ -517,44 +508,6 @@ class Game(ScreenBase):
 
     # --- input ---------------------------------------------------------------
 
-    def eventFilter(self, watched, event) -> bool:  # noqa: N802, ANN001 - Qt naming
-        """Catch a lane key wherever it lands, while this screen is up.
-
-        A rhythm game cannot depend on Qt focus. Focus is only granted to an
-        *active* window, so a digit key goes to the window background or to the Back
-        button instead of here, and the game is silently unplayable. In the offscreen
-        test platform no widget has focus at all, which is what made this visible.
-
-        Only the six lane keys are consumed. Everything else -- Space on the button,
-        Escape to go back -- is left to propagate as normal, and an event aimed at
-        this screen is passed straight through so ``keyPressEvent`` handles it
-        exactly once.
-        """
-        if event.type() == QtCore.QEvent.Type.KeyPress and watched is not self:
-            lane = KEY_LANES.get(event.key())
-            if lane is not None:
-                self._press(lane)
-                return True
-        return False
-
-    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:  # noqa: N802 - Qt naming
-        lane = KEY_LANES.get(event.key())
-        if lane is None:
-            super().keyPressEvent(event)
-            return
-        event.accept()
-        self._press(lane)
-
-    def _press(self, lane: int) -> None:
-        """Judge a keypress. Separate from the Qt event so tests can drive it."""
-        if self._state is None or self._finished:
-            return
-        judgement = self._state.press(lane, self.position())
-        if judgement is None:
-            return
-        self._last_verdict = (judgement.verdict, judgement.delta_seconds)
-        self._flash.setText(_verdict_text(judgement))
-
     # --- the microphone -------------------------------------------------------
 
     #: Emitted on the GUI thread by the worker, carrying an integer MIDI note.
@@ -660,7 +613,6 @@ class Game(ScreenBase):
         of it, for a render that finished in the moment between the two.
         """
         self._stop()
-        self._stop_filter()
         self.context.stop_playback()
         self._renderer.cancel()
         self._audio_live = False
@@ -678,17 +630,9 @@ class Game(ScreenBase):
         would resume a finished song.
         """
         super().showEvent(event)
-        app = QtWidgets.QApplication.instance()
-        if app is not None:
-            app.installEventFilter(self)
         self.setFocus()
         if self._chart is not None and not self._timer.isActive():
             self._load_request()
-
-    def _stop_filter(self) -> None:
-        app = QtWidgets.QApplication.instance()
-        if app is not None:
-            app.removeEventFilter(self)
 
     # --- accessors for tests --------------------------------------------------
 

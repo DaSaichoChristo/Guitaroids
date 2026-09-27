@@ -16,7 +16,7 @@ from songbuild import make_entry, make_song
 
 from guitaroids.context import AppContext
 from guitaroids.session.play_request import PlayRequest
-from guitaroids.settings import InputMode, Settings
+from guitaroids.settings import Settings
 from guitaroids.songlib import Library
 
 REAL_SONGS = Path(__file__).resolve().parent.parent / "songs"
@@ -157,10 +157,10 @@ def test_save_settings_writes_to_the_configured_path(tmp_path: Path) -> None:
 
 def test_create_loads_existing_settings(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
-    Settings(master_volume=0.11, input_mode=InputMode.MICROPHONE).save(path)
+    Settings(master_volume=0.11).save(path)
     ctx = AppContext.create(songs_dir=tmp_path, settings_path=path)
     assert ctx.settings.master_volume == 0.11
-    assert ctx.settings.input_mode is InputMode.MICROPHONE
+    assert ctx.settings.master_volume == pytest.approx(0.11)
 
 
 def test_create_falls_back_to_defaults_for_a_corrupt_settings_file(tmp_path: Path) -> None:

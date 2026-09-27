@@ -37,20 +37,19 @@ says what ran.
   toolchain plus Python dev headers. Check `.venv/bin/python --version`, not the
   system `python3`. `DESIGN.md` §5.1 records a wrong analysis caused by exactly
   this; §7.1 records the version hunt.
-- **A bare `pip install -r requirements.txt` works** — verified in a clean venv,
-  where the app installs, imports, and opens a window (§27.2). `scripts/setup.sh` is
-  still the supported path, for tinysoundfont, a soundfont, and the M0 gate. There
-  used to be a "never pip install" caveat here — the longest paragraph in this file —
-  because mediapipe pulled in the GUI OpenCV build and both builds write the same
-  `cv2/` directory; all of that went with the webcam (§25). The one install caveat
-  left is tinysoundfont's `--no-deps`, and `pip install --dry-run` still reports
-  false success on it. `scripts/setup.ps1` is the PowerShell equivalent;
-  `tests/test_setup_scripts.py` keeps the two from drifting. `requirements.txt` is
-  **7 pins, all `==`** — four imported today, two deliberate transitives, one named
-  milestone — and `tests/test_requirements.py` keeps it honest: no transitive may be
-  pinned there without a stated reason, every pin must be imported today or carry a
-  named milestone, every pin must match the lock, and the install caveats must all
-  still be present.
+- **A bare `pip install -r requirements.txt` FAILS** — and `scripts/setup.sh` is the
+  install path, not a convenience (§31.2). `requirements.txt` is one `pip freeze`
+  file, so tinysoundfont is in it, and tinysoundfont cannot be installed normally: it
+  depends on `pyaudio`, which has no Linux wheel and cannot be built without
+  `portaudio.h`. Verified in a clean venv — `pip install tinysoundfont==0.3.7` exits
+  with *"Failed building wheel for pyaudio"*. `pip install --dry-run` reports success
+  on it, so a dry run is not evidence. setup.sh filters the package out of the bulk
+  install and installs it with `--no-deps`, then fetches a soundfont and runs the M0
+  gate. §27 verified the opposite of all this, when the curated list left
+  tinysoundfont out; there used to be an even older warning here about mediapipe's
+  OpenCV install order, which went with the webcam (§25). `tests/test_requirements.py`
+  asserts the file matches the venv it was generated from, and
+  `tests/test_setup_scripts.py` asserts the install dance is in the right order.
 - **Layers:** `ui/` → `session/` → `devices/` → `model/`, one-directional. `model/`
   is pure data with zero I/O. `devices/` never imports `session/` or `ui/`.
 - **The clock is the crux.** `song_pos = (stream.time - t0) - stream.latency`, and
@@ -80,7 +79,7 @@ says what ran.
 
 ## Current state
 
-`tests/` is 915 tests, all passing (not counting `tests/test_docs.py` itself --
+`tests/` is 900 tests, all passing (not counting `tests/test_docs.py` itself --
 that file checks this number, and a test that counts itself never matches). **Five of the six screens are real:** the main
 menu, song select (tab + track + audio offset + **per-song practice tempo**), import
 GP (choose a file, then Add to library), preferences, and **game** — three bars
@@ -179,10 +178,9 @@ this project's own synthesis, which is cleaner than a real guitar through a lapt
 microphone — no fret buzz, no room, no sympathetic resonance. The next step is playing
 an actual guitar and seeing what `MIN_CLARITY` and the analysis window need.
 
-**The keyboard is still here, and is scheduled to go.** §24.4's reason for keeping it —
-"a demo on an unfamiliar machine may have no audio input at all" — is no longer the
-plan. The microphone becomes the only input, and the rule that followed from it -- a
-keyboard path that always works -- goes with it.
+**The keyboard is gone** (§32). The microphone is the only input, so a machine with no
+working microphone cannot play the game at all -- which is what §24.4's fallback existed
+to prevent, and it is gone with it.
 
 ## Audio
 

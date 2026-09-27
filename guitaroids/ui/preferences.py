@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ..settings import InputMode, Settings
+from ..settings import Settings
 from .theme import px
 from .screens import ScreenBase, constrained_button, content_column, heading
 
@@ -165,22 +165,19 @@ class Preferences(ScreenBase):
         form.setVerticalSpacing(10)
         layout.addLayout(form)
 
-        self._mode = QtWidgets.QComboBox()
-        # Labelled rather than derived from the enum: the member is MICROPHONE and
-        # what a player needs to be told is what it listens to.
-        for member, label in (
-            (InputMode.KEYBOARD, "Keyboard"),
-            (InputMode.MICROPHONE, "Microphone (listen to your guitar)"),
-        ):
-            self._mode.addItem(label, member.value)
-        self._mode.setToolTip(
-            "The microphone hears what you play and works out which note it was, so "
-            "you use your own guitar instead of the six keys.\n\n"
-            "Headphones, or a laptop whose microphone you have muted: the music "
-            "coming out of the speakers would be heard as your playing."
+        # There is no mode control any more (§32): the microphone is the only input,
+        # so there is nothing to choose between. What the control used to carry is a
+        # precondition, not a tip -- the app renders the tab and plays it from this
+        # machine, so through speakers the microphone hears the app scoring itself --
+        # and a precondition deserves a line a player cannot miss.
+        note = heading(
+            "The microphone is the input. Use headphones: the app plays the tab out "
+            "of this machine, and through speakers it would hear its own music as "
+            "your playing.",
+            kind="dim",
         )
-        self._mode.currentIndexChanged.connect(self._on_mode_changed)
-        form.addRow(heading("Mode", kind="dim"), self._mode)
+        note.setWordWrap(True)
+        form.addRow(note)
 
         self._latency = QtWidgets.QSpinBox()
         self._latency.setRange(0, 2000)
@@ -189,9 +186,9 @@ class Preferences(ScreenBase):
         self._latency.setToolTip(
             "How far behind the sound your playing is, subtracted before a note is "
             "judged, so a correct note does not read as an early one.\n\n"
-            "Start at zero. A microphone adds tens of milliseconds, not the "
-            "hundreds a webcam did, and guessing this too high makes every note "
-            "look late."
+            "Start at zero. The analysis window's own 23ms is already compensated "
+            "for; this is the trim on top of it, for your own room and your own "
+            "microphone. Guessing it too high makes every note look late."
         )
         self._latency.valueChanged.connect(self._on_latency_changed)
         form.addRow(heading("Input latency", kind="dim"), self._latency)
@@ -345,7 +342,6 @@ class Preferences(ScreenBase):
         for widget in (
             self._master,
             self._click,
-            self._mode,
             self._latency,
             self._count_in,
             self._collapse,
@@ -355,7 +351,6 @@ class Preferences(ScreenBase):
         try:
             self._master.setValue(round(settings.master_volume * 100))
             self._click.setValue(round(settings.click_volume * 100))
-            self._mode.setCurrentIndex(max(0, self._mode.findData(settings.input_mode.value)))
             self._latency.setValue(round(settings.input_latency_ms))
             self._count_in.setCurrentIndex(max(0, self._count_in.findData(settings.count_in_bars)))
             self._collapse.setChecked(settings.collapse_chords)
@@ -364,8 +359,7 @@ class Preferences(ScreenBase):
             for widget in (
                 self._master,
                 self._click,
-                self._mode,
-                self._latency,
+                    self._latency,
                 self._count_in,
                 self._collapse,
                 self._output,
@@ -404,16 +398,17 @@ class Preferences(ScreenBase):
         self._click_value.setText(f"{self._click.value()}%")
 
     def _sync_enabled(self) -> None:
-        """Latency only means anything when a microphone is judging, so dim it otherwise.
+        """Nothing to sync: the latency trim is always live.
 
-        With six keys the latency is the keyboard's own, and a number the player
-        invented would only add to it.
+        It used to be dimmed for a keyboard run, on the reasoning that with six keys the
+        latency was the keyboard's own and a number the player invented would only add
+        to it. There is no keyboard now, so it is the only input control this group has
+        and disabling it would be a control that looks broken.
+
+        Kept as a method because `_load` still calls it: a screen-wide place to hang
+        any future conditional, and a hook that costs nothing to keep.
         """
-        non_keyboard = self._draft.input_mode is not InputMode.KEYBOARD
-        self._latency.setEnabled(non_keyboard)
-        self._latency.setToolTip(
-            "" if non_keyboard else "Only used with a microphone."
-        )
+        self._latency.setEnabled(True)
 
     # --- draft edits ---------------------------------------------------------
 
@@ -426,7 +421,6 @@ class Preferences(ScreenBase):
         self._refresh_value_labels()
 
     def _on_mode_changed(self, _index: int) -> None:
-        self._draft.input_mode = InputMode.parse(self._mode.currentData(), self._draft.input_mode)
         self._sync_enabled()
 
     def _on_latency_changed(self, value: int) -> None:

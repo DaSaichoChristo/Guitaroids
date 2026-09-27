@@ -327,8 +327,16 @@ def test_the_docs_do_not_say_a_bare_pip_install_is_unsupported() -> None:
     for path in FRONT_DOOR:
         flat = re.sub(r"\s+", " ", _read(path))
         assert "ONLY supported install path" not in flat, (
-            f"{path.name} still says a bare pip install is unsupported. It works: "
-            "§27.2 installed the app in a clean venv and opened a window."
+            f"{path.name} says a bare pip install is unsupported *for the old reason*. "
+            "§31 flipped this: requirements.txt is `pip freeze` now, so it lists "
+            "tinysoundfont, and installing that with pip fails on pyaudio."
+        )
+        # The positive claim, which is what §31 overturned. It was missed for a whole
+        # commit: this test only forbade the old wording, so AGENTS.md and README.md
+        # could both keep saying a bare install "works" and stay green.
+        assert not re.search(r"bare `?pip install`?[^.]{0,40}\bworks\b", flat), (
+            f"{path.name} claims a bare pip install works. It does not (§31.2): "
+            "tinysoundfont's pyaudio dependency has no wheel and cannot be built."
         )
 
 

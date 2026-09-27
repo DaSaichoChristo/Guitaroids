@@ -3882,3 +3882,117 @@ stale even if the prose is not.
 - **`setup.ps1` has still never been run.** No PowerShell on this machine, so its
   filter-then-install change is verified only by `tests/test_setup_scripts.py` asserting
   the two scripts agree.
+
+## §32 — The keyboard is gone, and so is the mode that chose it (2026-09-27)
+
+**Tests: 913 in total — 900 excluding `tests/test_docs.py`.** A decision, taken rather
+than derived: the microphone is the input, and the six on-screen keys are deleted
+rather than kept as a fallback. This supersedes **§24.4**, which said *"It stays, and
+it is the default."*
+
+### 32.1 Why, and what it cost
+
+§24.4's reason for keeping the keyboard was that *"a demo on an unfamiliar machine may
+have no audio input at all, which is the same failure as having had no camera."* That was
+a demo-on-a-stranger's-laptop argument. This project is being played on one machine,
+with a guitar, by the person who built it — and §30 built the microphone half, so the
+choice is no longer between two inputs but between one input and a fallback for a
+machine that does not exist.
+
+The honest cost, recorded rather than argued away: **a machine with no working
+microphone cannot play the game at all.** §24.4 existed precisely to prevent that, and it
+is gone. `Preferences` no longer offers a mode, so there is nothing to fall back *to*,
+and a player who plugs in a guitar and finds the input silent has one number to check —
+`input_device`.
+
+The ordering mattered. The microphone was built first (§29.3, §30) and the keyboard
+removed second, so the game was playable throughout. Removing the keyboard first would
+have left a game with no input at all, which is what `AGENTS.md`'s own summary of this
+session flagged as the single biggest consequence of the change.
+
+### 32.2 What was deleted
+
+- `KEY_LANES`, the six-key table, and both entry points: `eventFilter` (which existed
+  because *"a rhythm game cannot depend on Qt focus"*) and the `keyPressEvent` override.
+- `Game._press`, the filter install/uninstall in `showEvent`/`hideEvent`, and
+  `_stop_filter`.
+- **`InputMode` and `Settings.input_mode`**, at settings version 4. The key is dropped
+  on load rather than mapped, and it needs no mapping: every file on disk says
+  `"keyboard"`, and reading any file now means the microphone, so `"keyboard"` and
+  `"camera"` reach the same place.
+- The Preferences **mode combo**, the `#` of which carried the headphone warning — now a
+  visible line rather than a tooltip, because a precondition should not be hidden behind
+  a hover. Through speakers the app hears its own backing track and awards PERFECT for
+  notes nobody played (§30.5), and with the keyboard gone that is a precondition rather
+  than advice.
+- The three tests that asserted a *keyboard* run, and the seven that drove input through
+  `_press`. The judging tests became pitch tests, taking the note's pitch **from the
+  chart** so they assert something real rather than that one number matches another.
+- The `Escape`-goes-back test's premise: it existed to check the base class survived a
+  screen that consumed key presses. It now checks the simpler truth — nothing on the
+  screen reads a key, and `ScreenBase` still handles Escape.
+
+`GameState.press(lane, position)` **stays.** It is the judge, not the UI, and the
+lane-keyed index is still what `update()` expires against. Only the way in is gone.
+
+### 32.3 The microphone fixture had to become autouse
+
+The cost I did not see coming, and it is the same mistake as §30.4 for the third time.
+
+While the microphone was one of two modes, only the tests that asked for it needed
+`fake_mic`. It is now the only input, so **every** test in `test_game_screen.py`
+constructs a screen that opens an input device — the `game` fixture included, which is
+most of the file. The fixture stayed non-autouse, and the result was four tests judging
+against a *real* detector's 23.2ms of latency (a 100ms-late note reading GOOD instead
+of MISS) plus a core dump on teardown.
+
+So `fake_mic` is `autouse=True` now, and a test asserts it: **if it ever quietly stops
+being autouse, the whole file leaks again and nothing says so.** The stand-in's latency
+is also `0.0` rather than the real 23.2ms, because a microphone fact baked into every
+test's position is four unrelated tests failing for no reason a reader could see.
+
+### 32.4 `scripts/setup.ps1` is deleted too
+
+Not part of the decision, and found the same way the requirements files were found: the
+file was gone from the working tree, uncommitted, and nobody had meant it. With Windows
+not a target, the honest reading is that it is not wanted — and §31 had *just* made both
+scripts learn the tinysoundfont filter, so its removal was going to cost something.
+
+What it cost is eleven tests that existed only to keep the two scripts in step. There is
+nothing left to compare against, and **a test that compares a file to itself cannot
+fail**, which §25.4 names specifically. So `test_setup_scripts.py` was rewritten around
+the one script: that it filters tinysoundfont out of the bulk install *before*
+installing it separately, that its `mktemp` has a `trap`, that a missing soundfont does
+not abort it, that it runs the M0 gate, that no OpenCV step survives, and that it does
+not claim a bare `pip install` works. The deletion itself is asserted, with the reason
+recorded — a Windows install path needs a machine with PowerShell to be verified on,
+and this one never had one.
+
+### 32.5 The claim that flipped, and the test that let it through
+
+§31 made a bare `pip install -r requirements.txt` **fail**, and fixed
+`requirements.txt` and both setup scripts — but not the prose in `AGENTS.md` and
+`README.md`, which went on saying a bare install "works" and listing "7 direct pins"
+from a file shape that no longer existed.
+
+The test that should have caught it only forbade the *old* wording. Nothing forbade the
+new false one, so the claim survived a commit that had already overturned it. That is
+the §21.2 pattern in documentation, one level up: a rule that checks the thing it knows
+about, and nothing adjacent. The test now forbids **both** directions, with the reason
+stated in the failure message so the next reader knows which way it went.
+
+### Not done — §32
+
+- **Nothing is playable without a working microphone**, and there is no fallback and no
+  screen that says so. The nearest thing is `Preferences` showing a device list and a
+  stored device that has been unplugged labelled "not connected" (§28.2).
+- **`Settings.input_device` is still only settable from the Preferences list**, which is
+  populated from `sd.query_devices()`. That is the one place a silent input can be
+  diagnosed, and it is a device name, not a test of whether the device works.
+- **The estimator has still never heard a real guitar** (§30.5). Everything since §29.3
+  has been verified against this project's own synthesis. This remains the real blocker,
+  and it needs the player, not a test.
+- **`_sync_enabled` in Preferences is now a no-op** kept as a hook. It dims nothing, and
+  the comment says so; a reviewer should delete it rather than maintain it.
+- **The `RESULTS` screen is still a placeholder**, so a run's counts are shown in the HUD
+  and go nowhere — unchanged by any of this, and still the obvious next screen.

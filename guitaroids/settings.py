@@ -39,7 +39,12 @@ from pathlib import Path
 #: this, a file that said ``"camera"`` would fall back to KEYBOARD -- silently
 #: handing a player who had deliberately chosen non-keyboard input the one input
 #: they did not want, with nothing to say why.
-SETTINGS_VERSION = 3
+#:
+#: 4 -- ``input_mode`` and ``InputMode`` are GONE (§32). The keyboard is not a mode
+#: any more, so there is one input and nothing to choose between. The key is dropped
+#: on load, and ``"keyboard"`` -- the old default, and the value in every existing
+#: file -- needs no mapping, because reading any file now means the microphone.
+SETTINGS_VERSION = 4
 
 #: Files below this version had their ``collapse_chords`` key dropped on load, so
 #: that the flip in version 2 reaches an existing installation.
@@ -48,45 +53,14 @@ _MIGRATE_COLLAPSE_FROM = 2
 #: ``camera_device`` is dropped from files older than this.
 _MIGRATE_CAMERA_DEVICE_FROM = 3
 
+#: ``input_mode`` is dropped from files older than this. See version 4.
+_MIGRATE_INPUT_MODE_FROM = 4
+
 #: Practice-tempo bounds. The floor is where the beat line stops being readable as a
 #: moving thing; the ceiling is far above any real tab, and a song's *own* written
 #: tempo is the real ceiling (see :meth:`Settings.set_bpm_for`), clamped at use.
 MIN_BPM = 20.0
 MAX_BPM = 400.0
-
-
-#: Values from earlier versions, mapped to what they now mean (§25). Module level
-#: rather than a class attribute, because a dict in an ``Enum`` body becomes a
-#: *member*: ``InputMode.LEGACY`` would hand back an InputMode, and ``.get`` on it
-#: would raise. The same trap as ``_SCREEN_LABELS`` in ui/screens.py.
-_INPUT_MODE_LEGACY = {"camera": "microphone"}
-
-
-class InputMode(Enum):
-    """How the player tells the game what they played.
-
-    ``MICROPHONE`` replaced ``CAMERA`` in §25. The value string ``"camera"`` is
-    still accepted by :meth:`parse`, because a settings file written before the
-    change recorded a player who wanted *something other than a keyboard*, and
-    reading that as "still not the keyboard" is what they meant.
-    """
-
-    KEYBOARD = "keyboard"
-    MICROPHONE = "microphone"
-
-    @classmethod
-    def parse(cls, raw: object, default: "InputMode" = None) -> "InputMode":
-        """Tolerant parse: anything unrecognised falls back to the default."""
-        fallback = default if default is not None else cls.KEYBOARD
-        if isinstance(raw, cls):
-            return raw
-        if isinstance(raw, str):
-            text = raw.strip().lower()
-            text = _INPUT_MODE_LEGACY.get(text, text)
-            for member in cls:
-                if member.value == text:
-                    return member
-        return fallback
 
 
 def _clamp_float(value: object, low: float, high: float, default: float) -> float:
@@ -122,7 +96,6 @@ def _parse_number(value: object) -> float | None:
         return None
     return None if number != number else number  # NaN
 
-
 @dataclass
 class Settings:
     """Everything the preferences screen can change.
@@ -138,7 +111,6 @@ class Settings:
     click_volume: float = 0.5
     """0.0-1.0, the metronome, relative to the master volume."""
 
-    input_mode: InputMode = InputMode.KEYBOARD
     """Keyboard by default, because the keyboard path must always work (§4.1).
 
     A demo on an unfamiliar laptop may have no audio input at all, which is the same
@@ -211,7 +183,6 @@ class Settings:
 
     def to_dict(self) -> dict:
         data = asdict(self)
-        data["input_mode"] = self.input_mode.value
         return data
 
     @classmethod
@@ -234,6 +205,11 @@ class Settings:
             raw = {k: v for k, v in raw.items() if k != "collapse_chords"}
         if not isinstance(file_version, int) or file_version < _MIGRATE_CAMERA_DEVICE_FROM:
             raw = {k: v for k, v in raw.items() if k != "camera_device"}
+        if not isinstance(file_version, int) or file_version < _MIGRATE_INPUT_MODE_FROM:
+            # Every existing file says "keyboard", and that is no longer a choice, so
+            # the key is dropped rather than mapped. Keeping it would leave a field
+            # nothing reads -- the exact failure this whole change removes.
+            raw = {k: v for k, v in raw.items() if k != "input_mode"}
 
         values: dict = {}
         for spec in fields(cls):
@@ -242,9 +218,7 @@ class Settings:
                 continue
             given = raw[name]
 
-            if name == "input_mode":
-                values[name] = InputMode.parse(given, defaults.input_mode)
-            elif name in ("master_volume", "click_volume"):
+            if name in ("master_volume", "click_volume"):
                 values[name] = _clamp_float(given, 0.0, 1.0, getattr(defaults, name))
             elif name == "input_latency_ms":
                 values[name] = _clamp_float(given, -500.0, 2000.0, 0.0)

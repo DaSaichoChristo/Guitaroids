@@ -185,12 +185,12 @@ The three `assumed` rows have never been seen hold:
 
 | Decision | Status | Ref |
 |---|---|---|
-| Keyboard input **always** works as a fallback — a demo laptop may have no audio input at all, which is the same failure as having had no camera | live | §1.1, restated §24.4 |
+| ~~Keyboard input **always** works as a fallback~~ — **removed**: the microphone is the only input, so a machine without one cannot play. Stated honestly rather than kept for a demo machine that does not exist | superseded | §32.1, supersedes §1.1 and §24.4 |
 | ~~Strumming hand's downward wrist velocity fires all active lanes~~ — **retired with the hand-tracking input model**; a concept that appears in no section and has no device | rejected | §24, supersedes §1.4 |
 | The input is a **microphone**, not a webcam: 23ms of block against 30–100ms of camera buffering | live | §24.1 |
 | A detected note is judged on **pitch, not string** — the strings' ranges overlap, and the same note is the same note. Decided, and the **judge's pitch-keyed index does not exist yet** (`press_pitch` is nowhere in the tree) | planned | §24.2 |
 | The keyboard **stays the default** input; a machine with no audio input is a real case | live | §24.4 |
-| `InputMode.CAMERA` is read as **`MICROPHONE`**, so an old settings file keeps its meaning | live | §25.5 |
+| ~~`InputMode.CAMERA` is read as `MICROPHONE`, so an old settings file keeps its meaning~~ — `InputMode` itself is gone with the keyboard. Settings version 4 drops `input_mode` on load; every file on disk says `"keyboard"`, and reading any file now means the microphone, so nothing needs mapping | superseded | §32.2, supersedes §25.5 |
 | An **absence** test must be written against code, not prose — a comment explaining the history defeats it | live | §25.4 |
 | ~~Camera feed mirroring direction~~ — **retired with the camera**; no device to build it on | rejected | §25, supersedes §1.6 |
 | Hit windows: Perfect ±35ms, Good ±80ms, **expire past 140ms** | live | §1.6, §15.7 |

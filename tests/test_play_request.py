@@ -15,7 +15,7 @@ from guitaroids.session.play_request import (
     MAX_OFFSET_SECONDS,
     PlayRequest,
 )
-from guitaroids.settings import InputMode, Settings
+from guitaroids.settings import Settings
 
 
 # --- construction ------------------------------------------------------------

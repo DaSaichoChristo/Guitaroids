@@ -17,7 +17,6 @@ from guitaroids.settings import (
     MAX_BPM,
     MIN_BPM,
     SETTINGS_VERSION,
-    InputMode,
     Settings,
 )
 
@@ -29,7 +28,6 @@ def test_defaults_are_sane() -> None:
     s = Settings()
     assert 0.0 <= s.master_volume <= 1.0
     assert 0.0 <= s.click_volume <= 1.0
-    assert s.input_mode is InputMode.KEYBOARD, "keyboard must be the default, not camera"
     assert s.count_in_bars == 1
     # Full chords, since §21: the collapsed default dropped 2991 of the real
     # tab's 4099 notes and put 68% of the rest on one string.
@@ -55,7 +53,6 @@ def test_round_trip_preserves_everything(tmp_path: Path) -> None:
     original = Settings(
         master_volume=0.42,
         click_volume=0.77,
-        input_mode=InputMode.MICROPHONE,
         input_latency_ms=85.0,
         audio_device="USB Audio",
         input_device="Focusrite Scarlett",
@@ -86,7 +83,7 @@ def test_save_writes_readable_json(tmp_path: Path) -> None:
     Settings(master_volume=0.5).save(path)
     raw = json.loads(path.read_text())
     assert raw["master_volume"] == 0.5
-    assert raw["input_mode"] == "keyboard", "enums serialise as their value"
+    assert "input_mode" not in raw, "the field is gone, so the key must be too (§32)"
 
 
 # --- missing and corrupt -----------------------------------------------------
@@ -186,43 +183,48 @@ def test_one_bad_field_does_not_discard_the_others(tmp_path: Path) -> None:
 # --- input mode --------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "raw,expected",
-    [
-        ("microphone", InputMode.MICROPHONE),
-        ("Microphone", InputMode.MICROPHONE),
-        ("  Keyboard  ", InputMode.KEYBOARD),
-        ("telepathy", InputMode.KEYBOARD),
-        (None, InputMode.KEYBOARD),
-        (7, InputMode.KEYBOARD),
-        (InputMode.MICROPHONE, InputMode.MICROPHONE),
-        # The value a settings file written before §25 will contain.
-        ("camera", InputMode.MICROPHONE),
-        ("  CAMERA ", InputMode.MICROPHONE),
-    ],
-)
-def test_input_mode_parses_tolerantly(raw: object, expected: InputMode) -> None:
-    assert InputMode.parse(raw) is expected
+def test_input_mode_is_gone() -> None:
+    """Removed, not deprecated, for the same reason `camera_device` was.
 
-
-def test_the_old_camera_value_means_the_microphone_not_the_keyboard() -> None:
-    """**The whole reason for a legacy map.**
-
-    A file saying ``"camera"`` recorded a player who had deliberately chosen
-    something other than a keyboard. Dropping the member without mapping it would
-    fall back to KEYBOARD -- silently handing them the one input they did not want,
-    with nothing in the file to explain it later.
+    There is one input now, so there is nothing to choose between, and a setting with
+    a single legal value is a control that pretends to be a choice. This is §21.2's
+    failure mode reached from the other end: the field was read by real code, and
+    removing the code made it a field nothing reads.
     """
-    assert InputMode.parse("camera") is InputMode.MICROPHONE
-    assert not hasattr(InputMode, "CAMERA"), (
-        "reinstating the member would make 'camera' parse as itself again"
-    )
+    assert not hasattr(Settings, "input_mode")
+    assert not hasattr(Settings(), "input_mode")
 
 
-def test_input_mode_survives_a_round_trip() -> None:
-    s = Settings(input_mode=InputMode.MICROPHONE)
-    assert s.to_dict()["input_mode"] == "microphone"
-    assert Settings.from_dict(s.to_dict()).input_mode is InputMode.MICROPHONE
+def test_input_mode_is_not_serialised() -> None:
+    """A field gone from the dataclass must be gone from the file too.
+
+    Otherwise the next migration has to clean up a key the current code has never
+    heard of, and nothing would say so.
+    """
+    assert "input_mode" not in Settings().to_dict()
+    assert "input_mode" not in Settings().to_dict().values()
+
+
+def test_a_file_that_asked_for_the_keyboard_still_loads() -> None:
+    """Every existing settings file says "keyboard", and reading it must just work.
+
+    It is the value in every file on disk, so a migration that raised would lock the
+    player out of the game entirely. The key is dropped (§ version 4) and the
+    microphone is what is left.
+    """
+    loaded = Settings.from_dict({"version": 3, "input_mode": "keyboard"})
+    assert not hasattr(loaded, "input_mode")
+    assert loaded.master_volume == Settings().master_volume
+
+
+def test_a_file_that_asked_for_a_camera_still_loads() -> None:
+    """The §25 legacy map is gone with the enum, so the key is simply dropped.
+
+    A player who had chosen "camera" is now on the microphone, which is what the
+    mapping meant in §25 and is the only input there is.
+    """
+    loaded = Settings.from_dict({"version": 2, "input_mode": "camera"})
+    assert loaded.collapse_chords is False, "and the other migrations still apply"
 
 
 # --- the camera_device removal (§25) ---------------------------------------------

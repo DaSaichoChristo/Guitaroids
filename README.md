@@ -13,19 +13,14 @@ and is not started: for now the six on-screen keys are the way in.
 Linux / macOS:
 
 ```bash
-scripts/setup.sh          # the supported path: also fetches a soundfont
+scripts/setup.sh          # the only install path
 ```
 
-Windows (PowerShell):
-
-```powershell
-.\scripts\setup.ps1
-```
-
-Either script creates `.venv` on Python 3.12, installs pinned dependencies, fetches
-a soundfont, and runs the M0 gate. The two are kept in
-sync by `tests/test_setup_scripts.py`, which asserts they agree on the critical
-pins — so a change to one is not silently missing from the other.
+It creates `.venv` on Python 3.12, installs the dependencies, fetches a soundfont, and
+runs the M0 gate. **Do not use `pip install -r requirements.txt` instead** — that file
+is `pip freeze` output and it lists tinysoundfont, which cannot be installed normally:
+it depends on `pyaudio`, which has no Linux wheel here and cannot be built without
+`portaudio.h`. The script filters it out and installs it with `--no-deps` instead.
 
 See [`DECISIONS.md`](DECISIONS.md) for why each choice was made, and
 [`DESIGN.md`](DESIGN.md) for the reasoning and measurements behind them.
@@ -148,7 +143,7 @@ guitaroids/
   songlib.py library scan, pairing, status
   settings.py user preferences                  pure, no Qt
 scripts/     setup, asset fetchers, import report, screenshots
-tests/       915 tests
+tests/       900 tests
 songs/       your tabs and audio (gitignored)
 ```
 

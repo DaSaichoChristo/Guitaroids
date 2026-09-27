@@ -22,7 +22,7 @@ from songbuild import make_chart
 from guitaroids.context import AppContext
 from guitaroids.session.judge import Verdict
 from guitaroids.songlib import Library, SongEntry, Status
-from guitaroids.ui.game import KEY_LANES, Game
+from guitaroids.ui.game import Game
 from guitaroids.ui.screens import Screen
 from guitaroids.ui.widgets.tabview import TabView
 
@@ -188,58 +188,54 @@ def test_the_ticker_pushes_the_position_into_the_widget(game: Game) -> None:
 # --- input -------------------------------------------------------------------
 
 
-def test_a_digit_key_judges_its_lane(game: Game) -> None:
-    """Pressed at exactly t=2.0, so a PERFECT is a real signal, not luck."""
-    game._clock.restart()
-    game._press(2)
-    # The clock has barely moved, so drive the clock back to the note instead.
-    game._press(0)
-    assert game.state.judgements, "a press must record something"
-    assert game.state.judgements[0].lane in (0, 2)
 
 
-def test_every_digit_key_maps_to_a_distinct_lane() -> None:
-    lanes = set(KEY_LANES.values())
-    assert lanes == set(range(6))
-    assert len(KEY_LANES) == 6
 
+def _hit(screen, lane: int) -> None:
+    """Detect the pitch of the chart's first note on ``lane``, at the current position.
 
-def test_the_key_table_uses_one_through_six() -> None:
-    from PySide6 import QtCore
-
-    assert KEY_LANES[QtCore.Qt.Key.Key_1] == 0
-    assert KEY_LANES[QtCore.Qt.Key.Key_6] == 5
-    assert QtCore.Qt.Key.Key_0 not in KEY_LANES
-    assert QtCore.Qt.Key.Key_7 not in KEY_LANES
+    The keyboard tests this replaces asked for a *lane*; the input is a pitch now, and
+    the pitch has to come from the chart or the test would be asserting that a number
+    happens to match another number.
+    """
+    note = next(n for n in screen.chart.notes if n.lane == lane)
+    screen._on_pitch(note.pitch)
 
 
 def test_pressing_at_the_note_time_is_perfect(game: Game) -> None:
-    """Drives ``_press`` at a known position by freezing the clock first.
+    """Drives ``_on_pitch`` at a known position by freezing the clock first.
 
     ``_clock`` is replaced with a stub rather than slept against, because
     QElapsedTimer cannot be made to report an exact time and a test that waits for
-    one is either slow or flaky.
+    one is either slow or flaky. The input is a detected pitch rather than a key, and
+    it is the microphone's path all the way to the verdict (§30.2).
     """
     game._clock = _FrozenClock(2.0)
-    game._press(3)
+    _hit(game, 3)
     judgement = game.state.judgements[-1]
     assert judgement.verdict is Verdict.PERFECT
-    assert judgement.lane == 3
+    assert judgement.lane == 3, "the CHART note's lane, not a guess at the string"
     assert game._flash.text() == "PERFECT"
 
 
 def test_a_miss_flashes_miss(game: Game) -> None:
     game._clock = _FrozenClock(2.0 + 0.100)
-    game._press(1)
+    _hit(game, 1)
     assert game.state.judgements[-1].verdict is Verdict.MISS
     assert game._flash.text() == "MISS"
     assert game.state.misses == 1
 
 
 def test_a_stray_flashes_nothing(game: Game) -> None:
-    """Faking should not put a word on screen for every stray press."""
-    game._clock = _FrozenClock(50.0)
-    game._press(0)
+    """A pitch the song never asks for is a stray, and puts no word on screen.
+
+    This is the microphone's version of "pressed an empty lane": the only detectable
+    wrong note is one the chart does not contain, because a pitch it *does* contain with
+    nothing resolvable now is a held note still sounding (§30.2).
+    """
+    game._clock = _FrozenClock(2.0)
+    used = {n.pitch for n in game.chart.notes}
+    game._on_pitch(max(used) + 6)
     assert game.state.judgements[-1].verdict is Verdict.STRAY
     assert game._flash.text() == ""
 
@@ -248,7 +244,7 @@ def test_pressing_with_no_song_does_nothing(shell) -> None:
     context = AppContext(songs_dir=Path("songs"))
     screen = Game(shell, context)
     try:
-        screen._press(0)
+        screen._on_pitch(64)
         assert screen.state is None
     finally:
         screen._stop()
@@ -275,23 +271,40 @@ def test_escape_still_goes_back(shell, chart) -> None:
         screen.deleteLater()
 
 
-def test_a_real_key_event_reaches_the_judge(shell, chart) -> None:
-    """The Qt path end to end, not just ``_press``."""
-    from PySide6 import QtCore, QtGui, QtWidgets
+def test_the_fake_microphone_is_autouse(shell, chart) -> None:
+    """Guarding the guard, because §32 made this the difference between a suite and a
+    crash.
 
-    screen = Game(shell, context_with(chart))
-    try:
-        screen._clock = _FrozenClock(50.0)  # far from any note: a stray
-        event = QtGui.QKeyEvent(
-            QtCore.QEvent.Type.KeyPress,
-            QtCore.Qt.Key.Key_3,
-            QtCore.Qt.KeyboardModifier.NoModifier,
-        )
-        QtWidgets.QApplication.sendEvent(screen, event)
-        assert screen.state.strays == 1
-    finally:
-        screen._stop()
-        screen.deleteLater()
+    Every test in this file builds a Game, every Game opens an input device, and an
+    input device opened by a test is a segfault some tests later. If this assertion
+    ever fails, the fixture lost its `autouse=True` and the whole file leaks again.
+    """
+    screen = game_via_shell(shell, chart)
+    assert type(screen._mic).__name__ == "FakeMicrophone", (
+        f"a real {type(screen._mic).__name__} was opened: the fake_mic fixture is not "
+        "autouse any more, and every test in this file now opens an input device"
+    )
+
+
+def test_the_microphone_signal_reaches_the_judge(shell, chart) -> None:
+    """The path a real detection takes, minus the device.
+
+    A worker thread calls the screen's callback, which emits a signal, which Qt delivers
+    on the GUI thread. Emitting the signal is exactly the last step of that, so this
+    covers the wiring without an input device -- the same trick the renderer tests use.
+    """
+    from guitaroids.audio.pitch import PitchEstimate
+    from guitaroids.audio.pitch import midi_to_hz
+
+    screen = game_via_shell(shell, chart)
+    screen._clock = _FrozenClock(2.0)
+    note = next(n for n in screen.chart.notes if abs(n.time - 2.0) < 0.01)
+
+    # What the microphone's worker does: hand the screen an estimate.
+    screen._on_estimate(PitchEstimate(hz=midi_to_hz(note.pitch), midi=note.pitch,
+                                      clarity=0.95, rms=0.2))
+    assert screen.state.resolved == 1, "the detection did not reach the judge"
+    assert screen.state.judgements[-1].verdict is Verdict.PERFECT
 
 
 # --- the tally ---------------------------------------------------------------
@@ -305,7 +318,7 @@ def test_the_tally_starts_empty(game: Game) -> None:
 
 def test_the_tally_counts_a_hit(game: Game) -> None:
     game._clock = _FrozenClock(2.0)
-    game._press(0)
+    _hit(game, 0)
     game._refresh_tally()
     assert "1 perfect" in game._tally.text()
     assert "100%" in game._tally.text(), "one note judged, one hit"
@@ -313,7 +326,7 @@ def test_the_tally_counts_a_hit(game: Game) -> None:
 
 def test_a_miss_shows_in_the_tally(game: Game) -> None:
     game._clock = _FrozenClock(2.0 + 0.100)
-    game._press(0)
+    _hit(game, 0)
     game._refresh_tally()
     assert "1 miss" in game._tally.text()
     assert "0%" in game._tally.text()
@@ -333,7 +346,7 @@ def test_input_is_ignored_after_the_song_ends(game: Game) -> None:
     game._tick()
     before = len(game.state.judgements)
     game._clock = _FrozenClock(4.0)
-    game._press(0)
+    _hit(game, 0)
     assert len(game.state.judgements) == before
 
 
@@ -436,7 +449,7 @@ def test_revisiting_starts_a_fresh_run(shell, chart) -> None:
     """The shell keeps built screens, so GAME is not new the second time."""
     screen = game_via_shell(shell, chart)
     screen._clock = _FrozenClock(2.0)
-    screen._press(0)
+    _hit(screen, 0)
     assert screen.state.resolved == 1
     shell.navigate(Screen.MAIN)
     shell.navigate(Screen.GAME)
@@ -450,82 +463,8 @@ def test_the_screen_owns_a_tab_view(game: Game) -> None:
     assert isinstance(game.view, TabView)
 
 
-def test_a_lane_key_works_even_when_it_does_not_reach_the_screen(
-    shell, chart
-) -> None:
-    """The game must not depend on Qt focus.
-
-    Focus is only granted to an *active* window, so a digit key can land on the
-    window background or the Back button instead of the game screen -- and in the
-    offscreen test platform nothing has focus at all. Delivering the key to the
-    button is the reproducible version of that failure: without the application-wide
-    filter the press is swallowed and the game is unplayable.
-    """
-    from PySide6 import QtCore, QtGui, QtWidgets
-
-    screen = game_via_shell(shell, chart)
-    screen._clock = _FrozenClock(50.0)  # far from any note: a stray
-    event = QtGui.QKeyEvent(
-        QtCore.QEvent.Type.KeyPress,
-        QtCore.Qt.Key.Key_4,
-        QtCore.Qt.KeyboardModifier.NoModifier,
-    )
-    QtWidgets.QApplication.sendEvent(screen._quit, event)
-    assert screen.state.strays == 1
-    assert screen.state.judgements[-1].lane == 3, "key 4 is lane 3"
 
 
-def test_the_filter_lets_other_keys_through(shell, chart) -> None:
-    """Space must still reach the button, and Escape must still navigate back."""
-    from PySide6 import QtCore, QtGui, QtWidgets
-
-    screen = game_via_shell(shell, chart)
-    screen._clock = _FrozenClock(50.0)
-    space = QtGui.QKeyEvent(
-        QtCore.QEvent.Type.KeyPress,
-        QtCore.Qt.Key.Key_Space,
-        QtCore.Qt.KeyboardModifier.NoModifier,
-    )
-    assert screen.eventFilter(screen._quit, space) is False, "Space was swallowed"
-
-    escape = QtGui.QKeyEvent(
-        QtCore.QEvent.Type.KeyPress,
-        QtCore.Qt.Key.Key_Escape,
-        QtCore.Qt.KeyboardModifier.NoModifier,
-    )
-    assert screen.eventFilter(screen._quit, escape) is False, "Escape was swallowed"
-
-
-def test_a_lane_key_aimed_at_the_screen_is_handled_once(shell, chart) -> None:
-    """No double judging: the filter passes its own screen's events through."""
-    from PySide6 import QtCore, QtGui, QtWidgets
-
-    screen = game_via_shell(shell, chart)
-    screen._clock = _FrozenClock(50.0)
-    event = QtGui.QKeyEvent(
-        QtCore.QEvent.Type.KeyPress,
-        QtCore.Qt.Key.Key_1,
-        QtCore.Qt.KeyboardModifier.NoModifier,
-    )
-    assert screen.eventFilter(screen, event) is False
-    QtWidgets.QApplication.sendEvent(screen, event)
-    assert screen.state.strays == 1, "one press must record one judgement"
-
-
-def test_keys_stop_driving_the_game_once_it_is_hidden(shell, chart) -> None:
-    """A filter left installed would keep playing the game from the menu."""
-    from PySide6 import QtCore, QtGui, QtWidgets
-
-    screen = game_via_shell(shell, chart)
-    screen._clock = _FrozenClock(50.0)
-    shell.navigate(Screen.MAIN)
-    event = QtGui.QKeyEvent(
-        QtCore.QEvent.Type.KeyPress,
-        QtCore.Qt.Key.Key_1,
-        QtCore.Qt.KeyboardModifier.NoModifier,
-    )
-    QtWidgets.QApplication.sendEvent(shell, event)
-    assert screen.state.strays == 0, "the filter must be removed on hide"
 
 
 def test_the_hud_does_not_cover_the_playfield(shell, chart) -> None:
@@ -698,7 +637,7 @@ def test_the_rate_is_fixed_for_the_run(shell, chart) -> None:
     before = screen.rate
     assert before == pytest.approx(0.5)
     screen._tick()
-    screen._press(0)
+    _hit(screen, 0)
     assert screen.rate == before
     assert not hasattr(screen, "_t0_ms"), "a clock origin would mean a re-anchor"
 
@@ -862,7 +801,7 @@ def test_input_is_ignored_while_the_audio_is_preparing(shell, chart) -> None:
     screen.context = audio_context(chart)
     screen._load_request()
     try:
-        screen._press(0)
+        _hit(screen, 0)
         assert screen._state is not None
         assert screen._state.resolved == 0
     finally:
@@ -1365,24 +1304,37 @@ class FakeMicrophone:
         self.started = False
 
     class detector:  # noqa: N801 - a stand-in, not a real class
-        latency_seconds = 0.0232
+        # **Zero, deliberately.** A real detector contributes 23.2ms (§30.3), and that
+        # is a microphone fact. Every test that is not *about* the latency would
+        # otherwise have 23ms baked into the position it asserts on -- a 100ms-late
+        # note reads GOOD rather than MISS, which is how four unrelated tests failed
+        # when the microphone became the only input. The latency tests set the number
+        # they need themselves.
+        latency_seconds = 0.0
 
 
-@pytest.fixture()
+@pytest.fixture(autouse=True)
 def fake_mic(monkeypatch):
     """Replace the `Microphone` class, so no test in this file can open a real device.
 
     **A test that opens an input stream corrupts the interpreter.** This file leaked
     one exactly like that -- `test_leaving_stops_the_input_device_too` asked for
-    `InputMode.MICROPHONE` without patching, `prepared_screen` called
+    the microphone without patching, `prepared_screen` called
     `_start_microphone`, a real device opened, and the test then replaced
     `screen._mic` with a fake, leaving the stream running with nothing holding it. The
     suite passed on its own and dumped core in the full run, in a test that had nothing
     to do with audio: the same failure as §29.3, from the same mistake, two commits
     later.
 
-    So it is a fixture rather than a habit, and `prepared_screen` refuses to build a
-    microphone run without it.
+    **Autouse**, and that is the change §32 forced. While the microphone was one of two
+    modes, only the tests that asked for it needed this. It is now the only input, so
+    *every* test in this file constructs a screen that opens an input device -- the
+    `game` fixture included, which is most of the file. Leaving it non-autouse meant
+    that four tests judged against a real detector's 23.2ms of latency (a 100ms-late
+    note reading GOOD instead of MISS) and the process dumped core on teardown.
+
+    So: autouse, and a test below asserts it, because an autouse fixture that quietly
+    stops being autouse reopens the hole with nothing to say so.
     """
     import guitaroids.ui.game as game_module
 
@@ -1391,16 +1343,9 @@ def fake_mic(monkeypatch):
 
 
 def mic_screen(shell, chart, **settings_kwargs):
-    from guitaroids.settings import Settings, InputMode
+    from guitaroids.settings import Settings
 
-    settings = Settings(**settings_kwargs)
-    screen = prepared_screen(shell, chart, settings)
-    if settings.input_mode is InputMode.MICROPHONE:
-        assert not isinstance(screen._mic, type(None)) or screen._mic_error, (
-            "a microphone run was built with a real Microphone class. Request the "
-            "`fake_mic` fixture; an input device opened by a test crashes the process."
-        )
-    return screen
+    return prepared_screen(shell, chart, Settings(**settings_kwargs))
 def _judge_at(screen, seconds: float) -> None:
     """Freeze the screen's clock at `seconds`, so `position()` is exactly that."""
     screen._preparing = False
@@ -1492,25 +1437,20 @@ def test_the_manual_latency_trim_is_read_at_all(shell, chart) -> None:
     assert screen.context.settings.input_latency_ms == 40
 
 
-def test_the_microphone_is_not_opened_for_a_keyboard_run(shell, chart) -> None:
-    from guitaroids.settings import InputMode, Settings
+def test_a_run_opens_the_microphone_exactly_once(shell, chart, monkeypatch) -> None:
+    """Opening a stream is not idempotent, and the input is no longer optional.
 
-    screen = prepared_screen(shell, chart, Settings(input_mode=InputMode.KEYBOARD))
-    assert screen._mic is None, "a keyboard run must not open an input device"
+    §32 made the microphone the only input, so every run opens a device -- which is
+    exactly why the `fake_mic` fixture is not optional either, and why `_start_microphone`
+    keeps its own guard rather than being called once per song by accident.
 
-
-def test_a_microphone_run_asks_for_the_device_exactly_once(shell, chart, monkeypatch) -> None:
-    """Opening a stream is not idempotent, so the guard is what matters.
-
-    `_start_microphone` opens a real input device, so calling it for real here would
-    make the suite depend on hardware -- and leave a device open behind it, which is
-    §29.3's crash. `Microphone` itself is replaced so the real `_start_microphone` runs,
-    **including its own `if self._mic is not None: return`**. The first version
-    replaced `_start_microphone` instead, which removed the guard along with the
-    device, and so "opened twice" -- it was testing its own spy.
+    `Microphone` is replaced so the real `_start_microphone` runs, **including its
+    `if self._mic is not None: return`**. An earlier version replaced
+    `_start_microphone` instead, which removed the guard along with the device, and so
+    "opened twice" -- it was measuring its own spy.
     """
     import guitaroids.ui.game as game_module
-    from guitaroids.settings import InputMode, Settings
+    from guitaroids.settings import Settings
 
     started: list[bool] = []
 
@@ -1525,13 +1465,19 @@ def test_a_microphone_run_asks_for_the_device_exactly_once(shell, chart, monkeyp
             pass
 
         class detector:  # noqa: N801 - a stand-in, not a real class
-            latency_seconds = 0.0232
+            # **Zero, deliberately.** A real detector contributes 23.2ms (§30.3), and
+            # that is a microphone fact. Every test that is not *about* the latency
+            # would otherwise have 23ms of it baked into the position it is asserting
+            # on -- a 100ms-late note reads as GOOD rather than MISS, which is how two
+            # unrelated tests failed when the microphone became unconditional. The
+            # latency tests set the number they need explicitly.
+            latency_seconds = 0.0
 
     monkeypatch.setattr(game_module, "Microphone", FakeMic)
-    screen = prepared_screen(shell, chart, Settings(input_mode=InputMode.MICROPHONE))
+    screen = prepared_screen(shell, chart, Settings())
     _judge_at(screen, 1.0)
     screen._load_request()
-    assert started == [True], "a microphone run did not open the input device"
+    assert started == [True], "a run did not open the input device"
 
     # A second run must not open it again: the stream lives with the screen.
     screen._load_request()
@@ -1539,34 +1485,11 @@ def test_a_microphone_run_asks_for_the_device_exactly_once(shell, chart, monkeyp
     assert screen._mic_error == ""
 
 
-def test_the_keyboard_is_the_default_so_a_device_is_not_opened_by_accident(shell, chart, monkeypatch) -> None:
-    import guitaroids.ui.game as game_module
-    from guitaroids.settings import Settings
-
-    started: list[bool] = []
-
-    class FakeMic:
-        def __init__(self, **kwargs) -> None:  # noqa: ANN003
-            pass
-
-        def start(self) -> None:
-            started.append(True)
-
-        def stop(self) -> None:
-            pass
-
-    monkeypatch.setattr(game_module, "Microphone", FakeMic)
-    screen = prepared_screen(shell, chart, Settings())  # the default mode
-    _judge_at(screen, 1.0)
-    screen._load_request()
-    assert started == [], "a run opened an input device it was not asked for"
-
-
 def test_leaving_stops_the_input_device_too(shell, chart, fake_mic) -> None:
     """§29.1 fixed the output stream. The input one is held for the screen's life."""
-    from guitaroids.settings import InputMode, Settings
+    from guitaroids.settings import Settings
 
-    screen = prepared_screen(shell, chart, Settings(input_mode=InputMode.MICROPHONE))
+    screen = prepared_screen(shell, chart, Settings())
     stopped: list[bool] = []
 
     class FakeMic:
