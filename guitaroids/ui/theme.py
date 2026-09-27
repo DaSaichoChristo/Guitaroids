@@ -91,19 +91,34 @@ def radius(value: float, factor: float | None = None) -> int:
     return max(1, round(value * math.sqrt(_scale if factor is None else factor)))
 
 
-#: The palette. Dark, low-saturation, so the note highway's colours stand out later.
+#: The palette. An amber phosphor terminal: near-black, warm, and lit from within.
+#:
+#: **Why amber and not green.** The obvious retro choice is green phosphor, and the
+#: first version of this was that. It fought the note highway: `LANE_COLORS` is a
+#: blue-to-red ramp whose warm end is already orange, and a green UI beside an orange
+#: lane reads as two palettes arguing. Amber keeps the highway's colours as the only
+#: saturated thing on screen, which is what the original note on this dict asked for,
+#: and amber-on-black is the older and more specific of the two terminal references.
+#:
+#: `text` is a warm off-white rather than full `#ffb000`. Saturated amber at body size
+#: is genuinely hard to read over a whole screen, and the retro is carried by the
+#: chrome, the bevels and the phosphor *accents* -- not by tinting the prose.
+#:
+#: `focus` is a distinct value and is actually used, in a `:focus` rule below. It
+#: used to be byte-identical to `accent_hi` and appear nowhere, so
+#: `test_every_colour_token_survives_scaling` passed on a token no rule referenced.
 COLORS: dict[str, str] = {
-    "bg": "#14161c",          # window background
-    "surface": "#1b1e26",     # panels, list backgrounds
-    "surface_hi": "#2a2f3a",  # inputs, hover
-    "border": "#2f3542",
-    "border_hi": "#3f4757",
-    "text": "#e8eaed",
-    "text_dim": "#9aa0aa",
-    "accent": "#1f7a4d",      # primary action
-    "accent_hi": "#2a9c68",
-    "danger": "#8c3a3a",
-    "focus": "#2a9c68",
+    "bg": "#100d09",          # window background, warm near-black
+    "surface": "#1a1610",     # panels, list backgrounds
+    "surface_hi": "#2b241a",  # inputs, hover
+    "border": "#3d3323",
+    "border_hi": "#5a4a2e",
+    "text": "#e9dcbe",
+    "text_dim": "#9c8a63",
+    "accent": "#d2871c",      # primary action
+    "accent_hi": "#f0a93a",
+    "danger": "#b23a26",
+    "focus": "#ffd27a",
 }
 
 #: One colour per highway lane, indexed by ``Note.lane``.
@@ -140,22 +155,55 @@ def build_stylesheet(f: float | None = None) -> str:
     that is the whole cost of doing this in Python rather than in a .qss file, and
     the alternative -- a template plus a substitution pass -- is a lot of machinery
     to avoid two braces.
+
+    **Three things carry the retro look, and none of them is an image asset**, which
+    matters because this project has no art pipeline and adding one would be a much
+    larger change than a restyle:
+
+    - **Bevelled borders.** ``border-style: outset`` on anything you press and
+      ``inset`` on anything you type into. This is the strongest single signal, and it
+      is free -- it is a QSS keyword, not a nine-patch. It also happens to *read*
+      correctly: a raised button and a sunken field is exactly the physical metaphor
+      the bevel is imitating, so the styling is more legible than the flat version it
+      replaces, not less.
+    - **Square corners.** ``border-radius`` is simply gone from most rules. Rounded
+      rectangles are a 2008 web-era shape; hard edges are the tell.
+    - **Monospace throughout**, including prose. The app is mostly text and a terminal
+      font is the most specific retro reference available without shipping a font.
+
+    Two deliberate omissions, both recorded in DESIGN.md: **no CRT scanlines** on the
+    highway, because it is pure ``QPainter`` render and every pixel is asserted on by
+    ``tests/test_tabview.py``; and **no glow or text-shadow**, because QSS cannot fake
+    one without an image and a fake one looks worse than none.
     """
     f = _scale if f is None else f
     return f"""
-/* Typography lives here, and only here. */
+/* Typography lives here, and only here.
+
+   Monospace is the *chrome* family: labels, buttons, lists, inputs, the HUD. A
+   terminal is monospace, and the chrome is what the player reads as the machine.
+
+   **Prose opts back out, and that is a layout decision rather than a taste one.**
+   Monospace is roughly 15% wider per character than the sans it replaced, and this
+   app is wordy in the places it matters: Import GP's subtitle is two paragraphs, and
+   at 15px monospace it needs five lines in a column that has a 352px minimum. Giving
+   it the room it wanted squeezed the content column to 334px and the page's own
+   squeeze test failed -- §19.2's failure, reached from a font. A paragraph set in a
+   terminal face is a costume; a paragraph set in the interface face is a document. */
 QWidget {{
     background: {COLORS["bg"]};
     color: {COLORS["text"]};
-    font-family: "Sans Serif";
+    font-family: "Monospace";
     font-size: {px(14, f)}px;
 }}
+/* The prose roles. Anything that is a sentence rather than a control. */
+QLabel#subtitle, QLabel#dim, QLabel#gameBanner {{ font-family: "Sans Serif"; }}
 
 /* --- headings ------------------------------------------------------------- */
 QLabel#heading {{
     font-size: {px(26, f)}px;
-    font-weight: 600;
-    color: {COLORS["text"]};
+    font-weight: 700;
+    color: {COLORS["accent_hi"]};
     background: transparent;
 }}
 QLabel#subtitle {{
@@ -167,6 +215,8 @@ QLabel#dim {{
     color: {COLORS["text_dim"]};
     background: transparent;
 }}
+/* The tally is aligned in columns with runs of spaces, so it must never wrap --
+   a space is a break opportunity, and §34.1 shipped a broken column to find out. */
 QLabel#stat {{
     font-family: "Monospace";
     font-size: {px(15, f)}px;
@@ -175,16 +225,18 @@ QLabel#stat {{
 }}
 
 /* --- buttons -------------------------------------------------------------- */
+/* `outset` because a button is a thing you push. The two-pixel border is scaled;
+   the one-pixel hairlines elsewhere are deliberately not, because a structural line
+   that thickens with the UI scale reads as a change of design rather than of size. */
 QPushButton {{
     background: {COLORS["surface_hi"]};
-    border: 1px solid {COLORS["border"]};
-    border-radius: {radius(6, f)}px;
+    border: {px(2, f)}px outset {COLORS["border_hi"]};
     padding: {px(8, f)}px {px(20, f)}px;
     min-height: {px(20, f)}px;
     color: {COLORS["text"]};
 }}
-QPushButton:hover  {{ background: {COLORS["border_hi"]}; }}
-QPushButton:pressed{{ background: {COLORS["border"]}; }}
+QPushButton:hover   {{ background: {COLORS["border"]}; }}
+QPushButton:pressed {{ background: {COLORS["surface"]}; border-style: inset; }}
 QPushButton:disabled {{
     color: {COLORS["text_dim"]};
     background: {COLORS["surface"]};
@@ -193,12 +245,12 @@ QPushButton:disabled {{
 QPushButton#primary {{
     background: {COLORS["accent"]};
     border-color: {COLORS["accent_hi"]};
-    font-weight: 600;
+    font-weight: 700;
 }}
 QPushButton#primary:hover   {{ background: {COLORS["accent_hi"]}; }}
 /* An id selector beats a pseudo-state, so the plain `QPushButton:disabled` rule
    above does NOT dim a primary button. Without this the Add button on Import GP
-   is full accent green while disabled: a live-looking control that does nothing
+   is full accent amber while disabled: a live-looking control that does nothing
    when pressed, which is worse than a dead-looking one. */
 QPushButton#primary:disabled {{
     color: {COLORS["text_dim"]};
@@ -210,86 +262,97 @@ QPushButton#danger {{ background: {COLORS["danger"]}; border-color: {COLORS["dan
 /* --- lists ---------------------------------------------------------------- */
 QListWidget, QTreeWidget, QTableWidget {{
     background: {COLORS["surface"]};
-    border: 1px solid {COLORS["border"]};
-    border-radius: {radius(6, f)}px;
+    border: {px(2, f)}px inset {COLORS["border"]};
     padding: {px(4, f)}px;
     outline: none;
 }}
-QListWidget::item {{
-    padding: {px(8, f)}px {px(6, f)}px;
-    border-radius: {radius(4, f)}px;
-}}
-QListWidget::item:selected   {{ background: {COLORS["accent"]}; color: #ffffff; }}
-QListWidget::item:hover      {{ background: {COLORS["surface_hi"]}; }}
+QListWidget::item {{ padding: {px(8, f)}px {px(6, f)}px; }}
+QListWidget::item:selected      {{ background: {COLORS["accent"]}; color: #100d09; }}
+QListWidget::item:hover         {{ background: {COLORS["surface_hi"]}; }}
 QListWidget::item:selected:hover {{ background: {COLORS["accent_hi"]}; }}
 
 /* --- inputs --------------------------------------------------------------- */
-/* Frame only. Fusion still draws the arrow, which needs an image asset to
-   replace and looks worse when half-styled. */
+/* `inset`, because a field is a hole you drop something into. Frame only: Fusion
+   still draws the arrow, which needs an image asset to replace and looks worse
+   when half-styled. */
 QComboBox, QSpinBox, QLineEdit, QDoubleSpinBox {{
     background: {COLORS["surface_hi"]};
-    border: 1px solid {COLORS["border"]};
-    border-radius: {radius(6, f)}px;
+    border: {px(2, f)}px inset {COLORS["border"]};
     padding: {px(6, f)}px {px(10, f)}px;
     min-height: {px(20, f)}px;
 }}
-QComboBox:hover, QSpinBox:hover, QLineEdit:hover {{ border-color: {COLORS["border_hi"]}; }}
+QComboBox:hover, QSpinBox:hover, QLineEdit:hover {{
+    border-color: {COLORS["border_hi"]};
+}}
+/* A bright amber focus ring, which is the one place `focus` is used. It was a dead
+   token before §41: byte-identical to `accent_hi` and named by no rule, so the test
+   that all tokens are used passed without any rule using it. */
+QComboBox:focus, QSpinBox:focus, QLineEdit:focus, QDoubleSpinBox:focus {{
+    border-color: {COLORS["focus"]};
+}}
 QComboBox:disabled, QSpinBox:disabled {{ color: {COLORS["text_dim"]}; }}
 
 QSlider::groove:horizontal {{
     background: {COLORS["surface"]};
     height: {px(5, f)}px;
-    border-radius: {radius(2, f)}px;
+    border: 1px inset {COLORS["border"]};
 }}
-QSlider::sub-page:horizontal {{ background: {COLORS["accent"]}; border-radius: {radius(2, f)}px; }}
+QSlider::sub-page:horizontal {{ background: {COLORS["accent"]}; }}
+/* Square handle, and beveled: the negative vertical margin still centres it on the
+   groove, which is the one piece of slider arithmetic that has to stay put. */
 QSlider::handle:horizontal {{
-    background: {COLORS["text"]};
+    background: {COLORS["accent_hi"]};
     width: {px(14, f)}px;
     margin: -{px(5, f)}px 0;
-    border-radius: {radius(7, f)}px;
+    border: {px(2, f)}px outset {COLORS["border_hi"]};
 }}
 QSlider:disabled::sub-page:horizontal {{ background: {COLORS["border"]}; }}
+QSlider:disabled::handle:horizontal    {{ background: {COLORS["border"]}; }}
 
 /* --- structure ------------------------------------------------------------ */
 QGroupBox {{
-    border: 1px solid {COLORS["border"]};
-    border-radius: {radius(6, f)}px;
+    border: {px(2, f)}px ridge {COLORS["border"]};
     margin-top: {px(14, f)}px;
     padding-top: {px(10, f)}px;
     background: {COLORS["surface"]};
 }}
+/* The title sits *over* the ridge rather than beside it, which is what makes a
+   group box read as a stamped plate instead of a bordered rectangle. */
 QGroupBox::title {{
     subcontrol-origin: margin;
     left: {px(10, f)}px;
-    padding: 0 {px(4, f)}px;
-    color: {COLORS["text_dim"]};
+    padding: 0 {px(6, f)}px;
+    color: {COLORS["accent_hi"]};
+    background: {COLORS["surface"]};
 }}
 
 QScrollBar:vertical {{
-    background: transparent;
-    width: {px(10, f)}px;
+    background: {COLORS["surface"]};
+    width: {px(14, f)}px;
     margin: {px(2, f)}px;
+    border: 1px inset {COLORS["border"]};
 }}
 QScrollBar::handle:vertical {{
     background: {COLORS["border_hi"]};
-    border-radius: {radius(5, f)}px;
+    border: {px(2, f)}px outset {COLORS["border_hi"]};
     min-height: {px(30, f)}px;
 }}
-QScrollBar::handle:vertical:hover {{ background: {COLORS["text_dim"]}; }}
+QScrollBar::handle:vertical:hover {{ background: {COLORS["accent"]}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
-QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
+QScrollBar::add-page, QScrollBar::sub-page {{ background: {COLORS["surface"]}; }}
 
 QFrame#card {{
     background: {COLORS["surface"]};
-    border: 1px solid {COLORS["border"]};
-    border-radius: {radius(8, f)}px;
+    border: {px(2, f)}px outset {COLORS["border"]};
 }}
 QFrame#divider {{ background: {COLORS["border"]}; max-height: 1px; border: none; }}
 
 /* --- the highway ---------------------------------------------------------- */
 /* Painted in QPainter rather than assembled from widgets, so its text cannot be
    styled by the stylesheet -- it is styled here instead, which keeps typography in
-   one place per the rule above. */
+   one place per the rule above. The lane colours are deliberately left alone: they
+   are the one saturated thing on screen and §41 explains why the palette moved and
+   these did not. */
 QWidget#highway {{
     font-family: "Monospace";
     font-size: {px(14, f)}px;
@@ -304,10 +367,12 @@ QWidget#highway {{
    Every one of these needs `background: transparent`. They float over the highway,
    and the default QWidget background would paint an opaque `bg` rectangle over the
    alternating lane bands -- which reads as a rendering glitch, not as a panel. */
-QLabel#gameTitle   {{ font-size: {px(22, f)}px; font-weight: 600; background: transparent; }}
+QLabel#gameTitle   {{ font-size: {px(22, f)}px; font-weight: 700; color: {COLORS["accent_hi"]}; background: transparent; }}
 QLabel#gameTally   {{ font-family: "Monospace"; font-size: {px(15, f)}px; background: transparent; }}
 QLabel#gameBanner  {{ color: {COLORS["text_dim"]}; background: transparent; }}
-QLabel#gameFlash   {{ font-size: {px(30, f)}px; font-weight: 700; color: {COLORS["text"]}; background: transparent; }}
+QLabel#gameFlash   {{ font-size: {px(30, f)}px; font-weight: 700; color: {COLORS["accent_hi"]}; background: transparent; }}
+QLabel#gameTiming  {{ font-family: "Monospace"; color: {COLORS["text"]}; background: transparent; }}
+QLabel#gameDevice  {{ font-family: "Monospace"; color: {COLORS["text_dim"]}; background: transparent; }}
 """
 
 

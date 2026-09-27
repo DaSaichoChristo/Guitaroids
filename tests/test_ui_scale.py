@@ -234,3 +234,115 @@ def test_a_disabled_primary_button_is_dimmed() -> None:
 
     sheet = build_stylesheet()
     assert "QPushButton#primary:disabled" in sheet
+
+
+# --- the retro direction (§41) ------------------------------------------------
+# These are taste, and taste is exactly what a later contributor edits away by
+# accident. Each one below is a decision with a reason attached, asserted so that
+# changing it has to be deliberate rather than incidental.
+
+
+def test_no_two_colour_tokens_share_a_value() -> None:
+    """A duplicate value lets a *dead* token pass the "every token is used" test.
+
+    `test_every_colour_token_survives_scaling` checks each value appears in the
+    stylesheet. That check is on *values*, not on names, so when `focus` was
+    byte-identical to `accent_hi` and named by no rule at all, the test passed on a
+    token nothing referenced. The first retro palette gave `focus` its own value and
+    the sheet a real `:focus` rule, and this is what stops them drifting back into a
+    pair.
+    """
+    values = list(theme.COLORS.values())
+    duplicates = {v for v in values if values.count(v) > 1}
+    assert not duplicates, f"these tokens are indistinguishable, so 'is it used?' is unanswerable: {duplicates}"
+
+
+def test_every_colour_token_is_named_by_a_rule_not_merely_present() -> None:
+    """The stronger form of the check above: each token appears in its own right.
+
+    Still value-based -- QSS has no names for colours -- but it also requires the
+    value to be distinct, which is what makes the distinction meaningful.
+    """
+    sheet = theme.build_stylesheet(1.0)
+    for name, value in theme.COLORS.items():
+        assert value in sheet, f"{name} ({value}) is in the palette but in no rule"
+    assert len(set(theme.COLORS.values())) == len(theme.COLORS)
+
+
+def test_the_chrome_is_bevelled_and_the_fields_are_sunken() -> None:
+    """The single strongest asset-free retro signal, and it reads correctly too.
+
+    A raised button and a sunken field is the physical metaphor the bevel imitates,
+    so this is more legible than the flat version it replaced rather than less. It is
+    also pure QSS keywords, so it costs no art pipeline -- which matters for a
+    project that has none.
+    """
+    sheet = theme.build_stylesheet(1.0)
+    assert "outset" in sheet, "nothing is raised"
+    assert "inset" in sheet, "nothing is sunken"
+    button_rule = sheet.split("QPushButton {")[1].split("}")[0]
+    assert "outset" in button_rule, "a button is a thing you push, so it is raised"
+    input_rule = sheet.split("QComboBox, QSpinBox")[1].split("}")[0]
+    assert "inset" in input_rule, "a field is a hole you type into, so it is sunken"
+
+
+def test_the_chrome_has_no_rounded_corners() -> None:
+    """Rounded rectangles are a 2008 web-era shape; hard edges are the tell.
+
+    Asserted on the button and the group box, which are the two a player looks at
+    most. The list and the inputs were rounded in the flat design and are not
+    asserted here, so a future card-style radius elsewhere does not trip this.
+    """
+    sheet = theme.build_stylesheet(1.0)
+    for rule in ("QPushButton {", "QGroupBox {"):
+        body = sheet.split(rule)[1].split("}")[0]
+        assert "border-radius" not in body, f"{rule} is rounded"
+
+
+def test_prose_opts_out_of_the_monospace_chrome() -> None:
+    """A layout decision, not a taste one, and §41 has the long version.
+
+    Monospace is ~15% wider per character. Import GP's subtitle is two paragraphs and
+    at 15px monospace it wanted five lines in a column with a 352px minimum, which
+    squeezed the content column to 334px and failed the page's own squeeze test.
+    Chrome in a terminal face is the retro; a paragraph in one is a costume.
+    """
+    sheet = theme.build_stylesheet(1.0)
+    prose_rule = sheet.split("QLabel#subtitle, QLabel#dim")[1].split("}")[0]
+    assert "Sans Serif" in prose_rule
+    assert "Monospace" not in prose_rule
+    for role in ("QLabel#subtitle,", "QLabel#dim,", "QLabel#gameBanner"):
+        assert role in sheet, f"{role} is not covered by the prose rule"
+
+
+def test_the_palette_is_warm_and_dark() -> None:
+    """The amber direction, as a property rather than as a hex string.
+
+    Asserted as channel ordering rather than as literal values, so a future tweak of
+    the amber does not have to update this -- but a *cool* palette, which is what
+    someone reverting to the old blue-grey would produce, does.
+    """
+    def channels(value: str) -> tuple[int, int, int]:
+        value = value.lstrip("#")
+        return tuple(int(value[i : i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+
+    bg = channels(theme.COLORS["bg"])
+    assert max(bg) < 40, f"the background is not dark: {theme.COLORS['bg']}"
+    assert bg[0] >= bg[2], f"the background is not warm: {theme.COLORS['bg']}"
+    accent = channels(theme.COLORS["accent"])
+    assert accent[0] > accent[2], f"the accent is not amber: {theme.COLORS['accent']}"
+    assert accent[1] > accent[2], "amber is red *and* green above blue"
+
+
+def test_the_lane_colours_were_left_alone() -> None:
+    """The one saturated thing on screen, on purpose.
+
+    §41 moved the whole palette to amber and deliberately did not touch the highway.
+    The original note on the palette asked for low saturation *so the lanes stand
+    out*, and a retro restyle is exactly the kind of change that would quietly
+    recolour them.
+    """
+    assert len(theme.LANE_COLORS) == theme.LANE_COUNT
+    assert theme.LANE_COLORS[0] == "#4aa3df", "the high E is still the blue end"
+    assert theme.LANE_COLORS[-1] == "#d9534f", "the low E is still the red end"
+    assert len(set(theme.LANE_COLORS)) == theme.LANE_COUNT, "two lanes share a colour"

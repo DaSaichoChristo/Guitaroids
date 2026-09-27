@@ -385,7 +385,7 @@ class TabView(QtWidgets.QWidget):
             QtCore.QPointF(left + width, self.y_for_lane(LANE_COUNT - 1, slot) + self.line_spacing / 2),
         )
 
-        self._paint_string_names(painter, slot, current, lines)
+        self._paint_string_names(painter, slot, current, staff_colour)
 
     def _paint_string_names(
         self, painter: QtGui.QPainter, slot: int, current: bool, staff: QtGui.QColor
@@ -395,6 +395,15 @@ class TabView(QtWidgets.QWidget):
         Drawn with ``self.font()`` rather than the fret font: the fret font is sized
         to fit *inside* a note, and that constraint has no bearing on a label that
         has the whole margin to itself.
+
+        **In `staff_colour` at full alpha, not in `lines`.** It used to be `lines`,
+        which carries `setAlpha(110)` for a measure that is not current -- and a
+        1-pixel line at 43% opacity is a reasonable way to draw context and a
+        hopeless way to draw a letter. On the §41 palette that put the dimmed names
+        at a summed brightness of 112 against the background, under the 120 the
+        tabview's own pixel tests look for, which is the test reporting a legibility
+        fault rather than a threshold being pedantic. A label is worth the same as
+        the line it labels.
         """
         painter.setFont(self.font())
         painter.setPen(QtGui.QPen(staff))

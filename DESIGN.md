@@ -35,7 +35,7 @@ supersedes §2" resolves without ambiguity.
 
 ## The sections
 
-39 sections, in the order they were written. Dates are all 2026-09-26 or
+40 sections, in the order they were written. Dates are all 2026-09-26 or
 -27 and are in the headings, so they are left out here.
 
 | Section | What it records |
@@ -79,6 +79,7 @@ supersedes §2" resolves without ambiguity.
 | §38 | The screenshot tool's false defect, and the one it was hiding |
 | §39 | "Low tempo doesn't work", which was the input-latency setting |
 | §40 | "Reload the app for less latency", and the counter nobody read |
+| §41 | A retro palette, and the layout bill that came with it |
 
 **§33 is missing**, and §36.3 explains why rather than back-filling it: the number was
 reserved for work that was planned, approved and then overtaken by other work, so no
@@ -4734,3 +4735,124 @@ shape is the contract, and a test double that does not match it is testing the d
   property, `is_running` and `finished` properties — and this section tripped over it.
   Worth normalising, but it touches every fake of the class, so it is a change of its
   own rather than a footnote to this one.
+
+---
+
+## §41 — A retro palette, and the layout bill that came with it (2026-09-27)
+
+Asked for a retro vibe. Done with three levers, and — deliberately — **no image
+assets**, because this project has no art pipeline and adding one is a far larger
+change than a restyle.
+
+### §41.1 Amber, and why not green
+
+The obvious retro choice is green phosphor, and the first version of this was that.
+It fought the note highway: `LANE_COLORS` is a blue-to-red ramp whose warm end is
+already orange (`#e08a3c`), and a green interface beside an orange lane reads as two
+palettes arguing rather than as one design. Amber keeps the lanes as the only
+saturated thing on screen, which is what the original note on the palette asked for
+in the first place, and amber-on-black is the older and more specific of the two
+terminal references.
+
+`text` is a warm off-white (`#e9dcbe`), **not** full `#ffb000`. Saturated amber at
+body size is genuinely hard to read across a whole screen, and the retro is carried by
+the chrome, the bevels and the phosphor *accents* — not by tinting the prose.
+
+**The lane colours were not touched**, and there is now a test saying so, because
+"restyle the app" is exactly the change that quietly recolours the highway.
+
+### §41.2 Three levers, and only three
+
+- **Bevelled borders.** `border-style: outset` on anything you press, `inset` on
+  anything you type into. It is the strongest single signal available without art, it
+  is a QSS keyword rather than a nine-patch, and it is *more* legible than the flat
+  version it replaces: a raised button and a sunken field is the physical metaphor
+  the bevel is imitating.
+- **Square corners.** `border-radius` is simply gone from the button, the group box
+  and the list. Rounded rectangles are a 2008 web-era shape; hard edges are the tell.
+- **Monospace chrome.** Labels, buttons, lists, inputs, the HUD, the whole title bar
+  of the interface.
+
+Two omissions, both deliberate. **No CRT scanlines on the highway** — it is pure
+`QPainter` render and every pixel of it is asserted on by `tests/test_tabview.py`, so
+scanlines would mean rewriting the pixel tests to tolerate noise. **No text glow**,
+because QSS cannot fake one without an image, and a faked one looks worse than none.
+
+### §41.3 Monospace everywhere cost a layout bug, and the fix was to stop
+
+Setting the base family to monospace broke two tests, and the first fix broke ten.
+
+Import GP's subtitle is **two paragraphs** with a hard newline in it. At 15px monospace
+it needs five lines in a column with a 352px minimum. Giving the label the height it
+wanted squeezed the content column to **334px** and failed the page's own squeeze test
+— §19.2's failure, reached from a font.
+
+That produced two wrong turns worth recording, because both looked like the fix:
+
+- **Pinning from `heightForWidth` unguarded.** §38.3 had already recorded this
+  disaster; re-running it, unchanged, reproduced the ten clipping failures. A
+  not-yet-laid-out label can be at a default width, and 100px of column turns a
+  one-line sentence into five, so every label on the screen grows at once and squeezes
+  its neighbours out of their own minimums.
+- **Guarding it with `width >= sizeHint().width()`.** Also wrong, and wrong in an
+  instructive way. `sizeHint()` is `heightForWidth(-1)` — measured with *no wrap
+  constraint* — so its width is the unwrapped text width, 695px for a label in a
+  560px column. The guard correctly refused, which is why the shortfall survived.
+  The lesson is that `sizeHint` and `heightForWidth` are not two answers to the same
+  question: one is "how tall in an infinite column", the other is "how tall here".
+
+**The fix was neither: prose opts out of the monospace.** `subtitle`, `dim` and
+`gameBanner` are sentences rather than controls, and they take `"Sans Serif"` back.
+Chrome in a terminal face is the retro; a paragraph in one is a costume. The pin went
+back to the committed `sizeHint`-only form, and both wrong turns are reverted rather
+than left in as unused options.
+
+### §41.4 A dead token the "all tokens are used" test could not see
+
+`test_every_colour_token_survives_scaling` asserts each **value** appears in the
+stylesheet — not each **name**. `focus` was byte-identical to `accent_hi` and named by
+no rule at all, so the test passed on a token nothing referenced. The retro palette
+gave `focus` its own value and the sheet a real `:focus` rule on the inputs.
+
+`test_no_two_colour_tokens_share_a_value` now closes it: if two tokens share a value,
+"is this token used?" is not a question the stylesheet can answer.
+
+### §41.5 A legibility fault the pixel tests found, not a threshold
+
+The tabview's own pixel test reported `bar 0 has no string names`. The non-current
+measure's names were drawn in `lines`, which carries `setAlpha(110)` for context — and
+a 1px line at 43% opacity is a reasonable way to draw a line and a hopeless way to
+draw a letter. On the new palette that put the dimmed names at a summed brightness of
+**112** against the background, under the 120 the test looks for.
+
+The tempting fix is to lower the threshold. The right one is that the names now take
+`staff_colour` at full alpha: **a label is worth the same as the line it labels.** The
+test was reporting a real fault, and 112 is unreadable.
+
+**Tests: 1028 in total — 1012 excluding `tests/test_docs.py`.** Two clean runs.
+
+### Not done — §41
+
+- **Every retro decision is now a test, which is also a risk.** Seven new tests pin
+  bevels, square corners, the monospace chrome, the warm palette and the untouched
+  lanes. That is deliberate, but it means the *next* restyle is a deliberate act
+  against a wall of assertions, and a person who wants a different look has to delete
+  tests rather than change code. The palette test asserts channel *ordering* and not
+  exact hexes, so the amber can move; the geometry tests cannot move at all.
+- **No retro treatment on the highway itself.** Scanlines were ruled out because the
+  pixel tests own every pixel, but that leaves the playfield — the screen the player
+  actually stares at — as plain flat colour. A vignette, a bezel around the window, or
+  scanlines confined to a band the tests do not assert on are all still available and
+  none has been tried.
+- **The song list wraps to three lines per entry** in monospace where the sans fitted
+  two. It reads fine and the squeeze test passes, so it was left, but the list is
+  *content* rather than chrome and this is the same trade §41.3 resolved the other way
+  for prose. The two decisions are not obviously consistent.
+- **`Transport`'s shape is still inconsistent** and `Transport.underruns` is still
+  read nowhere outside §40's new HUD line. Both carried over from §40.
+- **Only Preferences was checked at 1.5x**, because it is the screen that broke.
+  Rendered at `--scale 1.5 --size 1440x960`: the bevels go to 3px and still read as
+  bevels rather than as borders, the group-plate titles still sit over the ridge, the
+  sans prose wraps correctly and nothing overlaps. The other five are verified at 1.0
+  only, and the game HUD's three hand-placed lines have not been seen at 1.5, which
+  is where a 30px gap is most likely to have stopped being one.

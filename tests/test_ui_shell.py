@@ -691,6 +691,17 @@ def test_no_wrapped_label_is_shorter_than_its_text(shell, qapp) -> None:
 
     for screen_enum in Screen:
         shell.navigate(screen_enum)
+        # Settle fully, and the reason is not fussiness. `showEvent` pins wrapped
+        # labels, and a pin that changes a minimum height invalidates the layout, so
+        # the heights are only final after a *second* pass. §38.1 found the same trap
+        # in the screenshot tool, where one processEvents() was reporting overlaps
+        # that did not exist; here one pass reports a shortfall that does not exist
+        # either. The app gets the extra pass for free between frames, a test has to
+        # ask for it.
+        for _ in range(2):
+            qapp.processEvents()
+            if shell.current_screen.layout() is not None:
+                shell.current_screen.layout().activate()
         qapp.processEvents()
         for label in shell.current_screen.findChildren(QtWidgets.QLabel):
             if not label.wordWrap() or not label.text().strip():
