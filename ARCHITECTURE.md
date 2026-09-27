@@ -175,8 +175,9 @@ verified by hand — not a property anything will fail a build over.
 
 `DESIGN.md` §36.3 records this as a known gap in its own words: the test that would catch
 it — `test_every_import_is_provided_by_a_pin` — is listed as **not written**, and the
-entry names the direction as "the direction no test covers". It was reserved for §33,
-a number deliberately never reused, so the intent survives without the test.
+entry names the direction as "the direction no test covers". It was reserved under a
+section number that §36.3 records as deliberately never reused, so the intent survives
+without the test.
 
 That distinction matters more here than it might seem, because the six layout and
 device traps in `AGENTS.md` *are* test-enforced. A reader arriving at this document from
@@ -1053,22 +1054,52 @@ argument a call site could forget a **required, no-default** parameter.
 
 ## 12. Known staleness in the docs
 
-Found while writing this file, and not yet fixed. Listed because §25.4's argument is
-that an absence has to be tested against the artifact — these are absences of a
-different kind: **claims that are still there and are no longer true.**
+Found while auditing this file against the repository, and not yet fixed. Listed because
+§25.4's argument is that an absence has to be tested against the artifact — these are
+absences of a different kind: **claims that are still there and are no longer true.**
+
+### 12.1 In `DECISIONS.md` and `AGENTS.md`
 
 | Where | Says | Actually |
 |---|---|---|
+| `DECISIONS.md:70`, `AGENTS.md:53` | "Four layers, `ui/` → `session/` → `devices/` → `model/`" — marked **`live`** | There is no `devices/` layer; the directory does not exist and never held code. It is `audio/`. See §3.1. |
+| `DECISIONS.md:72`, `AGENTS.md:54` | "`devices/` never imports `session/` or `ui/`" — **`live`** | True of `audio/`, false of a path that does not exist. |
 | `DECISIONS.md:191` | the pitch-keyed judge is `planned`; *"`press_pitch` is nowhere in the tree"* | It exists at `judge.py:239` and is wired at `game.py:663`. Marked `planned`, so `test_docs.py` does not check it. |
-| `DECISIONS.md:207` | "Keys **1–6** for lanes 0–5, hard-coded" is **`live`** | The keyboard is gone (§32). `ui/game.py` has no `keyPressEvent` override and no key handling. This row is marked `live`, which means the doc test *should* have caught it — but that test only checks a `live` row **cites** a real section, not that its claim is still true. |
-| `ui/game.py:1-28` | "The clock here is a **wall clock** (`QElapsedTimer`)… Key mapping is `1`-`6`" | The audio device's clock is primary (`game.py:402`); the keyboard is gone. There is also a dangling `#: Digit keys 1-6` comment at `game.py:55` with no constant under it, and `game.py:650` refers to a `:meth:`_press`` that does not exist. |
+| `DECISIONS.md:207` | "Keys **1–6** for lanes 0–5, hard-coded" is **`live`** | The keyboard is gone (§32). `ui/game.py` has no `keyPressEvent` override and no key handling. Marked `live`, so the doc test *should* have caught it — but it only checks that a `live` row **cites** a real section, not that its claim is still true. |
+
+The last one is the generalisable failure: `test_docs.py` polices counts, section
+references, paths and four specific superseded phrases. It cannot tell you that a `live`
+row's **prose** has drifted, and three of the four rows above are `live`.
+
+### 12.2 In the source, where the wrong comment is worse than no comment
+
+| Where | Says | Actually |
+|---|---|---|
+| `ui/game.py:1-28` | "The clock here is a **wall clock** (`QElapsedTimer`)… Key mapping is `1`-`6`" | The audio device's clock is primary (`game.py:402`); the keyboard is gone. Also a dangling `#: Digit keys 1-6` at `game.py:55` with no constant under it, and `game.py:650` names a `:meth:`_press`` that does not exist. |
+| `ui/game.py:622` | a mic that will not open is survivable "because **the keyboard is still there (§24.4)**" | The keyboard is gone (§32) — and `game.py:159-162`, 461 lines earlier in the same file, says "Nothing on this screen reads a key now". |
+| `ui/shell.py:5` | "the game screen opens an audio device and **the calibration screen a camera**" | There is no calibration screen and no camera. `Screen` has six members. |
+| `session/judge.py:304-308` | `update()` "is **the only way a note is missed**" | A press 80–140 ms off also produces a MISS — `judge.py:235` and `:299` both increment on a penalised press. `update()` is the only path for a note the player never touched. This one had propagated into this file too, contradicting its own preceding paragraph. |
+| `model/chart.py:203` | `Note.pitch` is `tuning[string - 1] + fret` | The code builds a 1-indexed list at `chart.py:469` and uses `tuning[string] + fret` (`:514`). The field docstring is off by one index. |
+| `audio/transport.py:5` | `song_pos = (stream.time - t0) - stream.latency` | `Position.song_position` (`:86`) also subtracts `offset`, the player's audio alignment. The module docstring drops the term the player's per-song offset depends on. |
+| `audio/pitch.py:52` | `WINDOW` is "1.9 periods… **140 ms** miss window" | The module docstring three lines above gives the corrected **3.6 periods**, and says **280 ms** — but `judge.py:34` is `MISS_SECONDS = 0.140`, so 280 ms is the wrong one. The constant's comment is wrong twice, in opposite directions. |
+| `audio/pitch.py:180` | "At 82 Hz one sample is 4.4 cents" | 82 Hz at 44.1 kHz is a 538-sample period, so one sample is **3.2 cents**. 4.4 cents is a ~112 Hz figure. This is load-bearing: the paragraph exists to justify sub-sample interpolation, and 82 Hz is itself the *refuted* draft figure (`pitch.py:33-34`). |
+| `audio/mic.py:20` and `:204-205` | "**The queue is bounded** and drops the oldest audio"; "the callback **allocates nothing**" | The queue is `queue.Queue()` at `mic.py:171` — unbounded. What is bounded is `PitchDetector`'s numpy buffer (`mic.py:120-124`). And the callback *does* allocate: `.copy()` at `mic.py:213`, on PortAudio's real-time thread. |
 | `model/chart.py:443` | `collapse` "Defaults to `True`" | The signature says `False` (§21.3). |
-| `audio/pitch.py:52` | `WINDOW` is "1.9 periods… 140 ms miss window" | The module docstring's corrected figures: **3.6 periods**, 280 ms. The constant's own docstring predates the correction. |
 | `audio/render.py:188` | the long 0-vs-1-indexed preset narrative | `program = FALLBACK_PROGRAM` is **hardcoded** — `chart.channel.instrument` is never read by the render path, so `preset_for()` is exercised only by tests. |
 
-That last row is the only one with teeth in the code. The "one programme sharp" trap the
-docstring warns about is currently defended against — but only against a constant, so
-the defence is untested on the path that matters.
+### 12.3 One latent bug, not a doc problem
+
+`ui/results.py:116` annotates its parameter `event: QtGui.QShowEvent`, but that file
+imports only `from PySide6 import QtCore, QtWidgets` (`:28`) — **`QtGui` is never
+imported**. It does not raise, because `from __future__ import annotations` (`:24`) makes
+the annotation a string, but `typing.get_type_hints()` on it would `NameError`, and it is
+a copy-paste divergence from every sibling screen.
+
+Of everything above, three have teeth in the code rather than in the prose:
+`session/judge.py`'s "only way a note is missed" (contradicted by its own
+implementation), `audio/mic.py`'s "the callback allocates nothing" (it allocates on
+the real-time thread), and
+`chart.py:203`'s off-by-one index. The rest mislead a reader without changing behaviour.
 
 ---
 

@@ -225,6 +225,25 @@ def test_the_documented_package_count_matches_the_file() -> None:
 # --- section references ------------------------------------------------------
 
 
+def _declared_gaps() -> set[str]:
+    """Section numbers the index records as absent, and which are therefore vacant.
+
+    §33 was reserved for work that was planned, approved and then overtaken, so no
+    section was ever written under it. That makes §33 a real address with nothing
+    behind it, and a document has to be able to *name* it — that is how a reader finds
+    out the work is outstanding and not forgotten.
+
+    So a gap counts as a valid citation. Filling one in is the thing that would be an
+    error, and `test_the_missing_section_is_explained_rather_than_silently_absent` is
+    what notices that the sequence changed.
+    """
+    block = _read(DESIGN).split("## The sections", 1)[1].split("\n---", 1)[0]
+    # Bare digits, to match `_section_numbers()`: the first version captured the "§"
+    # as well, so the union held "§33" and the check rejected the very citation the
+    # gap note exists to enable.
+    return {n for n in re.findall(r"\*\*§(\d+) is missing\*\*", block)}
+
+
 def test_every_section_cited_in_the_front_door_documents_exists() -> None:
     """A ``§N`` that resolves to nothing is a dead link, and nobody notices.
 
@@ -232,8 +251,11 @@ def test_every_section_cited_in_the_front_door_documents_exists() -> None:
     dangling citation unlikely to be noticed and impossible to detect by reading. The
     cost is paid by whoever follows the reference to find the justification for a
     decision, and finds nothing.
+
+    This caught a README pointing at §33.3, which cannot exist while §33 itself does
+    not. §36.3 is where that material actually lives.
     """
-    sections = _section_numbers()
+    sections = _section_numbers() | _declared_gaps()
     assert len(sections) > 20, f"only found {len(sections)} sections; the parse broke"
 
     for path in FRONT_DOOR:
@@ -317,12 +339,23 @@ def test_declared_absences_are_still_absent() -> None:
 
 
 def test_the_docs_do_not_say_a_bare_pip_install_is_unsupported() -> None:
-    """§27.2 verified a bare `pip install -r requirements.txt` in a clean venv.
+    """§31.2 flipped this claim, twice, and both directions have now been got wrong.
 
-    `README.md` kept saying "the ONLY supported install path" after §27 fixed
-    `requirements.txt`, because that commit's test read one file. So the check is
-    over all three front-door documents, which is the generalisation §27.4 needed and
-    did not get.
+    §27.2 verified that a bare `pip install -r requirements.txt` worked, and
+    `README.md` kept saying "the ONLY supported install path" after it was fixed,
+    because that commit's test read one file.
+
+    Then §31 made the file a `pip freeze` dump, which put `tinysoundfont` back in it
+    and made the bare install **fail** — and for a whole commit `AGENTS.md` and
+    `README.md` both went on saying it worked, in the same paragraphs as the correct
+    claim. This test was widened then to forbid the positive claim too, and it was
+    **still** not enough: it matched `bare pip install ... works`, and the README said
+    `` `pip install -r requirements.txt` now just works `` with no "bare" in it, twenty
+    words into a paragraph that also named `scripts/setup.sh` as supported. It sat
+    there contradicting the Quick start section of the same file until §37 found it.
+
+    So the check is on the *claim*, not on a phrasing: any document that says a pip
+    install of `requirements.txt` succeeds is wrong, however it words it.
     """
     for path in FRONT_DOOR:
         flat = re.sub(r"\s+", " ", _read(path))
@@ -331,12 +364,18 @@ def test_the_docs_do_not_say_a_bare_pip_install_is_unsupported() -> None:
             "§31 flipped this: requirements.txt is `pip freeze` now, so it lists "
             "tinysoundfont, and installing that with pip fails on pyaudio."
         )
-        # The positive claim, which is what §31 overturned. It was missed for a whole
-        # commit: this test only forbade the old wording, so AGENTS.md and README.md
-        # could both keep saying a bare install "works" and stay green.
-        assert not re.search(r"bare `?pip install`?[^.]{0,40}\bworks\b", flat), (
-            f"{path.name} claims a bare pip install works. It does not (§31.2): "
-            "tinysoundfont's pyaudio dependency has no wheel and cannot be built."
+        # The positive claim, in any wording. `works`, `works fine`, `is all you
+        # need`, `installs everything` -- the words move, the claim does not.
+        claim = re.search(
+            r"pip install[^.]{0,80}?"
+            r"\b(works?|installs? everything|is (?:all )?you need|just works)\b",
+            flat,
+            re.I,
+        )
+        assert claim is None, (
+            f"{path.name} says installing requirements.txt with pip succeeds -- "
+            f"{claim.group(0)!r}. It does not (§31.2): tinysoundfont's pyaudio "
+            "dependency has no wheel and cannot be built without portaudio.h."
         )
 
 

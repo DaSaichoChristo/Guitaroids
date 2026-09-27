@@ -1,14 +1,21 @@
 # Guitaroids
 
 A Guitar Hero-style app. You play your own guitar and it walks you through Guitar
-Pro tabs at tempo, counting misses — it renders the tab into sound and times your
-notes against the audio device's clock.
+Pro tabs at tempo — it renders the tab into sound and times your notes against the
+audio device's own clock.
 
-Hackathon project. In progress — the song import, note-reading, audio and microphone
-layers are all built, and every screen is real. The input is your guitar: a note
-detector (`audio/pitch.py`) works out which note was played and the judge matches on
-**pitch** rather than string, because the strings' ranges overlap. **The keyboard is
-gone** (§32) and **wear headphones** — see below.
+**Hackathon project, and every layer is built:** song import, note reading, audio
+generation, playback, a microphone, and all six screens. The input is your guitar —
+`audio/pitch.py` works out which note you played and the judge matches on **pitch**
+rather than string, because the strings' ranges overlap (MIDI 49 is reachable on three
+of them). The six on-screen keys that stood in for a microphone are gone (`DESIGN.md`
+§32). **Wear headphones** — see below.
+
+**What has not been done is the one thing that needs a human and an instrument.** The
+note detector is verified against this project's own synthesised audio, which is
+cleaner than a real guitar through a laptop microphone, and every layer above it is
+verified against synthetic charts. Playing an actual guitar is what will tell you
+whether `MIN_CLARITY` and the analysis window are right (`DESIGN.md` §29.3).
 
 ## Quick start
 
@@ -111,21 +118,22 @@ PLAYABLE
     #7   Solo Guitar 2            GM 29     347 notes
 ```
 
-## Two constraints worth knowing up front
+## The one constraint worth knowing up front
 
-Both have bitten this project and both are enforced by tests:
+`pyaudio` cannot be installed here: no Linux wheel, and no `portaudio.h` to build one.
+Everything else follows from that, and both halves are enforced by tests.
 
-- **`pip install -r requirements.txt` now just works** — checked in a clean venv,
-  where the app installs, imports, and opens a window. `scripts/setup.sh` is still
-  the supported path, for tinysoundfont, a soundfont and the test gate; what a bare
-  install costs you is the numpy pluck synth instead of a sampled guitar
-  (`DESIGN.md` §27). It used to be the other way round, with a long warning about
-  OpenCV install order that went away when the webcam did (`DESIGN.md` §25).
-- **`pyaudio` cannot be installed here** — no Linux wheel, and no `portaudio.h` to
-  build one. `tinysoundfont` is therefore installed with `--no-deps`, which is safe
-  because `pyaudio` is a lazy import used only for real-time playback. Locked in by
-  `tests/test_audio_deps.py`. Note `pip install --dry-run` reports success on this
-  even though a real install fails.
+- **So `pip install -r requirements.txt` fails**, which is why `scripts/setup.sh` is
+  the install path rather than a convenience. The file is `pip freeze` output, so it
+  lists `tinysoundfont`, which depends on `pyaudio`. The script filters that one
+  package out of the bulk install and installs it with `--no-deps`
+  (`DESIGN.md` §31.2). This was the other way round once: §27 verified that a bare
+  install worked, back when the requirements file was curated and left
+  `tinysoundfont` out. The claim was corrected when the file became a freeze dump.
+- **And `--no-deps` is safe**, because `pyaudio` is a lazy import used only for
+  real-time playback, and this project renders offline with `sfload()` instead. Locked
+  in by `tests/test_audio_deps.py`. Note `pip install --dry-run` reports success here
+  even though a real install fails, so a dry run is not evidence either way.
 
 ## Requirements
 
@@ -140,23 +148,38 @@ Both have bitten this project and both are enforced by tests:
 
 ```
 guitaroids/
-  model/     Chart, Note, repeat unrolling      pure data, zero I/O
-  session/   PlayRequest, judge                  what to play, and how it scores
-  ui/        screens, library loader, theme     menu screens are built
-  audio/     render, click, transport            the master clock lives here
-  context.py AppContext: shared state, outlives every screen
-  importer.py import decisions                  pure, no Qt
-  songlib.py library scan, pairing, status
-  settings.py user preferences                  pure, no Qt
-scripts/     setup, asset fetchers, import report, screenshots
+  app.py       QApplication, stylesheet, UI scale     the process bootstrap
+  ui/          six screens, theme, background loader
+  audio/       render, click, transport,
+               pitch, mic                              the master clock lives here
+  session/     PlayRequest, judge, result             what to play, and how it scores
+  model/       Chart, Note, repeat unrolling          pure data, but it reads the tab
+  songlib.py   library scan, pairing, status
+  importer.py  import decisions                       pure, no Qt
+  settings.py  user preferences                       pure, no Qt
+  paths.py     where everything lives on disk         pure, no Qt
+  context.py   AppContext: shared state, outlives every screen
+  devices/     (empty; the transport is in audio/)
+scripts/       setup, asset fetchers, import report, screenshots
 tests/       967 tests
 songs/       your tabs and audio (gitignored)
 ```
 
-`context.py`, `importer.py`, `settings.py` and all of `model/` are pinned free of
-Qt, OpenCV and sounddevice by subprocess tests. That is what keeps them testable in
-milliseconds with no display — and it is why the background library loader is owned
-by a screen rather than by the context.
+`model/` reads a `.gp5` and parses it — `chart_from_gp5` is the only thing in the
+project that knows the Guitar Pro file format. It is free of Qt, OpenCV and
+sounddevice, and it has no audio and no clock, but "zero I/O" is not true of it.
+
+**Pinned free of Qt, OpenCV and sounddevice by subprocess tests:** `context.py`,
+`importer.py`, `paths.py`, `settings.py`, `session/judge.py` and
+`session/play_request.py`. That is what keeps them testable in milliseconds with no
+display — and it is why the background library loader is owned by a screen rather than
+by the context. `model/` and `songlib` are not in that list: they import none of those
+three, but nothing asserts it.
+
+**`songlib.py`, `importer.py` and `settings.py` sit at the package root** rather than
+in folders, and there is a plan to move them into `library/`, `config/` and `app/`.
+Not done — `DESIGN.md` §36.3 records what is outstanding and why the number reserved
+for it (§33) was never written under.
 
 ## Attribution
 

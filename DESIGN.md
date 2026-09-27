@@ -35,7 +35,7 @@ supersedes §2" resolves without ambiguity.
 
 ## The sections
 
-35 sections, in the order they were written. Dates are all 2026-09-26 or
+36 sections, in the order they were written. Dates are all 2026-09-26 or
 -27 and are in the headings, so they are left out here.
 
 | Section | What it records |
@@ -75,6 +75,7 @@ supersedes §2" resolves without ambiguity.
 | §34 | Results: the last placeholder, built |
 | §35 | A button that was not connected, and the check that would have caught it |
 | §36 | Reconciling this file with itself |
+| §37 | Auditing `README.md`, and a test that was one word too narrow |
 
 **§33 is missing**, and §36.3 explains why rather than back-filling it: the number was
 reserved for work that was planned, approved and then overtaken by other work, so no
@@ -4318,3 +4319,104 @@ them.
 - **No audit of `DECISIONS.md` or `AGENTS.md` in this pass.** Both were swept in §28.4
   and both have been edited since; they are covered by `test_docs.py` for counts,
   section references and paths, but not for the whole of their prose.
+
+## §37 — Auditing `README.md`, and a test that was one word too narrow (2026-09-27)
+
+**Tests: 983 in total — 967 excluding `tests/test_docs.py`.** No production code
+changed. The README had a flat contradiction in it, and two false claims beside it, and
+the test written to prevent the first had missed it for several commits.
+
+### 37.1 The README said a bare `pip install` works, in the same file that says it fails
+
+The Quick start section has said, correctly since §31, *"Do not use `pip install -r
+requirements.txt`"*. Sixty lines further down, the constraints section said:
+
+> **`pip install -r requirements.txt` now just works** — checked in a clean venv, where
+> the app installs, imports, and opens a window.
+
+Both statements were in the file at the same time. §31 had corrected the requirement
+file and the setup scripts and updated the Quick start, and missed this paragraph; §34
+swept the README and missed it again. §36 audited this file and missed it **again**,
+which is the part worth recording: a reconciliation pass that reads the sections and
+skims the prose will not catch a sentence that is individually fine and collectively
+false.
+
+### 37.2 The test was one word too narrow, and that is the lesson
+
+`test_the_docs_do_not_say_a_bare_pip_install_is_unsupported` was widened in §31 to
+forbid the *positive* claim, which was the right move. Its pattern was:
+
+```python
+re.search(r"bare `?pip install`?[^.]{0,40}\bworks\b", flat)
+```
+
+It required the literal word **"bare"**. The README's sentence had no "bare" in it —
+it said `` `pip install -r requirements.txt` now just works `` — so the test passed on
+a document that said the opposite of what it was written to prevent.
+
+It is now a check on the **claim** rather than on a phrasing: any document that says a
+pip install of `requirements.txt` succeeds is rejected, however it words it
+(`works`, `installs everything`, `is all you need`). A keyword that has to be present
+is a keyword that can be left out, and a stale claim is always one word away from the
+pattern.
+
+### 37.3 Two other false claims in the Layout section
+
+**"`model/` — pure data, zero I/O."** False, and it has been false since §6 wrote the
+parser. `chart_from_gp5` calls `path.is_file()` and `guitarpro.parse(path)` — it is
+the only thing in the project that knows the Guitar Pro file format. The file now says
+what is true: no Qt, no OpenCV, no sounddevice, no audio, no clock, and it reads the
+tab.
+
+**"Pinned free of Qt, OpenCV and sounddevice by subprocess tests: `context.py`,
+`importer.py`, `settings.py` and all of `model/`."** Wrong in three directions at once.
+The check is on `context`, `importer`, `paths`, `settings`, `session.judge` and
+`session.play_request` — so the claim **omitted** three modules that are checked
+(including `paths.py`) and **included** `model/`, which is not. The names are now
+written as real paths (`session/judge.py`, not `session.judge`) so `test_docs.py`
+verifies each one exists rather than skipping it as an unrecognised extension, and the
+sentence says plainly that `model/` and `songlib` are *not* covered.
+
+### 37.4 What else changed
+
+The intro no longer says "in progress" without saying what is and is not done, and
+names the one thing that needs a human and an instrument: the detector is verified
+against this project's own synthesis, not a guitar (§29.3). The layout tree was
+missing `app.py` and `paths.py` entirely, and described `ui/` as "menu screens are
+built" when all six are.
+
+The two constraints were merged into **one constraint and two consequences**, because
+after §31 the first bullet explained that `pyaudio` is the cause and the second bullet
+explained that `pyaudio` is the cause.
+
+The pending package restructure is named in the Layout section with a pointer to
+§36.3, so a reader who wonders why three modules sit at the package root gets an
+answer rather than a shrug.
+
+### 37.5 The section-citation test needed a gap rule
+
+Citing §33.3 from the README was rejected — §33 does not exist, and §36.3 explains
+why. That is the check working. But a document has to be able to *name* §33 in order
+to tell a reader that the work is outstanding rather than forgotten, so
+`test_every_section_cited_in_the_front_door_documents_exists` now treats a **declared
+gap** as a valid citation, reading the gap list out of the index.
+
+Its first version captured the `§` along with the number, so the set held `"§33"` while
+the headings held `"33"`, and the union matched nothing — a test written to permit the
+citation rejected the only citation that needed permitting.
+
+### Not done — §37
+
+- **`AGENTS.md` has not been swept in this pass.** It carries the same class of claim
+  and the same history of them, and §36 audited only this file and the README.
+- **The README's library transcript is a pasted run.** It was correct when pasted
+  (§28) and the library has not changed since, but nothing checks it: "the library has
+  three tabs" is a fact about the user's disk, not about the repository.
+- **The doc tests check counts, references, paths and specific claims. They do not
+  check prose.** Every false claim found in §28.4, §31, §34 and here was found by
+  reading. Three passes have now missed the same sentence, and the structural answer is
+  not a longer regex.
+- **No test asserts the README's install section and its constraints section agree**,
+  which is the actual shape of the §37.1 bug: two individually plausible statements
+  contradicting each other. The widened claim test catches one of them now, because it
+  catches the *wrong* one regardless of what the other says.
