@@ -157,10 +157,10 @@ def test_save_settings_writes_to_the_configured_path(tmp_path: Path) -> None:
 
 def test_create_loads_existing_settings(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
-    Settings(master_volume=0.11, input_mode=InputMode.CAMERA).save(path)
+    Settings(master_volume=0.11, input_mode=InputMode.MICROPHONE).save(path)
     ctx = AppContext.create(songs_dir=tmp_path, settings_path=path)
     assert ctx.settings.master_volume == 0.11
-    assert ctx.settings.input_mode is InputMode.CAMERA
+    assert ctx.settings.input_mode is InputMode.MICROPHONE
 
 
 def test_create_falls_back_to_defaults_for_a_corrupt_settings_file(tmp_path: Path) -> None:

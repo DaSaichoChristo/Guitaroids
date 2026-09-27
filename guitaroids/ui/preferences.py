@@ -11,8 +11,8 @@ on Save. Two other designs were rejected:
 A draft plus an explicit Save is the boring, predictable one: Cancel really
 discards, and nothing is on disk until the user says so.
 
-The audio and camera device pickers are present but **disabled**, and say why.
-Enumerating devices means opening PortAudio and a camera, which is M2/M3 work and
+The audio and input device pickers are present but **disabled**, and say why.
+Enumerating devices means opening PortAudio, which is M2/M3 work and
 must not happen just to render a settings page. A control that looks live and does
 nothing is worse than one that admits it is not ready.
 """
@@ -166,9 +166,19 @@ class Preferences(ScreenBase):
         layout.addLayout(form)
 
         self._mode = QtWidgets.QComboBox()
-        for member in InputMode:
-            label = "Keyboard" if member is InputMode.KEYBOARD else "Camera (webcam)"
+        # Labelled rather than derived from the enum: the member is MICROPHONE and
+        # what a player needs to be told is what it listens to.
+        for member, label in (
+            (InputMode.KEYBOARD, "Keyboard"),
+            (InputMode.MICROPHONE, "Microphone (listen to your guitar)"),
+        ):
             self._mode.addItem(label, member.value)
+        self._mode.setToolTip(
+            "The microphone hears what you play and works out which note it was, so "
+            "you use your own guitar instead of the six keys.\n\n"
+            "Headphones, or a laptop whose microphone you have muted: the music "
+            "coming out of the speakers would be heard as your playing."
+        )
         self._mode.currentIndexChanged.connect(self._on_mode_changed)
         form.addRow(heading("Mode", kind="dim"), self._mode)
 
@@ -177,11 +187,14 @@ class Preferences(ScreenBase):
         self._latency.setSingleStep(5)
         self._latency.setSuffix(" ms")
         self._latency.setToolTip(
-            "Your camera and tracking lag, subtracted before a note is judged, so "
-            "tracking does not read as a late hit."
+            "How far behind the sound your playing is, subtracted before a note is "
+            "judged, so a correct note does not read as an early one.\n\n"
+            "Start at zero. A microphone adds tens of milliseconds, not the "
+            "hundreds a webcam did, and guessing this too high makes every note "
+            "look late."
         )
         self._latency.valueChanged.connect(self._on_latency_changed)
-        form.addRow(heading("Camera latency", kind="dim"), self._latency)
+        form.addRow(heading("Input latency", kind="dim"), self._latency)
 
         self._count_in = QtWidgets.QComboBox()
         for bars in (0, 1, 2):
@@ -222,7 +235,10 @@ class Preferences(ScreenBase):
         form.setVerticalSpacing(8)
         layout.addLayout(form)
 
-        for title in ("Audio output", "Camera"):
+        # Output picking arrives with the transport's device selection; input
+        # picking arrives with the microphone. Both are listed so the shape of the
+        # screen does not change when they land.
+        for title in ("Audio output", "Microphone input"):
             combo = QtWidgets.QComboBox()
             combo.addItem("system default")
             combo.setEnabled(False)
@@ -232,7 +248,7 @@ class Preferences(ScreenBase):
         # tight vertical stack reports a height for the width it happens to have,
         # and the text then spills over whatever is below it -- which is how the
         # first version of this screen ended up with three overlapping widgets.
-        note = heading("Device picking arrives with the audio and camera layers.", kind="dim")
+        note = heading("Device picking arrives with the audio and input layers.", kind="dim")
         note.setWordWrap(False)
         layout.addWidget(note)
         return box
@@ -310,11 +326,15 @@ class Preferences(ScreenBase):
         self._click_value.setText(f"{self._click.value()}%")
 
     def _sync_enabled(self) -> None:
-        """Latency only means anything in camera mode, so dim it otherwise."""
-        camera = self._draft.input_mode is InputMode.CAMERA
-        self._latency.setEnabled(camera)
+        """Latency only means anything when a microphone is judging, so dim it otherwise.
+
+        With six keys the latency is the keyboard's own, and a number the player
+        invented would only add to it.
+        """
+        non_keyboard = self._draft.input_mode is not InputMode.KEYBOARD
+        self._latency.setEnabled(non_keyboard)
         self._latency.setToolTip(
-            "" if camera else "Only used in camera mode."
+            "" if non_keyboard else "Only used with a microphone."
         )
 
     # --- draft edits ---------------------------------------------------------

@@ -55,10 +55,10 @@ def test_round_trip_preserves_everything(tmp_path: Path) -> None:
     original = Settings(
         master_volume=0.42,
         click_volume=0.77,
-        input_mode=InputMode.CAMERA,
+        input_mode=InputMode.MICROPHONE,
         input_latency_ms=85.0,
         audio_device="USB Audio",
-        camera_device=2,
+        input_device="Focusrite Scarlett",
         count_in_bars=2,
         collapse_chords=False,
         song_offsets_ms={"hotel_california": -120.0},
@@ -167,11 +167,6 @@ def test_count_in_bars_is_clamped() -> None:
     assert Settings.from_dict({"count_in_bars": "two"}).count_in_bars == 1
 
 
-def test_camera_device_is_clamped() -> None:
-    assert Settings.from_dict({"camera_device": -1}).camera_device == 0
-    assert Settings.from_dict({"camera_device": 9999}).camera_device == 64
-
-
 def test_latency_is_clamped_to_a_plausible_range() -> None:
     assert Settings.from_dict({"input_latency_ms": -99999}).input_latency_ms == -500.0
     assert Settings.from_dict({"input_latency_ms": 99999}).input_latency_ms == 2000.0
@@ -194,23 +189,72 @@ def test_one_bad_field_does_not_discard_the_others(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "raw,expected",
     [
-        ("camera", InputMode.CAMERA),
-        ("CAMERA", InputMode.CAMERA),
+        ("microphone", InputMode.MICROPHONE),
+        ("Microphone", InputMode.MICROPHONE),
         ("  Keyboard  ", InputMode.KEYBOARD),
         ("telepathy", InputMode.KEYBOARD),
         (None, InputMode.KEYBOARD),
         (7, InputMode.KEYBOARD),
-        (InputMode.CAMERA, InputMode.CAMERA),
+        (InputMode.MICROPHONE, InputMode.MICROPHONE),
+        # The value a settings file written before §25 will contain.
+        ("camera", InputMode.MICROPHONE),
+        ("  CAMERA ", InputMode.MICROPHONE),
     ],
 )
 def test_input_mode_parses_tolerantly(raw: object, expected: InputMode) -> None:
     assert InputMode.parse(raw) is expected
 
 
+def test_the_old_camera_value_means_the_microphone_not_the_keyboard() -> None:
+    """**The whole reason for a legacy map.**
+
+    A file saying ``"camera"`` recorded a player who had deliberately chosen
+    something other than a keyboard. Dropping the member without mapping it would
+    fall back to KEYBOARD -- silently handing them the one input they did not want,
+    with nothing in the file to explain it later.
+    """
+    assert InputMode.parse("camera") is InputMode.MICROPHONE
+    assert not hasattr(InputMode, "CAMERA"), (
+        "reinstating the member would make 'camera' parse as itself again"
+    )
+
+
 def test_input_mode_survives_a_round_trip() -> None:
-    s = Settings(input_mode=InputMode.CAMERA)
-    assert s.to_dict()["input_mode"] == "camera"
-    assert Settings.from_dict(s.to_dict()).input_mode is InputMode.CAMERA
+    s = Settings(input_mode=InputMode.MICROPHONE)
+    assert s.to_dict()["input_mode"] == "microphone"
+    assert Settings.from_dict(s.to_dict()).input_mode is InputMode.MICROPHONE
+
+
+# --- the camera_device removal (§25) ---------------------------------------------
+
+
+def test_camera_device_is_gone() -> None:
+    """Removed, not deprecated.
+
+    It was an index into a camera enumeration that never existed, and nothing read
+    it -- §21.2's failure mode exactly: saved, clamped, serialised, tested, and
+    doing nothing.
+    """
+    assert not hasattr(Settings, "camera_device")
+    assert not hasattr(Settings(), "camera_device")
+
+
+def test_a_settings_file_from_before_the_change_drops_the_camera_key() -> None:
+    """Migrated rather than read: an unknown key is ignored anyway, but the file
+    should not claim to carry a setting the app no longer has."""
+    loaded = Settings.from_dict({"version": 2, "camera_device": 3})
+    assert not hasattr(loaded, "camera_device")
+    assert loaded.version == SETTINGS_VERSION
+
+
+def test_a_current_file_keeps_its_input_device() -> None:
+    """A name, not an index, because a machine with a guitar interface, a laptop mic
+    and a monitor loopback has three plausible answers and "the second one" is not a
+    setting anybody can check."""
+    loaded = Settings.from_dict({"version": 3, "input_device": "soundcore space"})
+    assert loaded.input_device == "soundcore space"
+    assert Settings.from_dict({"version": 3, "input_device": None}).input_device is None
+    assert Settings.from_dict({"version": 3, "input_device": 7}).input_device is None
 
 
 # --- audio device ------------------------------------------------------------

@@ -62,10 +62,10 @@ def test_loading_the_form_does_not_alter_the_draft(shell, context) -> None:
     fire a dozen valueChanged handlers and rewrite the draft with values read out
     of half-built widgets.
     """
-    context.settings = Settings(master_volume=0.8, input_mode=InputMode.CAMERA)
+    context.settings = Settings(master_volume=0.8, input_mode=InputMode.MICROPHONE)
     shell.navigate(Screen.PREFERENCES)
     assert shell.current_screen._draft.master_volume == 0.8
-    assert shell.current_screen._draft.input_mode is InputMode.CAMERA
+    assert shell.current_screen._draft.input_mode is InputMode.MICROPHONE
 
 
 # --- the draft ---------------------------------------------------------------
@@ -215,14 +215,14 @@ def test_latency_is_disabled_in_keyboard_mode(screen: Preferences) -> None:
     assert not screen._latency.isEnabled()
 
 
-def test_latency_is_enabled_in_camera_mode(screen: Preferences) -> None:
-    screen._mode.setCurrentIndex(screen._mode.findData(InputMode.CAMERA.value))
+def test_latency_is_enabled_with_a_microphone(screen: Preferences) -> None:
+    screen._mode.setCurrentIndex(screen._mode.findData(InputMode.MICROPHONE.value))
     assert screen._latency.isEnabled()
-    assert screen._draft.input_mode is InputMode.CAMERA
+    assert screen._draft.input_mode is InputMode.MICROPHONE
 
 
 def test_choosing_keyboard_disables_latency_again(screen: Preferences) -> None:
-    screen._mode.setCurrentIndex(screen._mode.findData(InputMode.CAMERA.value))
+    screen._mode.setCurrentIndex(screen._mode.findData(InputMode.MICROPHONE.value))
     screen._mode.setCurrentIndex(screen._mode.findData(InputMode.KEYBOARD.value))
     assert not screen._latency.isEnabled()
 
@@ -252,7 +252,7 @@ def _devices_group(screen: Preferences):
 def test_device_pickers_are_disabled(screen: Preferences) -> None:
     """A control that looks live and does nothing is worse than one that admits it.
 
-    Enumerating devices means opening PortAudio and a camera, which is M2/M3 work
+    Enumerating devices means opening PortAudio, which is M2/M3 work
     and must not happen to render a settings page.
     """
     from PySide6 import QtWidgets

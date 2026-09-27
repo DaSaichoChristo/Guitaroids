@@ -1,6 +1,6 @@
 """User settings: what the preferences screen edits.
 
-Pure by design -- no Qt, no audio device, no camera. That keeps it testable in
+Pure by design -- no Qt, no sound device, no audio input. That keeps it testable in
 milliseconds with no display, which matters because it is the first thing three
 screens depend on.
 
@@ -33,11 +33,20 @@ from pathlib import Path
 #: version 1 have the key, and almost all of them have the *old default* in it, so
 #: the key is dropped on load and the new default applies. A file that says
 #: ``false`` already agrees with the new default, so nothing is lost by dropping it.
-SETTINGS_VERSION = 2
+#:
+#: 3 -- ``camera_device`` is gone and ``input_mode: "camera"`` means the microphone
+#: (§25). The key is dropped on load; ``InputMode.parse`` maps the old value. Without
+#: this, a file that said ``"camera"`` would fall back to KEYBOARD -- silently
+#: handing a player who had deliberately chosen non-keyboard input the one input
+#: they did not want, with nothing to say why.
+SETTINGS_VERSION = 3
 
 #: Files below this version had their ``collapse_chords`` key dropped on load, so
 #: that the flip in version 2 reaches an existing installation.
 _MIGRATE_COLLAPSE_FROM = 2
+
+#: ``camera_device`` is dropped from files older than this.
+_MIGRATE_CAMERA_DEVICE_FROM = 3
 
 #: Practice-tempo bounds. The floor is where the beat line stops being readable as a
 #: moving thing; the ceiling is far above any real tab, and a song's *own* written
@@ -46,11 +55,24 @@ MIN_BPM = 20.0
 MAX_BPM = 400.0
 
 
+#: Values from earlier versions, mapped to what they now mean (§25). Module level
+#: rather than a class attribute, because a dict in an ``Enum`` body becomes a
+#: *member*: ``InputMode.LEGACY`` would hand back an InputMode, and ``.get`` on it
+#: would raise. The same trap as ``_SCREEN_LABELS`` in ui/screens.py.
+_INPUT_MODE_LEGACY = {"camera": "microphone"}
+
+
 class InputMode(Enum):
-    """How the player controls the highway."""
+    """How the player tells the game what they played.
+
+    ``MICROPHONE`` replaced ``CAMERA`` in §25. The value string ``"camera"`` is
+    still accepted by :meth:`parse`, because a settings file written before the
+    change recorded a player who wanted *something other than a keyboard*, and
+    reading that as "still not the keyboard" is what they meant.
+    """
 
     KEYBOARD = "keyboard"
-    CAMERA = "camera"
+    MICROPHONE = "microphone"
 
     @classmethod
     def parse(cls, raw: object, default: "InputMode" = None) -> "InputMode":
@@ -59,8 +81,10 @@ class InputMode(Enum):
         if isinstance(raw, cls):
             return raw
         if isinstance(raw, str):
+            text = raw.strip().lower()
+            text = _INPUT_MODE_LEGACY.get(text, text)
             for member in cls:
-                if member.value == raw.strip().lower():
+                if member.value == text:
                     return member
         return fallback
 
@@ -115,16 +139,36 @@ class Settings:
     """0.0-1.0, the metronome, relative to the master volume."""
 
     input_mode: InputMode = InputMode.KEYBOARD
-    """Keyboard by default, because the keyboard path must always work (§4.1)."""
+    """Keyboard by default, because the keyboard path must always work (§4.1).
+
+    A demo on an unfamiliar laptop may have no audio input at all, which is the same
+    failure as having no camera and gets the same answer.
+    """
 
     input_latency_ms: float = 0.0
-    """The user's measured camera+inference lag, subtracted before judging (§4.1)."""
+    """The player's measured input lag, subtracted before judging (§4.1).
+
+    Named and ranged for whichever device is in use, because §25 changed the device:
+    a webcam was 30-100ms of unfixable buffering, and a microphone block is 23ms and
+    chosen by us. The range is asymmetric on purpose -- +2s allows a Bluetooth
+    interface being genuinely bad, and -500ms allows for the correction being
+    measured in the other direction.
+    """
 
     audio_device: str | None = None
     """``None`` means the system default. Matched as a substring of device names."""
 
-    camera_device: int = 0
-    """Index into the device enumeration. 0 is the usual default."""
+    input_device: str | None = None
+    """Which audio *input* to listen on, as a substring of a device name.
+
+    Replaces ``camera_device``, which was an integer index into a camera enumeration
+    that never existed. Removed rather than left as a dead integer (§21.2's failure
+    mode: a setting that is saved, clamped, serialised and read by nothing).
+
+    A string rather than an index because a machine with a guitar interface, a laptop
+    microphone and a monitor loopback has three plausible answers, and "the second
+    one" is not a setting anybody can check.
+    """
 
     count_in_bars: int = 1
     """0-2 bars of clicks before the music. Many tracks open with their own."""
@@ -188,6 +232,8 @@ class Settings:
         file_version = raw.get("version")
         if not isinstance(file_version, int) or file_version < _MIGRATE_COLLAPSE_FROM:
             raw = {k: v for k, v in raw.items() if k != "collapse_chords"}
+        if not isinstance(file_version, int) or file_version < _MIGRATE_CAMERA_DEVICE_FROM:
+            raw = {k: v for k, v in raw.items() if k != "camera_device"}
 
         values: dict = {}
         for spec in fields(cls):
@@ -202,8 +248,11 @@ class Settings:
                 values[name] = _clamp_float(given, 0.0, 1.0, getattr(defaults, name))
             elif name == "input_latency_ms":
                 values[name] = _clamp_float(given, -500.0, 2000.0, 0.0)
-            elif name == "camera_device":
-                values[name] = _clamp_int(given, 0, 64, defaults.camera_device)
+            elif name == "input_device":
+                if given is None or isinstance(given, str):
+                    values[name] = given or None
+                else:
+                    values[name] = None
             elif name == "count_in_bars":
                 values[name] = _clamp_int(given, 0, 2, defaults.count_in_bars)
             elif name == "collapse_chords":
