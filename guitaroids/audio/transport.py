@@ -143,6 +143,28 @@ def fit(samples: Samples, frames: int) -> Samples:
     return out
 
 
+def apply_volume(samples: Samples, volume: float) -> Samples:
+    """Scale a finished mix by ``volume``, in place where possible.
+
+    **0.0 to 1.0, and that ceiling is the point.** `render_chart` normalises every
+    render to a 0.95 peak (§22), so 1.0 is already the loudest correct output and any
+    slider above it can only clip. A caller that wants more headroom wants a quieter
+    *source*, not a louder master, so this raises rather than quietly over-driving.
+
+    Applied once, to a buffer that is already built, which is why the real-time
+    callback can stay a memcpy (§26.3). A volume of 0.0 returns real silence and the
+    transport still runs: the clock is the device's, and a song you cannot hear is
+    still a song whose position advances.
+    """
+    if not 0.0 <= volume <= 1.0:
+        raise TransportError(f"volume must be 0.0-1.0, got {volume!r}")
+    if volume == 1.0:
+        return samples
+    if volume == 0.0:
+        return np.zeros_like(samples)
+    return (samples * np.float32(volume)).astype(np.float32, copy=False)
+
+
 def device_report() -> str:
     """One line per device, for a script or a bug report.
 
@@ -179,15 +201,21 @@ class Transport:
         samples: Samples,
         *,
         sample_rate: int,
+        volume: float,
         song_start: float = 0.0,
         offset: float = 0.0,
-        device: str | None = None,
+        device: str | None,
     ) -> None:
         if samples.dtype != np.float32:
             raise TransportError(f"expected float32 audio, got {samples.dtype}")
         if samples.ndim != 2 or samples.shape[1] != 2:
             raise TransportError(f"expected (n, 2) stereo audio, got {samples.shape}")
-        self._buffer = interleaved(samples)
+        self._volume = volume
+        #: The buffer as played, already scaled. Scaled ONCE here rather than in the
+        #: callback: the gain belongs after `render_chart` has normalised the peak to
+        #: 0.95 (§22), so it cannot be undone downstream, and a per-callback multiply
+        #: would put arithmetic in the real-time path for no benefit.
+        self._buffer = interleaved(apply_volume(samples, volume))
         self._sample_rate = sample_rate
         self._song_start = song_start
         self._offset = offset
@@ -208,6 +236,17 @@ class Transport:
     @property
     def sample_rate(self) -> int:
         return self._sample_rate
+
+    @property
+    def volume(self) -> float:
+        """The gain applied to the buffer at construction. Reported, not adjustable.
+
+        There is no setter on purpose: the buffer is scaled once, before the stream
+        opens, so changing your mind means opening a new transport. A live volume
+        control would put a multiply in the callback, which §26.3 has good reason to
+        avoid.
+        """
+        return self._volume
 
     @property
     def duration(self) -> float:

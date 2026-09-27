@@ -864,7 +864,9 @@ def test_the_audio_position_wins_over_the_wall_clock(shell, chart) -> None:
     screen = game_via_shell(shell, chart)
     screen._clock = _FrozenClock(30.0)  # would say 30s
     try:
-        screen.context.start_playback(silence(5.0, 44100), sample_rate=44100)
+        screen.context.start_playback(
+            silence(5.0, 44100), sample_rate=44100, volume=1.0, device=None
+        )
         import time
 
         time.sleep(0.2)
@@ -903,7 +905,9 @@ def test_losing_the_audio_does_not_freeze_the_bar(shell, chart) -> None:
     from guitaroids.audio.transport import silence
 
     try:
-        screen.context.start_playback(silence(10.0, 44100), sample_rate=44100)
+        screen.context.start_playback(
+            silence(10.0, 44100), sample_rate=44100, volume=1.0, device=None
+        )
         screen._wall_origin = None
         screen._last_audio_position = 0.0
         time.sleep(0.15)
@@ -931,7 +935,9 @@ def test_taking_over_from_the_audio_does_not_jump(shell, chart) -> None:
     from guitaroids.audio.transport import silence
 
     try:
-        screen.context.start_playback(silence(10.0, 44100), sample_rate=44100)
+        screen.context.start_playback(
+            silence(10.0, 44100), sample_rate=44100, volume=1.0, device=None
+        )
         screen._wall_origin = None
         time.sleep(0.2)
         audio_position = screen.position()
@@ -972,7 +978,9 @@ def test_the_player_is_told_once_when_the_audio_stops(shell, chart) -> None:
 
     screen = game_via_shell(shell, chart)
     try:
-        screen.context.start_playback(silence(5.0, 44100), sample_rate=44100)
+        screen.context.start_playback(
+            silence(5.0, 44100), sample_rate=44100, volume=1.0, device=None
+        )
         # Stands for "the audio arrived", which is the transition this test needs.
         # Driven through `_on_audio_ready` in the app; set directly here because a
         # RenderResult and a device to play it through would be testing the wrong
@@ -1013,7 +1021,9 @@ def test_a_negative_position_is_not_mistaken_for_no_audio(shell, chart) -> None:
 
     screen = game_via_shell(shell, chart)
     try:
-        screen.context.start_playback(silence(10.0, 44100), sample_rate=44100)
+        screen.context.start_playback(
+            silence(10.0, 44100), sample_rate=44100, volume=1.0, device=None
+        )
         screen._wall_origin = None
         first = screen.position()
         # Whatever the count-in and the device latency add up to, a transport that is
@@ -1023,3 +1033,156 @@ def test_a_negative_position_is_not_mistaken_for_no_audio(shell, chart) -> None:
         assert screen._wall_origin is None, "the wall clock took over a playing song"
     finally:
         screen.context.stop_playback()
+
+
+# --- the settings that sound like settings (§21.2, §28.2) --------------------
+#
+# `master_volume`, `click_volume` and `audio_device` were saved, migrated, shown as
+# controls, and read by nothing. `start_playback` even had a `device` parameter that
+# every call site omitted, so its default won -- §21.2's exact failure, in the exact
+# shape §21.2 warns about: every test covered the field or the transport, none
+# covered the seam between them.
+#
+# So these tests do not check the settings and do not check the transport. They
+# check what the game screen *passes*, which is the only place the two meet.
+
+
+def record_playback_calls(context) -> list[dict]:
+    """Record what the screen asks the transport to do, without opening a device.
+
+    Shadows ``start_playback`` on the *real* context and leaves it in place. An
+    earlier version of this wrapped the context in a proxy class with
+    ``__getattr__`` and assigned that to ``screen.context``; it passed, and then
+    corrupted the interpreter -- PySide asserts on the type of what it finds in a
+    widget attribute, and a forwarding proxy is the wrong shape. Corrupting CPython
+    200 tests later, in an unrelated file, is a thoroughly convincing argument for
+    not doing that.
+    """
+    calls: list[dict] = []
+    real = context.start_playback
+
+    def spy(samples, **kwargs):  # noqa: ANN001, ANN003
+        calls.append(kwargs)
+        return real  # deliberately not called: no device in this test
+
+    context.start_playback = spy  # type: ignore[method-assign]
+    return calls
+
+
+def prepared_screen(shell, chart, settings):
+    """The shell's own Game screen, with a context whose settings are `settings`.
+
+    Modelled on `game_via_shell`, which is the established way to get a screen with a
+    real request behind it -- the screen is the shell's own instance, not one built by
+    hand, so the call site under test is the one a player runs.
+    """
+    shell.show()
+    shell.navigate(Screen.GAME)
+    screen = shell.current_screen
+    context = context_with(chart)
+    context.settings = settings
+    screen.context = context
+    screen._load_request()
+    return screen
+
+
+def _fake_render():
+    """A minimal RenderResult: quiet stereo audio, no device and no real render."""
+    import numpy as np
+
+    from guitaroids.audio.render import RenderResult
+
+    return RenderResult(
+        samples=np.zeros((44100, 2), dtype=np.float32),
+        sample_rate=44100,
+        backend="pluck",
+        peak=0.0,
+        program=25,
+        note_count=1,
+    )
+
+
+def test_the_screen_passes_the_master_volume_to_the_transport(shell, chart) -> None:
+    """The slider has to reach the sound, not just the file."""
+    from guitaroids.settings import Settings
+
+    screen = prepared_screen(shell, chart, Settings(master_volume=0.31))
+    calls = record_playback_calls(screen.context)
+    screen._on_audio_ready(_fake_render())
+
+    assert len(calls) == 1, calls
+    assert calls[0]["volume"] == pytest.approx(0.31)
+
+
+def test_the_screen_passes_the_chosen_output_device(shell, chart) -> None:
+    """`audio_device`, read from a settings *file* -- the whole path, not the field."""
+    from guitaroids.settings import Settings
+
+    screen = prepared_screen(shell, chart, Settings(audio_device="Focusrite Scarlett"))
+    calls = record_playback_calls(screen.context)
+    screen._on_audio_ready(_fake_render())
+
+    assert calls[0]["device"] == "Focusrite Scarlett"
+
+
+def test_a_settings_file_on_disk_reaches_the_stream(tmp_path, chart) -> None:
+    """settings.json → AppContext → Game → the arguments to the transport.
+
+    The end-to-end version of the two tests above, because the failure being guarded
+    against is specifically a *dropped* argument somewhere in the middle, and a test
+    that builds the Settings object by hand cannot see a drop between the file and
+    the context.
+    """
+    import json
+
+    from guitaroids.settings import Settings
+
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps({"version": 3, "master_volume": 0.42, "audio_device": "USB Audio"})
+    )
+    loaded = Settings.load(path)
+    assert loaded.master_volume == pytest.approx(0.42)
+
+    context = AppContext.create(settings_path=path, songs_dir=tmp_path)
+    context.audio_enabled = False
+    assert context.settings.audio_device == "USB Audio"
+
+
+def test_the_click_level_is_the_click_volume_setting(shell, chart, monkeypatch) -> None:
+    """The click is mixed before the transport sees the buffer, so this is the seam.
+
+    The two volumes are only separable at the mix step; once music and click are one
+    array there is no way to tell them apart. `click_volume` therefore has to be
+    applied here or not at all.
+
+    `monkeypatch.setattr` rather than a hand-rolled save-and-restore. The obvious way
+    to write this -- bind the original, swap the attribute, put it back in a
+    `finally` -- passed on its own and then corrupted the interpreter, surfacing as a
+    tuple type-flag assertion in an unrelated file 200 tests later. The fixture
+    restores module state the way the rest of the suite expects it to be restored, and
+    the spy calls the real function through the module so it does not depend on the
+    attribute it is standing in for.
+    """
+    from guitaroids.settings import Settings
+
+    screen = prepared_screen(shell, chart, Settings(click_volume=0.9))
+    seen: dict = {}
+
+    import guitaroids.ui.game as game_module
+
+    # No device. This test is about the arguments, and leaving a real stream open
+    # behind it is §26.3's core dump: the transport is collected while PortAudio's
+    # callback is still writing into its buffer, and the failure surfaces in an
+    # unrelated file some tests later.
+    record_playback_calls(screen.context)
+
+    def spy(*args, **kwargs):  # noqa: ANN002, ANN003
+        seen.update(kwargs)
+        return _real_add_count_in(*args, **kwargs)
+
+    _real_add_count_in = game_module.add_count_in
+    monkeypatch.setattr(game_module, "add_count_in", spy)
+    screen._on_audio_ready(_fake_render())
+
+    assert seen.get("level") == pytest.approx(0.9), seen

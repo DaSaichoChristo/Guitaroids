@@ -249,27 +249,56 @@ def _devices_group(screen: Preferences):
     return boxes[0]
 
 
-def test_device_pickers_are_disabled(screen: Preferences) -> None:
-    """A control that looks live and does nothing is worse than one that admits it.
+def test_the_output_picker_is_live_and_lists_the_system_default(screen: Preferences) -> None:
+    """Output picking is no longer a placeholder, so it must not be disabled.
 
-    Enumerating devices means opening PortAudio, which is M2/M3 work
-    and must not happen to render a settings page.
+    It used to be a disabled combo reading "system default" with a note saying picking
+    "arrives with the audio layer". The audio layer arrived in §23 and the note never
+    got the memo; the picker is now wired to `Settings.audio_device` and through it to
+    the stream (DESIGN.md §28.2). A disabled control is the failure mode this file
+    was written to prevent, so the test now points the other way.
+    """
+    from PySide6 import QtWidgets
+
+    output = screen.findChild(QtWidgets.QComboBox, "deviceCombo")
+    assert output is not None, "the output picker needs a name so tests can find it"
+    assert output.isEnabled(), "output picking works now and must be usable"
+    assert output.currentText() == "system default", (
+        "with nothing stored, the system default is what the screen shows"
+    )
+    assert output.count() >= 1
+
+
+def test_the_microphone_picker_still_admits_it_is_not_ready(screen: Preferences) -> None:
+    """The input side is unchanged: disabled, and honest about why.
+
+    `Settings.input_device` is read by no code, because there is no microphone path to
+    read it for (§24). So unlike the output picker, this one stays disabled -- and
+    "not yet" is more honest than "system default", which would read as a choice the
+    app is honouring when it is not honouring anything.
     """
     from PySide6 import QtWidgets
 
     combos = _devices_group(screen).findChildren(QtWidgets.QComboBox)
     assert len(combos) == 2, "one picker per device kind"
-    for combo in combos:
-        assert not combo.isEnabled()
-        assert combo.currentText() == "system default"
+    microphone = [c for c in combos if c is not screen.findChild(QtWidgets.QComboBox, "deviceCombo")]
+    assert len(microphone) == 1
+    assert not microphone[0].isEnabled()
+    assert microphone[0].currentText() == "not yet"
 
 
-def test_the_device_pickers_say_they_are_not_ready(screen: Preferences) -> None:
-    """Silently disabled would read as "nothing to choose here" rather than "later"."""
+def test_the_devices_group_does_not_claim_to_be_waiting_for_the_audio_layer(
+    screen: Preferences,
+) -> None:
+    """The stale note is pinned, because it is exactly the kind of claim that rots.
+
+    It said picking "arrives with the audio and input layers" and was still there two
+    sections after the audio layer landed. Absence test, against the rendered text.
+    """
     from PySide6 import QtWidgets
 
     texts = [label.text() for label in _devices_group(screen).findChildren(QtWidgets.QLabel)]
-    assert any("arrives with" in text for text in texts), texts
+    assert not any("arrives with" in text for text in texts), texts
 
 
 def test_the_screen_scrolls_rather_than_compressing(screen: Preferences) -> None:

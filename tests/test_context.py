@@ -412,7 +412,7 @@ def test_starting_playback_opens_a_stream_and_gives_a_position() -> None:
 
     ctx = AppContext()
     try:
-        transport = ctx.start_playback(silence(0.4, 44100), sample_rate=44100)
+        transport = ctx.start_playback(silence(0.4, 44100), sample_rate=44100, volume=1.0, device=None)
         assert ctx.playback is transport
         assert ctx.is_playing is True
         # Count-in of 0.25s, so the position starts negative: still in the lead-in.
@@ -430,8 +430,8 @@ def test_starting_a_second_song_stops_the_first() -> None:
 
     ctx = AppContext()
     try:
-        first = ctx.start_playback(silence(0.4, 44100), sample_rate=44100)
-        second = ctx.start_playback(silence(0.4, 44100), sample_rate=44100)
+        first = ctx.start_playback(silence(0.4, 44100), sample_rate=44100, volume=1.0, device=None)
+        second = ctx.start_playback(silence(0.4, 44100), sample_rate=44100, volume=1.0, device=None)
         assert ctx.playback is second
         assert first.is_running is False, "the first stream was left open"
     finally:
@@ -445,5 +445,7 @@ def test_a_failed_stream_does_not_leave_a_handle_behind() -> None:
 
     ctx = AppContext()
     with pytest.raises(Exception):
-        ctx.start_playback(np.zeros((10, 2), dtype=np.float64), sample_rate=44100)
+        ctx.start_playback(
+        np.zeros((10, 2), dtype=np.float64), sample_rate=44100, volume=1.0, device=None
+    )
     assert ctx.playback is None

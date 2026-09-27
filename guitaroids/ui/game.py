@@ -305,17 +305,25 @@ class Game(ScreenBase):
         if self._chart is None:
             return
         count_in = int(self.context.settings.count_in_bars)
+        settings = self.context.settings
         mixed, _clicks = add_count_in(
             result.samples,
             bpm=float(self._chart.tempo),
             count_in_bars=count_in,
             beats_per_bar=beats_per_bar(self._chart),
             sample_rate=result.sample_rate,
+            # The click is mixed here, before the transport sees the buffer, which is
+            # the only moment the two volumes are still separable. `click_volume` is
+            # documented as the metronome relative to the master, so it replaces the
+            # 0.6 this would otherwise default to.
+            level=float(settings.click_volume),
         )
         try:
             self.context.start_playback(
                 mixed,
                 sample_rate=result.sample_rate,
+                volume=float(settings.master_volume),
+                device=settings.audio_device,
                 song_start=self._count_in_seconds(),
                 offset=self._offset,
             )

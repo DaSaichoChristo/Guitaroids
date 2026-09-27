@@ -235,23 +235,74 @@ class Preferences(ScreenBase):
         form.setVerticalSpacing(8)
         layout.addLayout(form)
 
-        # Output picking arrives with the transport's device selection; input
-        # picking arrives with the microphone. Both are listed so the shape of the
-        # screen does not change when they land.
-        for title in ("Audio output", "Microphone input"):
-            combo = QtWidgets.QComboBox()
-            combo.addItem("system default")
-            combo.setEnabled(False)
-            form.addRow(heading(title, kind="dim"), combo)
+        # Output picking is live and reaches the stream: `Transport` and
+        # `start_playback` both take `device`, and the game screen passes
+        # `Settings.audio_device` (DESIGN.md §28.2). It used to be a disabled combo
+        # saying picking "arrives with the audio layer", which arrived in §23.
+        self._output = QtWidgets.QComboBox()
+        self._output.setObjectName("deviceCombo")
+        self._output.currentIndexChanged.connect(self._on_output_changed)
+        form.addRow(heading("Audio output", kind="dim"), self._output)
+
+        # Input picking still has nothing to pick. `Settings.input_device` is read by
+        # no code at all, because there is no microphone path to read it for (§24) --
+        # so this stays disabled and says so, rather than offering a choice that
+        # cannot be honoured.
+        self._input = QtWidgets.QComboBox()
+        self._input.addItem("not yet")
+        self._input.setEnabled(False)
+        form.addRow(heading("Microphone input", kind="dim"), self._input)
 
         # Short enough not to wrap at this column width. A word-wrapped QLabel in a
         # tight vertical stack reports a height for the width it happens to have,
         # and the text then spills over whatever is below it -- which is how the
         # first version of this screen ended up with three overlapping widgets.
-        note = heading("Device picking arrives with the audio and input layers.", kind="dim")
+        note = heading(
+            "Choosing an output affects the game only; it is read when a song starts.",
+            kind="dim",
+        )
         note.setWordWrap(False)
         layout.addWidget(note)
         return box
+
+    def _output_choices(self) -> tuple[list[str | None], list[str]]:
+        """``(values, labels)`` for the output combo: system default, then each device.
+
+        ``sounddevice`` is imported inside the function, exactly as
+        `transport.device_report` does it, so that merely building this screen never
+        opens PortAudio. A machine with no audio at all gets the single "system
+        default" row rather than an empty box, which is what the real failure looks
+        like anyway.
+        """
+        values: list[str | None] = [None]
+        labels: list[str] = ["system default"]
+        try:
+            import sounddevice as sd
+        except Exception:  # noqa: BLE001 - no PortAudio means no list, not a crash
+            return values, labels
+        try:
+            devices = sd.query_devices()
+        except Exception:  # noqa: BLE001 - a broken host still gets a usable screen
+            return values, labels
+        for device in devices:
+            if device["max_output_channels"] < 1:
+                continue
+            values.append(device["name"])
+            labels.append(f"{device['name']}  ({device['max_output_channels']}ch)")
+        return values, labels
+
+    def _on_output_changed(self, _index: int) -> None:
+        """Writes to the **draft**, like every other control here.
+
+        `_save` commits with `replace(self._draft)`, so writing to
+        `context.settings` directly would change the setting behind a Cancel button
+        -- and the two volume sliders would then be the only controls on this screen
+        that ignore it.
+        """
+        values, _labels = self._output_choices()
+        index = self._output.currentIndex()
+        if 0 <= index < len(values):
+            self._draft.audio_device = values[index]
 
     def _build_button_bar(self) -> QtWidgets.QHBoxLayout:
         """The pinned action row, centred without a fixed width.
@@ -298,6 +349,7 @@ class Preferences(ScreenBase):
             self._latency,
             self._count_in,
             self._collapse,
+            self._output,
         ):
             widget.blockSignals(True)
         try:
@@ -307,6 +359,7 @@ class Preferences(ScreenBase):
             self._latency.setValue(round(settings.input_latency_ms))
             self._count_in.setCurrentIndex(max(0, self._count_in.findData(settings.count_in_bars)))
             self._collapse.setChecked(settings.collapse_chords)
+            self._load_output(settings.audio_device)
         finally:
             for widget in (
                 self._master,
@@ -315,11 +368,36 @@ class Preferences(ScreenBase):
                 self._latency,
                 self._count_in,
                 self._collapse,
+                self._output,
             ):
                 widget.blockSignals(False)
 
         self._refresh_value_labels()
         self._sync_enabled()
+
+    def _load_output(self, chosen: str | None) -> None:
+        """Point the combo at the stored device, adding the row if it is not listed.
+
+        A device that has been unplugged since the setting was written is still a
+        legitimate stored value, and `Transport` will fail loudly on it if it is
+        really gone. Dropping the name from the combo would turn that honest failure
+        into a silent fall back to the system default, which is the same class of bug
+        as a setting that nothing reads.
+
+        With no device stored, the combo shows the system default and the draft keeps
+        `None` -- so merely opening and saving this screen cannot invent a device.
+        """
+        values, labels = self._output_choices()
+        self._output.clear()
+        self._output.addItems(labels)
+        if chosen is None:
+            self._output.setCurrentIndex(0)
+            return
+        if chosen in values:
+            self._output.setCurrentIndex(values.index(chosen))
+            return
+        self._output.addItem(f"{chosen}  (not connected)")
+        self._output.setCurrentIndex(self._output.count() - 1)
 
     def _refresh_value_labels(self) -> None:
         self._master_value.setText(f"{self._master.value()}%")

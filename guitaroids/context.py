@@ -156,9 +156,10 @@ class AppContext:
         samples,
         *,
         sample_rate: int,
+        volume: float,
+        device: str | None,
         song_start: float = 0.0,
         offset: float = 0.0,
-        device: str | None = None,
     ) -> "Transport":
         """Open an output stream for ``samples`` and start it. Returns the transport.
 
@@ -170,6 +171,13 @@ class AppContext:
         Any stream already open is closed first, so starting a second song cannot
         leave the first one playing underneath it -- which is not a subtle bug, it
         is two songs at once.
+
+        ``volume`` and ``device`` are **required and have no default**, both of them
+        read from `Settings` by the caller. That is §21.2's prescription applied to a
+        parameter: `device` existed here, defaulted to None, and was omitted at every
+        call site, so the default silently won and `Settings.audio_device` did nothing
+        while looking exactly like a setting that worked. A required argument cannot
+        be forgotten quietly.
         """
         from .audio.transport import Transport
 
@@ -177,6 +185,7 @@ class AppContext:
         transport = Transport(
             samples,
             sample_rate=sample_rate,
+            volume=volume,
             song_start=song_start,
             offset=offset,
             device=device,

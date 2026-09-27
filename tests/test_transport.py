@@ -14,12 +14,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from guitaroids.context import AppContext
 from guitaroids.audio.transport import (
     BLOCK,
     STALL_SECONDS,
     Position,
     Transport,
     TransportError,
+    apply_volume,
     device_report,
     fit,
     interleaved,
@@ -32,6 +34,19 @@ RATE = 44100
 
 def stereo(samples: int = 1000) -> np.ndarray:
     return np.zeros((samples, 2), dtype=np.float32)
+
+
+def transport_for(samples: np.ndarray, **kwargs) -> Transport:
+    """A Transport with the two required arguments every call site used to forget.
+
+    `volume` and `device` are required and have no default, so that a call site
+    cannot quietly inherit one (DESIGN.md §28.2, after §21.2). Every test here is
+    about the clock and does not care about either, so the helper supplies full
+    volume and the system default -- and the tests that *do* care pass their own.
+    """
+    kwargs.setdefault("volume", 1.0)
+    kwargs.setdefault("device", None)
+    return Transport(samples, sample_rate=kwargs.pop("sample_rate", RATE), **kwargs)
 
 
 # --- the formula, which is the whole design --------------------------------------
@@ -157,7 +172,7 @@ def test_silence_is_stereo_float32() -> None:
 def test_a_transport_with_no_stream_has_no_position() -> None:
     """``-1.0``, not ``0.0``: "not playing" and "at the first note" are different
     states, and for the real tab the first note is three seconds in."""
-    transport = Transport(stereo(), sample_rate=RATE)
+    transport = transport_for(stereo())
     assert transport.position() == -1.0
     assert transport.elapsed() == 0.0
     assert transport.latency() == 0.0
@@ -167,29 +182,29 @@ def test_a_transport_with_no_stream_has_no_position() -> None:
 def test_a_transport_rejects_the_wrong_audio() -> None:
     """Loudly, at construction, rather than at 0.2 seconds into a song."""
     with pytest.raises(TransportError, match="float32"):
-        Transport(np.zeros((10, 2), dtype=np.float64), sample_rate=RATE)
+        transport_for(np.zeros((10, 2), dtype=np.float64))
     with pytest.raises(TransportError, match=r"\(n, 2\)"):
-        Transport(np.zeros(10, dtype=np.float32), sample_rate=RATE)
+        transport_for(np.zeros(10, dtype=np.float32))
     with pytest.raises(TransportError, match=r"\(n, 2\)"):
-        Transport(np.zeros((10, 3), dtype=np.float32), sample_rate=RATE)
+        transport_for(np.zeros((10, 3), dtype=np.float32))
 
 
 def test_the_duration_accounts_for_the_count_in() -> None:
     """The buffer is longer than the song, and the extra is the count-in."""
     song = stereo(RATE)
-    transport = Transport(song, sample_rate=RATE, song_start=3.0)
+    transport = transport_for(song, song_start=3.0)
     assert transport.duration == pytest.approx(1.0)
     assert transport.song_start == 3.0
 
 
 def test_stopping_twice_is_safe() -> None:
-    transport = Transport(stereo(), sample_rate=RATE)
+    transport = transport_for(stereo())
     transport.stop()
     transport.stop()
 
 
 def test_waiting_with_no_stream_is_false_not_a_hang() -> None:
-    assert Transport(stereo(), sample_rate=RATE).wait(timeout=0.01) is False
+    assert transport_for(stereo()).wait(timeout=0.01) is False
 
 
 def test_the_block_size_is_under_a_rhythm_game_frame() -> None:
@@ -242,9 +257,8 @@ def test_a_short_buffer_plays_and_the_clock_advances() -> None:
     from guitaroids.audio.click import build_count_in
 
     clicks = build_count_in(bpm=240, count_in_bars=1, sample_rate=RATE)
-    transport = Transport(
+    transport = transport_for(
         (clicks.samples * np.float32(0.2)).astype(np.float32),
-        sample_rate=RATE,
         song_start=0.25,
     )
     try:
@@ -268,7 +282,7 @@ def test_the_origin_is_read_from_the_device_clock() -> None:
     a t0 of 0 would give a position of billions of seconds rather than an error --
     the single easiest way to get §1.5 wrong, and the reason this is a test.
     """
-    transport = Transport(silence(0.5, RATE), sample_rate=RATE)
+    transport = transport_for(silence(0.5, RATE))
     try:
         transport.play()
         assert transport._t0 is not None
@@ -294,7 +308,7 @@ def test_play_returns_immediately_for_a_long_buffer() -> None:
     buffer 4.97s. On a six-minute song that is a six-minute freeze, and on the GUI
     thread it is a frozen window with no navigation for the length of the track.
     """
-    transport = Transport(silence(30.0, RATE), sample_rate=RATE)
+    transport = transport_for(silence(30.0, RATE))
     try:
         import time
 
@@ -320,7 +334,7 @@ def test_stopping_while_the_feeder_is_mid_write_does_not_abort() -> None:
     aborted, so this asserts the two halves it can: that stop() returns, and that
     nothing is left running or reachable afterwards.
     """
-    transport = Transport(silence(30.0, RATE), sample_rate=RATE)
+    transport = transport_for(silence(30.0, RATE))
     transport.play()
     import time
 
@@ -340,7 +354,7 @@ def test_the_callback_never_raises_out_of_portaudio() -> None:
     by breaking the device, because the *shape* of the failure is the thing being
     tested: whatever goes wrong, nothing may escape into C.
     """
-    transport = Transport(silence(0.2, RATE), sample_rate=RATE)
+    transport = transport_for(silence(0.2, RATE))
 
     class Hostile:
         """An outdata that refuses assignment, the way a wrong shape would."""
@@ -380,9 +394,8 @@ def test_a_short_buffer_plays_and_the_clock_advances() -> None:
     from guitaroids.audio.click import build_count_in
 
     clicks = build_count_in(bpm=240, count_in_bars=1, sample_rate=RATE)
-    transport = Transport(
+    transport = transport_for(
         (clicks.samples * np.float32(0.2)).astype(np.float32),
-        sample_rate=RATE,
         song_start=0.25,
     )
     try:
@@ -398,3 +411,76 @@ def test_a_short_buffer_plays_and_the_clock_advances() -> None:
         transport.stop()
     assert transport.is_running is False
     assert transport.position() == -1.0, "a stopped transport has no position"
+
+
+# --- volume (§28.2) ------------------------------------------------------------
+
+
+def test_full_volume_hands_back_the_same_buffer() -> None:
+    """1.0 must not copy 40MB of audio to multiply it by one."""
+    samples = stereo(64)
+    assert apply_volume(samples, 1.0) is samples
+
+
+def test_half_volume_halves_and_stays_float32() -> None:
+    samples = np.full((8, 2), 0.8, dtype=np.float32)
+    out = apply_volume(samples, 0.5)
+    assert out.dtype == np.float32, "a float64 here would be re-cast by the stream"
+    assert np.allclose(out, 0.4)
+
+
+def test_zero_volume_is_silence_of_the_right_length() -> None:
+    """Not a shorter or empty buffer: the clock is derived from this length."""
+    out = apply_volume(np.full((100, 2), 0.9, dtype=np.float32), 0.0)
+    assert out.shape == (100, 2)
+    assert not out.any()
+
+
+def test_volume_above_one_raises_rather_than_over_driving() -> None:
+    """The 0.95 peak leaves no headroom, so 1.5 could only clip.
+
+    Raising is the honest answer: §22 measured the render's peak precisely so that
+    this ceiling means something. Silently limiting instead would hide the fact that
+    the user asked for something the pipeline cannot give.
+    """
+    with pytest.raises(TransportError, match="0.0-1.0"):
+        apply_volume(stereo(8), 1.5)
+    with pytest.raises(TransportError, match="0.0-1.0"):
+        apply_volume(stereo(8), -0.1)
+
+
+def test_the_transport_reports_the_volume_it_was_given() -> None:
+    transport = transport_for(stereo(64), volume=0.25)
+    assert transport.volume == pytest.approx(0.25)
+
+
+def test_a_quiet_transport_still_reports_a_running_position() -> None:
+    """Liveness and amplitude are different questions.
+
+    §23 already paid for confusing them once: a count-in position is legitimately
+    negative, and -1.0 also means "not playing". A transport at volume 0 is playing,
+    and must not look like the no-audio sentinel.
+    """
+    quiet = transport_for(stereo(44100), volume=0.0)
+    assert quiet.duration == pytest.approx(1.0), "44100 frames at 44100Hz is one second"
+    assert quiet.is_running is False, "no stream is open, so this is about duration"
+    assert quiet.position() == -1.0, "and the sentinel still means 'no stream'"
+
+
+def test_volume_and_device_stay_required() -> None:
+    """§21.2's prescription, pinned.
+
+    `device` used to default to None here and at every call site, so the default
+    silently won and `Settings.audio_device` did nothing. A default is a standing
+    invitation to omit the argument, so this test fails the moment one comes back.
+    """
+    import inspect
+
+    for target in (Transport.__init__, AppContext.start_playback):
+        params = inspect.signature(target).parameters
+        for name in ("volume", "device"):
+            assert name in params, f"{target.__qualname__} lost {name}"
+            assert params[name].default is inspect.Parameter.empty, (
+                f"{target.__qualname__}.{name} has a default again, which is how "
+                f"{name} was silently ignored in the first place"
+            )
