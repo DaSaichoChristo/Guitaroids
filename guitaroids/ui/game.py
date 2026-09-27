@@ -93,6 +93,14 @@ class Game(ScreenBase):
         #: taken over by the audio clock jumps by however long the render took.
         self._preparing = False
         self._render_error = ""
+        #: The audio position at the moment the audio stopped, so the wall clock can
+        #: take over from there. ``None`` means the wall clock is not in use.
+        self._wall_origin: float | None = None
+        self._last_audio_position = 0.0
+        self._audio_lost = False
+        #: True between "the audio arrived" and "the audio stopped". The only way to
+        #: tell a lost device from a machine that never had one.
+        self._audio_live = False
         self._renderer = ChartRenderer(self)
         self._renderer.ready.connect(self._on_audio_ready)
         self._renderer.failed.connect(self._on_audio_failed)
@@ -253,6 +261,26 @@ class Game(ScreenBase):
             "Rendering the tab into sound."
         )
 
+    def _note_audio_lost(self) -> None:
+        """Notice that the sound stopped. The banner text is set at the end of the tick.
+
+        Split in two because the banner is one label with several writers: the
+        "Get ready" and "Song complete" messages are refreshed after this, and a
+        notice set here would be overwritten by them on the very same frame.
+        """
+        if self._wall_origin is not None or self._finished:
+            return  # already noted, or the song is over and it does not matter
+        self._audio_lost = True
+
+    def _show_audio_lost(self) -> None:
+        """Written last in the tick, so nothing overwrites it."""
+        if not self._audio_lost:
+            return
+        self._banner.setText(
+            "Audio stopped.\n\nThe song keeps going on a wall clock, which cannot "
+            "tell whether the timing feels right."
+        )
+
     def _start_timer_clock(self) -> None:
         """The no-audio fallback: a wall clock, which cannot say whether it feels right.
 
@@ -263,6 +291,11 @@ class Game(ScreenBase):
         """
         self._preparing = False
         self._clock.start()
+        # The wall clock is the *primary* clock in this path, so its origin is the
+        # chart's own zero, which the offset moves: the song starts `offset` seconds
+        # behind the audio, not at zero.
+        self._wall_origin = -self._offset
+        self._last_audio_position = 0.0
         self._banner.setText("")
 
     # --- the render, arriving -------------------------------------------------
@@ -293,7 +326,15 @@ class Game(ScreenBase):
             self._start_timer_clock()
             return
         self._preparing = False
+        self._audio_lost = False
+        self._audio_live = True
         self._banner.setText("")
+        # Started here even though the audio clock is what will be read: a wall clock
+        # that has never been started cannot take over if the audio goes away, and
+        # the recovery path is exactly the case where a frozen bar is worst.
+        self._clock.start()
+        self._wall_origin = None
+        self._last_audio_position = 0.0
 
     def _count_in_seconds(self) -> float:
         """Seconds between sample zero and the chart's time zero.
@@ -339,15 +380,40 @@ class Game(ScreenBase):
 
         Returns ``-1.0`` while the audio is still being rendered, so nothing
         downstream can mistake "not started" for "at the first note".
+
+        **Falls back to the wall clock mid-song, and says so.** The audio device can
+        go away while a song is playing, and there are two wrong answers: freeze
+        (the bar stops and it looks like a hang) or restart from zero (the song jumps
+        back to the top). So the last audio position is remembered and the wall clock
+        carries on from there.
         """
         if self._preparing:
             return -1.0
-        audio = self.context.song_position()
-        if audio >= 0.0:
+        # Liveness, not the *sign* of the position. A position is legitimately
+        # negative for the whole count-in and for the first `latency` of any song,
+        # and -1.0 is also what the transport says when it is not playing, so testing
+        # `audio >= 0` confuses "before the music starts" with "there is no music" --
+        # which handed the song to the wall clock for its first 46ms every time.
+        if self.context.is_playing:
+            audio = self.context.song_position()
+            self._wall_origin = None
+            self._last_audio_position = audio
             return audio
-        if not self._clock.isValid():
-            return 0.0
-        return self._clock.elapsed() / 1000.0 * self._rate - self._offset
+        if self._wall_origin is None:
+            # The audio has stopped without telling us -- an unplugged interface, a
+            # device that stalled, a stream that failed. Freeze here and the bar
+            # simply stops moving, which is the worst thing this screen can do: it
+            # looks like a hang rather than like a song with no sound. So the wall
+            # clock takes over *from where the audio left off*.
+            #
+            # The origin is derived from the last audio position, not set to it: the
+            # wall clock has been running since the audio started, so its `elapsed`
+            # is not zero here. `origin + elapsed * rate` then reproduces the audio
+            # position exactly at the moment of the switch, which is the same re-anchor
+            # shape §18.4 needed and the reason the song does not jump.
+            now = self._clock.elapsed() / 1000.0 * self._rate
+            self._wall_origin = self._last_audio_position - now
+        return self._wall_origin + self._clock.elapsed() / 1000.0 * self._rate
 
     @property
     def rate(self) -> float:
@@ -373,6 +439,14 @@ class Game(ScreenBase):
         return min(1.0, bpm / written)
 
     def _tick(self) -> None:
+        # Notice the audio *transitioning* from playing to not, before anything
+        # reads a position, so the frame it happens is the frame the player is told.
+        # A transition, not a state: `context.playback` is None both before the audio
+        # starts and after it stops, so testing it says nothing. A flag set when the
+        # audio arrived is what distinguishes "never had audio" from "lost it".
+        if self._audio_live and not self.context.is_playing and not self._finished:
+            self._audio_live = False
+            self._note_audio_lost()
         position = self.position()
         if self._state is not None:
             self._state.update(position)
@@ -382,6 +456,7 @@ class Game(ScreenBase):
             if self._state.outstanding == 0:
                 self._finished = True
         self._refresh_banner(position)
+        self._show_audio_lost()
 
     def _refresh_banner(self, position: float) -> None:
         """Three states, one label: empty library, get ready, complete.

@@ -51,9 +51,15 @@ says what ran.
   be present.
 - **Layers:** `ui/` → `session/` → `devices/` → `model/`, one-directional. `model/`
   is pure data with zero I/O. `devices/` never imports `session/` or `ui/`.
-- **The clock is the crux.** `song_pos = (stream.time - t0) - stream.latency`.
-  Never drive note timing from a GUI timer. Omitting `latency` biases every note
-  10–20ms early.
+- **The clock is the crux.** `song_pos = (stream.time - t0) - stream.latency`, and
+  `t0` is read from the device at `play()` — `stream.time` is not a count of seconds
+  since you opened the stream (§23.3). Never drive note timing from a GUI timer.
+  Omitting `latency` biases every note 10–20ms early.
+- **Never hold a device handle across a blocking call.** Two core dumps came from
+  it: closing a stream while a thread was inside `write()`, and a `join(timeout=)`
+  that timed out and let the stream be collected under a live write (§26.3). Feed
+  audio with PortAudio's *callback* — the device calls us, nothing of ours is inside
+  the driver, and there is no handle to free from under anyone.
 - **Lane = the tab's string number − 1.** No mapping table.
 - **Chords are kept whole.** `Settings.collapse_chords` is `False` by default, so the
   chart is every note in the tab and a chord is several simultaneous presses —
@@ -75,7 +81,7 @@ says what ran.
 
 ## Current state
 
-`tests/` is 802 tests, all passing. **Five of the six screens are real:** the main
+`tests/` is 809 tests, all passing. **Five of the six screens are real:** the main
 menu, song select (tab + track + audio offset + **per-song practice tempo**), import
 GP (choose a file, then Add to library), preferences, and **game** — three bars
 of tab notation with a left-to-right beat line, `E A D G B E` down the left, a six-key keyboard test mode and PERFECT/GOOD/MISS

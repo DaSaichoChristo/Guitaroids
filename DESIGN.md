@@ -3087,3 +3087,136 @@ Settings go to version 3.
 - **§1.3's L2 slot still says "HandTracker"** and §1.4 still describes a capture
   thread. Both are superseded here in prose; the code was never there to change.
 - **`DECISIONS.md` and `AGENTS.md` were updated in place**, as is their policy.
+
+## §26 — Two crashes and a frozen bar (2026-09-26)
+
+**Tests: 809, all passing.** A bug report, a core dump, and a rewrite of the audio
+transport that removed the possibility rather than managing it.
+
+### 26.1 What the report was
+
+> `malloc(): unaligned tcache chunk detected` / `Aborted (core dumped)` … and now
+> the bar doesn't move while playing.
+
+The first half is a heap corruption. The second is a **separate bug**, and it is the
+one that would have been found last, which is why it is written down first.
+
+### 26.2 The frozen bar: the wall clock had never been started
+
+`position()` asked the audio for a number and fell back to `QElapsedTimer` if the
+answer was not usable. The audio path **never started that clock** — it was only
+started in `_start_timer_clock`, the no-audio path. So the moment the audio went
+away, the fallback ran `if not self._clock.isValid(): return 0.0` and the position
+was **0.0 forever**. The tab stopped advancing and looked like a hang.
+
+Three wrong answers were available and the code had picked the worst one:
+
+| | |
+|---|---|
+| freeze at zero | **what happened** — looks like a hang |
+| restart from zero | the song jumps back to the top |
+| carry on from where the audio stopped | correct |
+
+So the wall clock is now started **as soon as the audio is**, even though the audio
+is what gets read, and the fallback origin is derived from the *last audio position*
+minus the wall clock's current elapsed — the same re-anchor shape §18.4 needed, for
+the same reason. Switching costs nothing perceptible.
+
+The player is also told, once: a silent device is the one failure the fallback cannot
+announce by itself. The notice is set at the *end* of the tick, because the banner
+is one label with several writers and "Get ready" was overwriting it on the same
+frame.
+
+### 26.3 The crash, and the design error underneath both of them
+
+The transport fed the buffer from a daemon thread with blocking `write()` calls, and
+`stop()` joined it with a two-second timeout:
+
+```python
+feeder.join(timeout=2.0)   # times out when the device stalls
+self._stream = None        # last reference gone → collected under a live write()
+```
+
+Those ALSA lines — `PaAlsaStream_WaitForFrames failed` — mean the device stalled.
+So the join timed out, the `OutputStream` lost its last Python reference, and the
+garbage collector freed it **while C was still writing through it**. PortAudio freed
+heap it still owned. `malloc(): unaligned tcache chunk detected`.
+
+That is the second crash of the same family as the first (§23.3), and both are one
+mistake: **treating a device handle as something you can hold across a blocking
+call.** A bounded join is not a synchronisation strategy; it is a way of arranging
+for the other thread to still be inside the driver.
+
+So the blocking design is gone. PortAudio's **callback API** replaced it: the device
+calls *us*, on its own thread, and hands over a buffer to fill. There is no thread of
+ours inside the driver, nothing to join, no write that can block, and no handle to
+collect from under anybody. The rules that fall out for free:
+
+- **`play()` returns in ~0.1s** for any buffer length (it used to block for the whole
+  song, §23.3).
+- **`stop()` has no timeout**, because there is nothing to wait for beyond
+  `stream.stop()` returning.
+- The buffer running out **does not stop the stream** — the callback feeds silence
+  and the device keeps its clock running, which matters because a clock that stops
+  would freeze every remaining note.
+
+The callback must not raise, so its body is wrapped and a failure degrades to
+silence rather than leaving PortAudio undefined.
+
+### 26.4 A shape mismatch that made the whole song silent
+
+The first version of the callback assigned a flat array of `frames * 2` into an
+`outdata` shaped `(frames, 2)`. That raises. The raise was caught by the
+never-escape guard, which set the "finished" flag — so the transport reported itself
+playing, `is_running` went False within a frame, and **the song played silence while
+claiming to be finished.**
+
+It is worth spelling out how that survived a minute of staring: every number looked
+plausible. The clock advanced. The frame count was... zero, which is the one number
+that was obviously wrong and which I read as "the device has not started yet". The
+fix is one `.reshape(-1, 2)`, and the test for it now asserts that the *unfixed*
+shape raises — so the shape cannot be changed back by accident.
+
+### 26.5 -1.0 was doing two jobs, and the count-in paid for it
+
+`-1.0` meant "nothing is playing" from the transport, and `position()` decided
+whether the audio clock was usable by testing `audio >= 0.0`. But a chart position is
+**legitimately negative** for the whole count-in and for the first `latency` of any
+song. So:
+
+- the first 46ms of every song was read as "no audio" and handed to the wall clock,
+  and
+- **a song with a count-in ran on the wall clock for its entire count-in**, switching
+  back and forth at the boundary.
+
+The fix is to test **liveness** (`context.is_playing`) rather than the sign of a
+number, and to let a negative position be a position. A sentinel that means two
+things will eventually be compared against the wrong one.
+
+### 26.6 What I got wrong about the crash before
+
+§23.5's not-done list recorded a one-off faulthandler dump after the audio tests
+passed, said it did not reproduce in nine runs, and named it as unresolved. It was
+this bug, in an early form, and "did not reproduce" was a statement about the test
+suite rather than about the code. The first crash also happened to be in the version
+that closed the stream under an in-flight write, which I did fix — and then built the
+same class of bug again in the timeout.
+
+### Not done — §26
+
+- **The device is still allowed to vanish.** The fallback is honest and announced,
+  but a transport that has lost its device should arguably close itself and report
+  the reason, rather than leaving the game to notice.
+- **Underruns are counted and otherwise ignored.** `status` flags from the callback
+  are recorded in `Transport.underruns` and nothing reads them; a machine that cannot
+  keep up deserves a warning rather than a statistic.
+- **No test runs the game screen against a real device.** The fallback tests drive
+  `start_playback`/`stop_playback` directly, so the path from a finished render to a
+  playing transport is only covered by the manual end-to-end script.
+- **The two crashes are gone by construction rather than by test.** A test cannot
+  assert "this process did not abort" from inside the process that aborted, so the
+  evidence is the callback API's shape plus 40 rapid start/stop cycles by hand. That
+  is weaker than it looks and is the reason the stress test is worth writing.
+- **`Stream.latency` is still read on every `position()` call**, which is a PortAudio
+  call per frame. It is cheap, and it is also the one remaining place this screen
+  touches the driver from the GUI thread.

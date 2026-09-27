@@ -872,3 +872,154 @@ def test_the_audio_position_wins_over_the_wall_clock(shell, chart) -> None:
         assert audio < 2.0, f"read the wall clock ({audio:.1f}s) instead of the device"
     finally:
         screen.context.stop_playback()
+
+
+# --- losing the audio mid-song (§26) -------------------------------------------
+#
+# The device can go away while a song is playing: an unplugged interface, a stalled
+# ALSA, a stream that failed. Two wrong answers were available and the bug report
+# found the worse one -- the bar simply stopped moving, because the wall clock had
+# never been started.
+
+
+def test_the_wall_clock_is_always_a_valid_fallback(shell, chart) -> None:
+    """Started as soon as the audio is, even though the audio is what gets read.
+
+    A wall clock that has never run cannot take over, and taking over is exactly the
+    case where a frozen bar is worst.
+    """
+    screen = game_via_shell(shell, chart)
+    assert screen._clock.isValid(), "the fallback clock must be usable at any moment"
+
+
+def test_losing_the_audio_does_not_freeze_the_bar(shell, chart) -> None:
+    """The reported bug, at the level it can be asserted.
+
+    Before this, the audio path never started the wall clock, so when the audio
+    stopped `position()` fell through to an invalid clock and returned 0.0 forever --
+    the tab stopped advancing and it looked like a hang.
+    """
+    screen = game_via_shell(shell, chart)
+    from guitaroids.audio.transport import silence
+
+    try:
+        screen.context.start_playback(silence(10.0, 44100), sample_rate=44100)
+        screen._wall_origin = None
+        screen._last_audio_position = 0.0
+        time.sleep(0.15)
+        with_audio = screen.position()
+        assert with_audio > 0.0, "the audio clock is not being read at all"
+
+        screen.context.stop_playback()  # the device goes away mid-song
+        first = screen.position()
+        assert first > 0.0, f"froze or reset to zero (got {first})"
+        time.sleep(0.2)
+        later = screen.position()
+        assert later > first, f"the bar stopped moving ({first} -> {later})"
+    finally:
+        screen.context.stop_playback()
+
+
+def test_taking_over_from_the_audio_does_not_jump(shell, chart) -> None:
+    """The fallback continues from where the audio stopped.
+
+    Deriving the origin from the *last audio position* rather than from zero is the
+    whole difference between carrying on and restarting the song. Same re-anchor shape
+    as §18.4 needed, for the same reason.
+    """
+    screen = game_via_shell(shell, chart)
+    from guitaroids.audio.transport import silence
+
+    try:
+        screen.context.start_playback(silence(10.0, 44100), sample_rate=44100)
+        screen._wall_origin = None
+        time.sleep(0.2)
+        audio_position = screen.position()
+
+        screen.context.stop_playback()
+        resumed = screen.position()
+
+        assert resumed == pytest.approx(audio_position, abs=0.2), (
+            f"jumped from {audio_position:.2f} to {resumed:.2f} when the audio stopped"
+        )
+    finally:
+        screen.context.stop_playback()
+
+
+def test_the_offset_survives_the_fallback(shell, chart) -> None:
+    """The wall clock is the *primary* clock when there is no audio, so its origin
+    is the chart's zero shifted by the offset -- not zero.
+
+    An offset that stops being applied the moment audio is switched off would be a
+    song that plays in tune on a machine with a sound card and out of tune on one
+    without, which is the sort of difference nobody reports.
+    """
+    context = context_with(chart)
+    context.request_play("test", 1, offset_ms=-200.0)
+    shell.show()
+    shell.navigate(Screen.GAME)
+    screen = shell.current_screen
+    screen.context = context
+    screen._load_request()
+    screen._clock = _FrozenClock(10.0)
+    assert screen._wall_origin == pytest.approx(0.2)
+    assert screen.position() == pytest.approx(10.2, abs=0.05)
+
+
+def test_the_player_is_told_once_when_the_audio_stops(shell, chart) -> None:
+    """A silent device is the one failure the fallback cannot announce by itself."""
+    from guitaroids.audio.transport import silence
+
+    screen = game_via_shell(shell, chart)
+    try:
+        screen.context.start_playback(silence(5.0, 44100), sample_rate=44100)
+        # Stands for "the audio arrived", which is the transition this test needs.
+        # Driven through `_on_audio_ready` in the app; set directly here because a
+        # RenderResult and a device to play it through would be testing the wrong
+        # thing. The other half -- that the wall clock is a valid fallback -- is
+        # asserted separately above.
+        screen._audio_live = True
+        screen._tick()
+        # While the audio is fine the banner is the ordinary one ("Get ready" at the
+        # start of a song), and the notice must not have appeared.
+        while_audio = screen._banner.text()
+        assert "Audio stopped" not in while_audio
+
+        screen.context.stop_playback()
+        screen._tick()
+        assert "Audio stopped" in screen._banner.text(), (
+            f"the player was left looking at {while_audio!r} with no sound"
+        )
+        said = screen._banner.text()
+        screen._tick()
+        assert screen._banner.text() == said, "it should say it once, not every frame"
+    finally:
+        screen.context.stop_playback()
+
+
+def test_a_negative_position_is_not_mistaken_for_no_audio(shell, chart) -> None:
+    """**A count-in is negative on purpose, and -1.0 also means "not playing".**
+
+    The fallback used to test `position() >= 0` to decide whether the audio clock
+    was available, so the first `latency` of every song -- and the entire count-in,
+    which is negative for its whole length -- was read as "there is no audio" and
+    handed to the wall clock. The song then stuttered for its first fraction of a
+    second, or ran entirely on the timer.
+
+    So the test is on *liveness*, and this asserts the count-in survives: a position
+    before the music starts is a position, and it must come from the device.
+    """
+    from guitaroids.audio.transport import silence
+
+    screen = game_via_shell(shell, chart)
+    try:
+        screen.context.start_playback(silence(10.0, 44100), sample_rate=44100)
+        screen._wall_origin = None
+        first = screen.position()
+        # Whatever the count-in and the device latency add up to, a transport that is
+        # playing must never be mistaken for one that is not.
+        assert screen.context.is_playing is True
+        assert first > -1.0, f"position {first} is the 'no audio' sentinel"
+        assert screen._wall_origin is None, "the wall clock took over a playing song"
+    finally:
+        screen.context.stop_playback()

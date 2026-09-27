@@ -332,18 +332,69 @@ def test_stopping_while_the_feeder_is_mid_write_does_not_abort() -> None:
 
 
 @needs_device
-def test_a_device_that_vanishes_mid_song_does_not_raise_on_the_feeder() -> None:
-    """An unplugged interface leaves a daemon thread holding a dead stream.
+def test_the_callback_never_raises_out_of_portaudio() -> None:
+    """An exception out of a real-time callback leaves PortAudio undefined.
 
-    An exception escaping that thread prints a traceback nobody reads and leaves the
-    transport looking like it is still playing, so it is caught and the stream is
-    closed on the way out.
+    So the callback is wrapped, and a failure inside it degrades to silence and marks
+    the transport finished. Driven by handing it a broken output buffer rather than
+    by breaking the device, because the *shape* of the failure is the thing being
+    tested: whatever goes wrong, nothing may escape into C.
     """
-    transport = Transport(silence(2.0, RATE), sample_rate=RATE)
-    transport.play()
-    transport._stream = None  # simulate the device going away underneath the feeder
+    transport = Transport(silence(0.2, RATE), sample_rate=RATE)
+
+    class Hostile:
+        """An outdata that refuses assignment, the way a wrong shape would."""
+
+        def __setitem__(self, *_args) -> None:
+            raise ValueError("simulated shape mismatch")
+
+    transport._callback(Hostile(), 64, None, None)  # must not raise
+    assert transport.has_finished, "a broken callback has to stop claiming to play"
+
+
+def test_a_callback_given_a_wrong_shape_would_have_raised() -> None:
+    """**Why the reshape in the callback is not optional.**
+
+    The first version assigned a flat array of frames*2 to an outdata shaped
+    (frames, 2). It raised on the first call, the `except` swallowed it, the transport
+    reported itself finished -- and the song played silence while claiming to be
+    playing. Asserted here so the shape cannot be changed back by accident.
+    """
+    import numpy as np
+
+    buffer = np.zeros(44100 * 2, dtype=np.float32)  # interleaved, flat
+    outdata = np.zeros((1024, 2), dtype=np.float32)  # what PortAudio actually hands over
+    with pytest.raises(ValueError):
+        outdata[:] = buffer[: 1024 * 2]
+
+
+def test_a_short_buffer_plays_and_the_clock_advances() -> None:
+    """The first sound this project has ever made, at 0.25s of quiet clicks.
+
+    Not a substitute for listening: it asserts the clock moves, that latency is
+    reported, that the callback actually delivered the frames, and that the stream
+    closes. Whether it sounds like a guitar is not a thing a test can check.
+    """
     import time
 
-    time.sleep(0.2)
+    from guitaroids.audio.click import build_count_in
+
+    clicks = build_count_in(bpm=240, count_in_bars=1, sample_rate=RATE)
+    transport = Transport(
+        (clicks.samples * np.float32(0.2)).astype(np.float32),
+        sample_rate=RATE,
+        song_start=0.25,
+    )
+    try:
+        transport.play()
+        assert transport.is_running
+        assert transport.latency() > 0.0, "PortAudio always reports some latency"
+        assert transport.wait(timeout=10.0), "a 0.25s buffer should finish quickly"
+        assert transport.frames_written == len(clicks.samples), (
+            "the callback did not deliver every frame"
+        )
+        assert transport.has_finished
+    finally:
+        transport.stop()
     assert transport.is_running is False
-    transport.stop()
+    assert transport.position() == -1.0, "a stopped transport has no position"

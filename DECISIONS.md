@@ -120,8 +120,13 @@ broken in a way that is hard to diagnose.
 | The gain is **measured from the render**, not a fixed multiple, and reported as `gain_applied` | live | §23.3 |
 | The soundfont preset is the **GM programme minus one** — presets are 0-indexed | live | §23.3 |
 | `t0` is **read from the device** in `play()`; `stream.time` is ~1.8e9, not a count since open | live | §23.3 |
-| The stream is **fed from a daemon thread** — `write()` blocks for the whole buffer | live | §23.3 |
-| Only the feeder **closes** the stream; closing it under a write aborts the process | live | §23.3 |
+| The stream is fed by PortAudio's **callback**, not a feeder thread: nothing of ours is ever inside the driver | live | §26.3 |
+| `stop()` has **no timeout** — there is no other thread to wait for | live | §26.3 |
+| The callback **never raises**; a failure inside it degrades to silence | live | §26.3 |
+| A spent buffer **feeds silence** and leaves the stream running, so the clock never stops | live | §26.3 |
+| The wall clock is started **as soon as the audio is**, so it can always take over | live | §26.2 |
+| Losing the audio **carries on from where it stopped** and says so once | live | §26.2 |
+| "Is the audio usable" is tested by **liveness, not the sign** of the position — a count-in is negative | live | §26.5 |
 | The **transport handle lives on `AppContext`**, because §1.7 says screens never own devices | live | §23.2 |
 | Rendering happens on a **worker**, and the clock does not start until it lands | live | §23.2 |
 | `AppContext.audio_enabled` — playing silently is supported, and it is what the tests turn off | live | §23.5 |
