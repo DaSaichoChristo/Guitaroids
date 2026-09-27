@@ -808,3 +808,100 @@ def test_a_centred_title_does_not_sit_beside_its_subtitle(shell) -> None:
     assert title_row.itemAt(0).widget() is None, "no stretch before the title"
     assert title_row.itemAt(title_row.count() - 1).widget() is None, "no stretch after"
     assert header.itemAt(1).widget() is screen._status, "the status is its own row"
+
+
+# --- the main menu's logo (§43) ----------------------------------------------
+
+
+def test_the_logo_is_on_the_main_menu_above_the_title(shell, qapp) -> None:
+    """Placed, and placed *above* the title rather than beside or below it.
+
+    Asserted on geometry rather than on construction order, because a layout can be
+    filled in any order and what the player sees is where the label ended up.
+    """
+    from PySide6 import QtWidgets
+
+    shell.show(); shell.resize(960, 640)
+    shell.navigate(Screen.MAIN)
+    for _ in range(3):
+        qapp.processEvents()
+    screen = shell.current_screen
+
+    logos = [w for w in screen.findChildren(QtWidgets.QLabel) if w.objectName() == "logo"]
+    if not logos:
+        pytest.skip("no logo asset present, which is a supported state")
+    titles = [w for w in screen.findChildren(QtWidgets.QLabel) if w.objectName() == "title"]
+    assert titles, "the main menu lost its title"
+
+    logo = logos[0]
+    title = titles[0]
+    assert logo.geometry().bottom() < title.geometry().top(), (
+        f"the logo occupies {logo.geometry()} and the title {title.geometry()}"
+    )
+    assert logo.pixmap() is not None and not logo.pixmap().isNull()
+
+
+def test_the_logo_label_is_not_above_the_title_when_the_asset_is_absent(
+    shell, qapp, monkeypatch
+) -> None:
+    """A missing picture must not stop the menu building, and must not leave a gap.
+
+    The logo is optional by design -- the same reasoning the soundfont search uses --
+    so with no asset the screen is the menu without the logo, not an error and not a
+    reserved hole.
+    """
+    from PySide6 import QtWidgets
+
+    from guitaroids.ui import main_menu as main_menu_module
+
+    monkeypatch.setattr(main_menu_module, "logo_label", lambda *a, **k: None)
+
+    # Built directly rather than through `shell.navigate`, because the shell **caches**
+    # every screen it has built -- so navigating to MAIN hands back the instance some
+    # earlier test constructed, logo and all, and the patched `logo_label` is never
+    # called. That is a real property of the shell, and it is why this test cannot be
+    # a navigation.
+    screen = main_menu_module.MainMenu(shell, shell.context)
+    try:
+        logos = [
+            w for w in screen.findChildren(QtWidgets.QLabel) if w.objectName() == "logo"
+        ]
+        assert logos == [], "a logo label was built from nothing"
+        titles = [
+            w for w in screen.findChildren(QtWidgets.QLabel) if w.objectName() == "title"
+        ]
+        assert titles and titles[0].text() == "GUITAROIDS"
+    finally:
+        screen.deleteLater()
+
+
+def test_the_logo_height_is_a_design_unit(shell) -> None:
+    """It scales with the UI, like every other length.
+
+    A logo pinned to a pixel count stays the same size on a 4K panel while the type
+    around it grows, which is the hardcoded-pixel mistake the scale exists to prevent.
+    """
+    from guitaroids.ui import main_menu as main_menu_module
+    from guitaroids.ui import theme
+
+    seen: list[int] = []
+    original = main_menu_module.logo_label
+
+    def spy(height, *args, **kwargs):
+        seen.append(height)
+        return None  # don't need the real image to check the call
+
+    for factor in (1.0, 1.5):
+        theme.set_scale(factor)
+        main_menu_module.logo_label = spy
+        screen = main_menu_module.MainMenu(shell, shell.context)
+        try:
+            pass
+        finally:
+            screen.deleteLater()
+    main_menu_module.logo_label = original
+    theme.set_scale(1.0)
+
+    assert len(seen) == 2, seen
+    assert seen[1] > seen[0], f"the logo did not grow with the scale: {seen}"
+    assert seen[0] == theme.px(170, 1.0)

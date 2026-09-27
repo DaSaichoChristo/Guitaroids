@@ -35,7 +35,7 @@ supersedes §2" resolves without ambiguity.
 
 ## The sections
 
-41 sections, in the order they were written. Dates are all 2026-09-26 or
+42 sections, in the order they were written. Dates are all 2026-09-26 or
 -27 and are in the headings, so they are left out here.
 
 | Section | What it records |
@@ -81,6 +81,7 @@ supersedes §2" resolves without ambiguity.
 | §40 | "Reload the app for less latency", and the counter nobody read |
 | §41 | A retro palette, and the layout bill that came with it |
 | §42 | Centred titles, and a field drawn on top of its own name |
+| §43 | A logo for the main menu, and a background that was never removed |
 
 **§33 is missing**, and §36.3 explains why rather than back-filling it: the number was
 reserved for work that was planned, approved and then overtaken by other work, so no
@@ -4953,3 +4954,89 @@ calls fails both the geometry test and the policy test.
   device picker, or a combo in another screen with the same problem, will not get it,
   and nothing generalises it. The helper is one call, but "remember to call it" is
   §21.2's shape.
+
+---
+
+## §43 — A logo for the main menu, and a background that was never removed (2026-09-27)
+
+Asked for `assets/*.png` on the main menu, above the title. It arrived named
+`Firefly_RemoveBackground.png`, with an alpha channel and a uniform light-grey
+(208, 208, 208) fill behind the artwork at **`alpha=255` everywhere**.
+
+### §43.1 A file with an alpha channel is not a file with transparency
+
+Measured before using it: the top-left, top-right, bottom-left and bottom-centre
+pixels are all `(208, 208, 208, 255)`, and a grid sample of the whole image finds
+**one** distinct alpha value, 255. So the background is not transparent at all, and the
+app's background is a warm near-black — dropped in unmodified, this puts a 992x1058
+light-grey rectangle in the middle of the menu.
+
+Two ways out. A properly cut-out PNG, and delete the keying. Or key it at load time,
+which is what `guitaroids/ui/logo.py` does **so the file we have is usable**, with the
+first option recorded as the better one.
+
+### §43.2 The key is a flood fill, and that is the whole design
+
+84% of this image is within 10 of the background grey. A whole-image colour test would
+remove all of it, and with it **the guitar's white**: the soundhole ring, the fret
+dots, the highlights. So the fill starts from the four edges and stops at the first
+pixel that is not background — it can only ever reach background that is *connected to
+an edge*, and the guitar is in the way.
+
+That it is safe here is measured, not assumed: **875,475** pixels match at tolerance 6
+and **878,117** at tolerance 10, so the background is a flat fill and a tight tolerance
+costs nothing. **2,046** near-grey pixels are on neither a border row nor a border
+column — those are the artwork's, and the fill cannot reach them.
+
+The result, checked on the near-black background: corners at `alpha=0`, the body at 255,
+the soundhole ring and the fret dots intact. A `QLabel#logo { background: transparent }`
+rule was needed as well, because the `QWidget` rule paints an opaque panel behind every
+widget and would have thrown the keyed transparency away at the last step.
+
+### §43.3 The size is a design unit, and the limit was found by testing
+
+`px(170)`, not a pixel count, so the logo grows with the UI scale like everything else.
+The ceiling was measured, not guessed: the main menu has **no scroll area**, and
+`px(190)` fails `test_no_layout_child_is_squeezed_below_its_minimum` on `Screen.MAIN`.
+`px(180)` passes and `px(170)` was taken for 20px of slack, because font metrics differ
+between machines and 10px of visual difference is invisible.
+
+### §43.4 A test that did not test, caught by mutating the code
+
+The first fret-dot test asserted that a pale detail inside the artwork survives. The
+dot is `(245, 245, 245)` against a `(208, 208, 208)` background — 37 apart, well outside
+any tolerance this module would use — so **a naive whole-image colour test keeps it
+too**. Replaced with a detail that is *exactly* the background colour, walled inside the
+artwork: a colour test deletes it, a flood fill cannot reach it.
+
+Confirmed by mutation. Swapping `without_background`'s inner loop for the whole-image
+test and re-running leaves the original ten tests **all passing**; with the
+discriminating test added, the same mutation fails
+`test_a_detail_the_same_colour_as_the_background_survives_inside_the_artwork`.
+
+**Tests: 1047 in total — 1031 excluding `tests/test_docs.py`.** Two clean runs.
+
+### Not done — §43
+
+- **A 1px pale halo survives around the guitar.** It is the source image's own
+  anti-aliased edge, blended toward the background grey, and the fill stops just
+  short of it. At the displayed size (~170px from 1058) it is barely visible, and
+  eroding it further would start eating the artwork's white details — the same
+  trade §43.2 is about. **A genuinely cut-out PNG would have no halo at all**, which
+  is the strongest argument for getting one.
+- **The keying is a per-pixel Python loop with `pixelColor`**, roughly a million
+  cross-language calls on this file, and it runs on the GUI thread during the main
+  menu's construction. It is fast enough to be unnoticeable here and **was not
+  timed**. A `QImage.bits()`/numpy path would be an order of magnitude quicker and
+  is the obvious thing to do if this ever shows up as a startup pause.
+- **The logo's vertical position is not tuned.** It is a label above the title with
+  `px(6)` of spacing, which is centred by `content_column` rather than composed
+  deliberately. Nobody has looked at whether the gap between the guitar's bottom and
+  "GUITAROIDS" is the gap they would have chosen.
+- **The asset is untracked.** `assets/Guitaroids.png` is 834KB and `.gitignore` covers
+  only `*.sf2` and `*.sf3`, so it shows as untracked. It is app artwork rather than a
+  fetched soundfont, so it arguably *should* be committed — but 834KB of PNG in a git
+  history is a decision for the project, not one to make inside this section.
+- **`assets/hand_landmarker.task` (7.8MB) is tracked**, which is a webcam-era leftover
+  from §25 and looks like it should have gone when the camera did. Unrelated to this
+  work and not investigated.

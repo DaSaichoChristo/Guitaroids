@@ -199,6 +199,12 @@ QWidget {{
 /* The prose roles. Anything that is a sentence rather than a control. */
 QLabel#subtitle, QLabel#dim, QLabel#gameBanner {{ font-family: "Sans Serif"; }}
 
+/* The main menu's logo. `background: transparent` is not optional: the `QWidget`
+   rule above paints an opaque panel behind every widget, so without this the logo
+   sits on its own dark rectangle inside a dark window, and the keyed transparency
+   is thrown away at the last step. */
+QLabel#logo {{ background: transparent; }}
+
 /* --- headings ------------------------------------------------------------- */
 QLabel#heading, QLabel#title {{
     font-size: {px(26, f)}px;

@@ -12,7 +12,9 @@ from typing import TYPE_CHECKING
 
 from PySide6 import QtCore, QtWidgets
 
+from .logo import logo_label
 from .screens import Screen, ScreenBase, constrained_button, content_column, heading
+from .theme import px
 
 if TYPE_CHECKING:  # pragma: no cover - types only
     from ..context import AppContext
@@ -38,6 +40,19 @@ class MainMenu(ScreenBase):
         # A title screen, so it sits in the middle of the window rather than
         # hugging the top.
         column = content_column(self, margin=56, vertical_centred=True)
+
+        # The logo, above the title. **Optional on purpose**: `logo_label` returns
+        # `None` when the asset is missing or unreadable, and a missing picture must
+        # not stop the application starting -- the same reasoning the soundfont search
+        # uses, and the same rule the renderer follows for a missing soundfont.
+        #
+        # The height is a design unit like every other length here, so the logo grows
+        # with the UI scale instead of staying the same size on a 4K panel while the
+        # type around it doubles.
+        logo = logo_label(px(170), parent=self)
+        if logo is not None:
+            column.addWidget(logo, alignment=_CENTRED)
+            column.addSpacing(px(6))
 
         column.addWidget(heading("GUITAROIDS", kind="title"))
         column.addWidget(
