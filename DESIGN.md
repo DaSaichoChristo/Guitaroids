@@ -35,7 +35,7 @@ supersedes §2" resolves without ambiguity.
 
 ## The sections
 
-43 sections, in the order they were written. Dates are all 2026-09-26 or
+44 sections, in the order they were written. Dates are all 2026-09-26 or
 -27 and are in the headings, so they are left out here.
 
 | Section | What it records |
@@ -83,6 +83,7 @@ supersedes §2" resolves without ambiguity.
 | §42 | Centred titles, and a field drawn on top of its own name |
 | §43 | A logo for the main menu, and a background that was never removed |
 | §44 | "Redo the song and I miss everything", which was a guard asking the wrong question |
+| §45 | Every imported tab said "Medium", and the number beside it did not |
 
 **§33 is missing**, and §36.3 explains why rather than back-filling it: the number was
 reserved for work that was planned, approved and then overtaken by other work, so no
@@ -5156,3 +5157,88 @@ the M0 gate.
 - **The stale-buffer effect on `dropped` and `stats` was not considered.** `reset()`
   clears the window but not `dropped`, so the counter spans restarts. Probably right —
   it is a liveness counter, not a per-run one — and unexamined.
+
+---
+
+## §45 — Every imported tab said "Medium", and the number beside it did not (2026-09-27)
+
+Reported as: all GP files import with a medium difficulty, which is not accurate.
+Both halves of that were true, and one of them was the reason the other looked wrong.
+
+### §45.1 The bands swallowed the library
+
+`difficulty` was never hardcoded — it is banded from **onset** density, and the code
+was honest about why (§21: a chord is one thing to hit, so banding on note count would
+quadruple every song's density and push the whole library to "Expert"). The boundaries
+were the problem: **2.0 / 4.5 / 7.0**, and the real measured rates are:
+
+| Tab | onsets/s | notes/s | was | now |
+|---|---|---|---|---|
+| Sweet Child O' Mine | 2.02 | 6.02 | Medium | **Easy** |
+| Hotel California | 2.91 | 10.77 | Medium | Medium |
+| Sweet Child O' Mine (Live) | 3.37 | 11.70 | Medium | Medium |
+| Afterlife | 3.90 | 9.66 | Medium | **Hard** |
+
+A 2.5-wide "Medium" band over a library spanning 2.02–3.90 is not four songs of equal
+difficulty; it is a band too wide to say anything. Boundaries are now **2.5 / 3.5 /
+5.0**, and `Expert` is deliberately unclaimed — nothing in the library is that fast, and
+a band nothing reaches is the same defect as one everything lands in.
+
+**These are judgement, not measurement.** Four tabs is a thin sample, and the numbers
+were chosen to separate them with room left over.
+
+### §45.2 The tab's own difficulty is not available, which rules out the good fix
+
+The obvious answer is to read what the file says. **PyGuitarPro 0.11 cannot do it**:
+`Track` has no `level` attribute and `Song` has no `rating` — checked by introspection
+across all four real files, GP3 through GP5, and every track reports `n/a`. The density
+band is the only signal there is, so the boundaries are what had to change.
+
+### §45.3 The number beside the label was the wrong one
+
+The card showed `Density 10.77 nps` — **notes** per second — next to `Difficulty Medium`,
+which is banded on **onsets** per second, **2.91**, which appeared nowhere.
+
+So the band was unexplainable from the screen: 10.77 nps reading as "Medium" looks like
+a broken label, and the player has no way to check it. That is a large part of why this
+was reported as "not accurate" rather than as "the bands are too wide".
+
+The onset rate now travels **in the Difficulty cell** — `Hard (3.90 ops)` — rather than
+in a row of its own. Two reasons: an added row pushed Practice tempo out of the card's
+visible area, and a number belongs beside the label it explains. `Density` is now
+`Note density`, which is what it always was.
+
+### §45.4 A guard against the whole class
+
+`test_the_bands_separate_the_real_library` asserts the real rates span **at least three**
+bands. A library where everything is "Medium" is a band that cannot discriminate, and
+this fails before anyone imports a tab and wonders whether the label is broken.
+
+The rates are recorded as **numbers, not read from `songs/`** — a test that depends on
+the player's disk fails the moment they import something, which §37 already flagged.
+Verified by mutation: restoring 2.0/4.5 fails three tests, two of them naming the song
+that moved.
+
+`difficulty_band` is now a pure function of one number rather than a property reading a
+chart, which is what makes that table possible at all.
+
+**Tests: 1073 in total — 1057 excluding `tests/test_docs.py`.** Two clean runs.
+
+### Not done — §45
+
+- **The boundaries are fitted to four songs.** Easy/Medium/Hard are separated and
+  Expert is empty, but with `n = 4` this is a plausible arrangement rather than a
+  calibrated scale. Ten more tabs would say more, and there is no test that can
+  substitute for having them.
+- **Difficulty is still a proxy.** Onset density does not know the tempo, the tuning,
+  or that a syncopated riff at 60 BPM is harder than a straight one at 160. A tab's own
+  rating would be better and is unavailable (§45.2).
+- **The song list shows the bare band** — "Afterlife … Hard" — with no rate, so the
+  list is still less explicable than the card. The list has no room for the number and
+  a tooltip was not tried.
+- **The detail card's Practice tempo row is still at the very bottom edge**, as §42
+  recorded. This change did not make it worse, having spent no row, but it did not fix
+  it either.
+- **The band does not respond to the practice tempo.** A tab practised at 60% is
+  genuinely easier and is still labelled from its written density. Deliberate — the
+  band describes the song, not the attempt — and unexamined.

@@ -18,9 +18,13 @@ from songbuild import make_song
 
 from guitaroids.songlib import (
     AUDIO_EXTENSIONS,
+    EASY_BELOW,
+    HARD_BELOW,
+    MEDIUM_BELOW,
     Status,
     classify_error,
     describe_tracks,
+    difficulty_band,
     find_audio,
     format_duration,
     load_tab,
@@ -373,3 +377,94 @@ def test_the_real_tab_keeps_every_note_by_default() -> None:
         assert "collapsed" not in " ".join(entry.chart.warnings), (
             f"{entry.slug} was collapsed: {entry.chart.warnings}"
         )
+
+
+# --- difficulty bands (§45) ----------------------------------------------------
+#
+# The bands were 2.0 / 4.5 / 7.0, which put the entire library in one 2.5-wide band:
+# four genuinely different rock tabs, all labelled "Medium". These rates are the
+# measured `onsets_per_second` of the four real tabs, recorded as numbers rather than
+# read from `songs/` -- a test that depends on the player's disk is a test that fails
+# when they import a song, and §37 already flagged that shape.
+#: ``(song, measured onsets per second, the band it should land in)``.
+REAL_LIBRARY: tuple[tuple[str, float, str], ...] = (
+    ("Sweet Child O' Mine", 2.02, "Easy"),
+    ("Hotel California", 2.91, "Medium"),
+    ("Sweet Child O' Mine (Live)", 3.37, "Medium"),
+    ("Afterlife", 3.90, "Hard"),
+)
+
+
+def test_the_bands_separate_the_real_library() -> None:
+    """**The assertion that would have caught it.**
+
+    A library where every song is "Medium" is not a library of similar songs; it is a
+    band that is too wide to say anything. If the boundaries are ever widened again,
+    this fails before anyone imports a tab and wonders whether the label is broken.
+    """
+    bands = {difficulty_band(rate) for _name, rate, _band in REAL_LIBRARY}
+    assert len(bands) >= 3, (
+        f"the real library spans {bands}, so the bands are not discriminating. "
+        "A beginner riff and a modern metal track are not the same difficulty."
+    )
+    assert "?" not in bands, "a real tab banded as unknown"
+
+
+@pytest.mark.parametrize(
+    "name,rate,expected", REAL_LIBRARY, ids=[row[0] for row in REAL_LIBRARY]
+)
+def test_each_real_tab_lands_where_it_belongs(name: str, rate: float, expected: str) -> None:
+    """Named, so a failure says which song moved and in which direction.
+
+    The expectations are judgements about the songs -- Sweet Child O' Mine is the riff
+    everyone learns first, Afterlife is not -- written down so that a boundary move
+    has to be argued for rather than noticed.
+    """
+    assert difficulty_band(rate) == expected, (
+        f"{name} at {rate} onsets/s banded as {difficulty_band(rate)}, expected {expected}"
+    )
+
+
+def test_no_real_tab_claims_expert() -> None:
+    """Expert is left unclaimed, and that is deliberate.
+
+    Nothing in the library is that fast, and a band nothing reaches is the same defect
+    as a band everything lands in. It should start claiming songs as soon as some are
+    actually shred-fast -- and this is where that will be noticed.
+    """
+    assert "Expert" not in {difficulty_band(r) for _n, r, _b in REAL_LIBRARY}
+
+
+def test_the_band_boundaries_are_ordered_and_distinct() -> None:
+    """A band that is not strictly increasing is a band that cannot be reasoned about."""
+    bounds = (EASY_BELOW, MEDIUM_BELOW, HARD_BELOW)
+    assert list(bounds) == sorted(bounds), bounds
+    assert len(set(bounds)) == 3, "two boundaries share a value, so a band is empty"
+    assert 0 < EASY_BELOW, "a tab with onsets would be banded below zero"
+
+
+@pytest.mark.parametrize(
+    "rate,expected",
+    [
+        (0.0, "?"),
+        (-1.0, "?"),
+        (0.01, "Easy"),
+        (EASY_BELOW - 0.01, "Easy"),
+        (EASY_BELOW, "Medium"),
+        (MEDIUM_BELOW - 0.01, "Medium"),
+        (MEDIUM_BELOW, "Hard"),
+        (HARD_BELOW - 0.01, "Hard"),
+        (HARD_BELOW, "Expert"),
+        (99.0, "Expert"),
+    ],
+)
+def test_the_boundaries_are_inclusive_on_the_lower_band(rate, expected) -> None:
+    assert difficulty_band(rate) == expected
+
+
+def test_the_band_is_a_pure_function_of_the_rate() -> None:
+    """No chart, no entry, no disk -- which is what makes the table above possible."""
+    from guitaroids.songlib import difficulty_band as direct
+
+    for _name, rate, _band in REAL_LIBRARY:
+        assert direct(rate) == difficulty_band(rate)

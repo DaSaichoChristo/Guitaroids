@@ -161,7 +161,7 @@ guitaroids/
   context.py   AppContext: shared state, outlives every screen
   devices/     (empty; the transport is in audio/)
 scripts/       setup, asset fetchers, import report, screenshots
-tests/       1039 tests
+tests/       1057 tests
 songs/       your tabs and audio (gitignored)
 ```
 

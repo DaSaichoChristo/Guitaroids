@@ -411,12 +411,21 @@ class SongSelect(ScreenBase):
             return
         chart = entry.chart
         self._clear_facts()
+        # **The band carries its own input**: "Hard (3.90 ops)" rather than a separate
+        # row. Two reasons. The card is already tight enough that Practice tempo sits
+        # at the very bottom of it, and an added row pushed that out of view. And the
+        # number belongs next to the label it explains -- §45 is that "10.77 nps"
+        # beside "Medium" read as a broken label, because note density and onset
+        # density are different measures and only one of them was on screen.
+        onsets = chart.onsets_per_second
+        band = entry.difficulty
+        shown = band if onsets <= 0 else f"{band} ({onsets:.2f} ops)"
         for name, value in (
             ("Tempo", f"{chart.tempo} BPM"),
             ("Length", format_duration(chart.duration)),
             ("Notes", f"{chart.note_count}"),
-            ("Density", f"{chart.notes_per_second:.2f} nps"),
-            ("Difficulty", entry.difficulty),
+            ("Note density", f"{chart.notes_per_second:.2f} nps"),
+            ("Difficulty", shown),
             ("Audio", entry.audio_path.name if entry.audio_path else "none (click only)"),
         ):
             self._facts.addRow(heading(name, kind="dim"), heading(value, kind="stat"))

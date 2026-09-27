@@ -173,8 +173,58 @@ def test_the_facts_include_tempo_notes_and_difficulty(screen: SongSelect) -> Non
         for row in range(screen._facts.rowCount())
         for role in roles
     )
-    for expected in ("Tempo", "Length", "Notes", "Density", "Difficulty", "Audio"):
+    for expected in (
+        "Tempo",
+        "Length",
+        "Notes",
+        "Note density",
+        "Difficulty",
+        "Audio",
+    ):
         assert expected in rendered
+
+
+def test_the_density_shown_is_the_one_the_band_is_computed_from(screen: SongSelect) -> None:
+    """The band must be checkable against a number the player can see.
+
+    The card showed **note** density beside a difficulty banded on **onset** density,
+    and the onset figure appeared nowhere. A player reading "10.77 nps" next to
+    "Medium" cannot verify the label, and the numbers really are different -- a chord
+    is six notes and one onset. §45 is that this read as a bug in the band rather than
+    as two measures.
+
+    The rate travels in the Difficulty cell rather than in a row of its own: the card
+    is tight enough that a row pushed Practice tempo out of view, and a number belongs
+    beside the label it explains anyway.
+
+    Asserted on the rendered rows rather than on the properties, because the thing
+    that was wrong was a label on screen.
+    """
+    from PySide6 import QtWidgets
+
+    roles = (QtWidgets.QFormLayout.ItemRole.LabelRole, QtWidgets.QFormLayout.ItemRole.FieldRole)
+    rows = {
+        screen._facts.itemAt(row, roles[0]).widget().text(): screen._facts.itemAt(
+            row, roles[1]
+        ).widget().text()
+        for row in range(screen._facts.rowCount())
+    }
+    chart = screen._selected_entry().chart
+    entry = screen._selected_entry()
+
+    # The band, and the rate that produced it, in the same cell. Asserted on the
+    # rendered text because the defect was a label on screen, not a number in a
+    # property.
+    assert rows["Difficulty"] == f"{entry.difficulty} ({chart.onsets_per_second:.2f} ops)"
+
+    assert rows["Note density"] == f"{chart.notes_per_second:.2f} nps"
+
+    # Note that this fixture is chordless, so the two rates coincide at 0.8 and the
+    # cell cannot demonstrate that the *right* one is shown -- only that a rate is.
+    # What makes the choice visible is a real tab: on Hotel California the numbers are
+    # 10.77 and 2.91, and §45's first version put only the first next to the band.
+    # `test_onset_count_survives_collapse` in test_chart.py covers the invariance that
+    # makes the distinction matter at all.
 
 
 def test_every_track_is_offered(screen: SongSelect) -> None:

@@ -189,24 +189,52 @@ class SongEntry:
 
     @property
     def difficulty(self) -> str:
-        """Coarse band from **onset** density. Rough on purpose -- see §6.7.
+        """Coarse band from **onset** density. See :func:`difficulty_band`."""
+        return difficulty_band(self.onsets_per_second)
 
-        Onsets rather than notes, and the reason is §21: a chord is one thing to
-        hit, so banding on note count would make the setting quadruple the density
-        of every song and push the whole library into "Expert" without the songs
-        having got any harder. The displayed density stays note-based, because
-        "10.77 nps" is the truth about how much is written down.
-        """
-        rate = self.onsets_per_second
-        if rate <= 0:
-            return "?"
-        if rate < 2.0:
-            return "Easy"
-        if rate < 4.5:
-            return "Medium"
-        if rate < 7.0:
-            return "Hard"
-        return "Expert"
+
+#: Difficulty band boundaries, in **onsets** per second.
+#:
+#: **These were wrong, and every tab in the library said "Medium".** The first set was
+#: 2.0 / 4.5 / 7.0, which put the whole library in one 2.5-wide band: measured onsets
+#: per second are 2.02, 2.91, 3.37 and 3.90 for Sweet Child O' Mine, Hotel California,
+#: Sweet Child O' Mine (Live) and Afterlife. Four genuinely different rock tabs, one
+#: label, and nothing on screen to say why.
+#:
+#: That is a real band being 2.5 wide, not four songs being the same. A beginner riff
+#: and a modern metal track are not the same difficulty and the numbers say so.
+#:
+#: **Judgement, not measurement.** Four tabs is a thin sample, and the boundaries above
+#: are the numbers that separate them with room left over -- `Expert` is deliberately
+#: unclaimed, because nothing in the library is that fast. A larger library may want
+#: these moved; `test_the_bands_separate_the_real_library` is what will notice.
+EASY_BELOW = 2.5
+MEDIUM_BELOW = 3.5
+HARD_BELOW = 5.0
+
+#: Shown when there is no rate to band on -- an unparsed tab, or an empty chart.
+UNKNOWN_DIFFICULTY = "?"
+
+
+def difficulty_band(onsets_per_second: float) -> str:
+    """Coarse band from **onset** density. A pure function of one number.
+
+    Onsets rather than notes, and the reason is §21: a chord is one thing to hit, so
+    banding on note count would make the setting quadruple the density of every song
+    and push the whole library into "Expert" without the songs having got any harder.
+    The *displayed* density stays note-based, because "10.77 nps" is the truth about
+    how much is written down -- which is why the song select also shows the onset
+    rate, or the band looks inexplicable next to the number the player can see.
+    """
+    if onsets_per_second <= 0:
+        return UNKNOWN_DIFFICULTY
+    if onsets_per_second < EASY_BELOW:
+        return "Easy"
+    if onsets_per_second < MEDIUM_BELOW:
+        return "Medium"
+    if onsets_per_second < HARD_BELOW:
+        return "Hard"
+    return "Expert"
 
 
 def classify_error(exc: ChartError) -> tuple[Status, str]:
