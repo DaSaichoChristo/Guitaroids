@@ -257,10 +257,18 @@ def test_every_module_name_alias_is_real() -> None:
 
 
 def test_the_audio_pins_are_marked_as_unbuilt(requirements: dict[str, str]) -> None:
-    """`sounddevice` and `soundfile` are for §1.5, and nothing plays audio yet.
+    """`soundfile` is still a milestone pin, and it still is not imported.
 
-    Recorded because "the dependency is there" and "the feature is there" are
-    different claims, and only one of them is true.
+    The docstring here used to say "`sounddevice` and `soundfile` are for §1.5, and
+    nothing plays audio yet", which stopped being true in §23 -- the synth renders a
+    real tab and the transport plays it. `sounddevice` is now imported by
+    `audio/transport.py` and earns its place; `soundfile` is not imported anywhere,
+    because the app synthesises audio from a Chart and never decodes a file.
+
+    So the test keeps exactly the half that is still true, and the marker it checks
+    ("audio milestone") is what stops `soundfile` from being an unexplained pin. If
+    backing-track support or a WAV export ever lands, that pin becomes "imported
+    today" and this test should be deleted rather than relaxed.
     """
     text = REQUIREMENTS.read_text()
     for name in ("sounddevice", "soundfile"):

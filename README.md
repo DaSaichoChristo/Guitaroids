@@ -42,7 +42,7 @@ The app opens **full screen** — no title bar, no taskbar entry.
 
 ```bash
 .venv/bin/python -m guitaroids                      # the app, full screen
-.venv/bin/python -m guitaroids --windowed           # 960x600 window instead
+.venv/bin/python -m guitaroids --windowed           # 960x640 window instead
 .venv/bin/python -m guitaroids --songs /path/tabs   # a different library
 .venv/bin/python -m guitaroids --self-test          # build the UI, render, exit
 ```
@@ -53,7 +53,7 @@ for the window to be exposed before reporting, because until the WM has done its
 round trip the window is still sitting at its minimum size.
 
 Five of the six screens are real: the main menu, **song select** (pick a tab, pick a
-track, tune the audio offset), **import GP** (copy a tab into the library),
+track, tune the audio offset, set a per-song practice tempo), **import GP** (copy a tab into the library),
 **preferences**, and **game** — three bars of tab notation (the bar you just played,
 the current one, and the one coming) with a line sweeping left to right through the
 current bar, played with the number keys `1`–`6` and judged PERFECT/GOOD/MISS.
@@ -94,11 +94,13 @@ Check a library without launching the GUI:
 
 ```
 scanned songs/
-  1 tab(s): 1 playable, 0 problem(s)
+  3 tab(s): 3 playable, 0 problem(s)
 
 PLAYABLE
   slug                     title                   bpm  notes    len diff     chord  audio
-  eagles_the-hotel_califo  Hotel California         76   1108   6:20 Medium       6  -- metronome only --
+  eagles_the-hotel_califo  Hotel California         76   4099   6:20 Medium       6  -- metronome only --
+  guns_n_roses-sweet_chil  Sweet Child O' Mine     127   2015   5:34 Medium       5  -- metronome only --
+  guns_n_roses-sweet_chil  Sweet Child O' Mine (  140   3650   5:12 Medium       6  -- metronome only --
 
   tracks in eagles_the-hotel_california_5:
     #3   12-stg Guitar (1)        GM 25    4099 notes  <- default

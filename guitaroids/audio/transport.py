@@ -147,7 +147,8 @@ def apply_volume(samples: Samples, volume: float) -> Samples:
     """Scale a finished mix by ``volume``, in place where possible.
 
     **0.0 to 1.0, and that ceiling is the point.** `render_chart` normalises every
-    render to a 0.95 peak (§22), so 1.0 is already the loudest correct output and any
+    render to `TARGET_PEAK` (0.9, with the limiter's ceiling at 0.95 -- §22), so 1.0 is
+    already the loudest correct output and any
     slider above it can only clip. A caller that wants more headroom wants a quieter
     *source*, not a louder master, so this raises rather than quietly over-driving.
 
@@ -213,7 +214,7 @@ class Transport:
         self._volume = volume
         #: The buffer as played, already scaled. Scaled ONCE here rather than in the
         #: callback: the gain belongs after `render_chart` has normalised the peak to
-        #: 0.95 (§22), so it cannot be undone downstream, and a per-callback multiply
+        #: 0.9 (§22), so it cannot be undone downstream, and a per-callback multiply
         #: would put arithmetic in the real-time path for no benefit.
         self._buffer = interleaved(apply_volume(samples, volume))
         self._sample_rate = sample_rate

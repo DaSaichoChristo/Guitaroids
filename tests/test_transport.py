@@ -437,7 +437,7 @@ def test_zero_volume_is_silence_of_the_right_length() -> None:
 
 
 def test_volume_above_one_raises_rather_than_over_driving() -> None:
-    """The 0.95 peak leaves no headroom, so 1.5 could only clip.
+    """A 0.9 peak leaves no headroom, so 1.5 could only clip.
 
     Raising is the honest answer: §22 measured the render's peak precisely so that
     this ceiling means something. Silently limiting instead would hide the fact that

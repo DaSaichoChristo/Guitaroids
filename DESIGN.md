@@ -3318,3 +3318,196 @@ append-only history and stay.
 - **The header is long.** Eight pins and a page of prose, and the balance may be
   wrong. It is long because every caveat in it cost an afternoon to learn, which is
   the defence; if it grows again it should probably move to a doc.
+
+## §28 — Two searches, three settings that weren't, and tests for the documents (2026-09-26)
+
+**Tests: 845 in total — 832 of them excluding `tests/test_docs.py`, which is the
+number `AGENTS.md` and `README.md` quote, for the reason §28.4 gives.** Five commits.
+Two of them fix bugs that had been shipping inside files that were supposed to be
+true, and one adds the mechanism that stops the category from recurring.
+
+### 28.1 There were two soundfont searches, and only one of them was tested
+
+`paths.find_soundfont` was documented, deliberate, and covered by five tests. It was
+also **dead**: `render.py` had a private copy of the same function, and the private
+copy is the one that ran.
+
+They did not agree:
+
+|  | `paths` (tested) | `render` (used) |
+|---|---|---|
+| `$GUITAROIDS_SOUNDFONT` | yes, `expanduser()` too | yes, **no** `expanduser()` |
+| `assets/` | 2 names | 3 names |
+| `/usr/share/sounds/*` | 9 candidates | **none** |
+
+So a user with a soundfont installed system-wide got the **pluck synth**, silently,
+while `tests/test_paths.py` asserted that discovery worked. And
+`$GUITAROIDS_SOUNDFONT=~/guitar.sf2` — what a person actually types — found nothing,
+because the unexpanded tilde was compared with `is_file()`. One typo in the
+environment variable returned `None` outright instead of falling through, which
+downgraded the whole app.
+
+This is §21.2's failure in the shape §21.2 warns about specifically: every test
+covered the module and none covered the **seam**. The renderer asked for a soundfont
+and got a good one, from a different implementation than the one under test.
+
+The fix is deletion. `render.py` imports `paths.find_soundfont`, and the one name the
+private copy knew that the tested one did not — `Guitarramelodica.sf2`, the FluidR3
+download's filename — moves into `_ASSET_SOUNDFONTS` so the merge loses nothing.
+
+Two tests. The first asserts **identity** (`render.find_soundfont is
+paths.find_soundfont`), which catches the renderer reaching for a different function.
+The second is an absence test against `render.py`'s **source**, because a behavioural
+test cannot see a function written twice under one name.
+
+A third version of that second test asserted `"find_soundfont" not in
+vars(render).get("__all__", []) or True`, which cannot fail. It was removed before
+it was ever run, which is the only reason it was noticed: a test that cannot fail is
+worse than no test, because it looks like evidence.
+
+### 28.2 Three settings that were saved, migrated, shown, and read by nothing
+
+`master_volume`, `click_volume` and `audio_device`. The volume sliders moved and the
+file on disk changed and the sound was identical, at full volume, forever.
+
+`audio_device` is the instructive one, because **the seam already existed**.
+`Transport.__init__` took a `device` argument, `context.start_playback` forwarded it
+to the stream, and the game screen's single call site omitted it, so the default won.
+That is §21.2 verbatim — *"both `loader.start()` call sites omitted the argument and
+the loader's own default won"* — which is why both parameters are now **required with
+no default**. A default is a standing invitation to omit an argument, and
+`test_volume_and_device_stay_required` fails the moment one comes back.
+
+**Where the gain goes was the only real question.** `render_chart` normalises every
+render to `TARGET_PEAK` (0.9, with the limiter's ceiling at 0.95 — §22), so gain
+applied inside the render would be normalised straight back out, and a per-callback
+multiply would put arithmetic in the real-time path that §26.3 has two core dumps
+about. So it is applied **once**, in `Transport.__init__`, to a buffer that is
+already built. `1.0` is the loudest correct output, and above that it raises rather
+than over-driving: §22 measured that peak precisely so the ceiling would mean
+something, and silently limiting would hide the fact that the player asked for
+something the pipeline cannot give.
+
+`click_volume` is applied at the **mix** step instead, and that is not a style choice.
+Music and click are one array by the time the transport sees them, so the two volumes
+are separable at exactly one moment and no other.
+
+A master of `0.0` is still a playing song: the transport keeps its duration and the
+`-1.0` sentinel still means "no stream", because §23 already paid once for confusing
+a negative count-in position with a dead device.
+
+**The picker was a placeholder that outlived its own explanation.** `preferences.py`
+had a disabled "Audio output" combo and a note saying device picking *"arrives with
+the audio and input layer"*. The audio layer arrived in §23. The combo is now live,
+populated from `sounddevice` the way `transport.device_report` already does it —
+imported inside the function, so building the screen never opens PortAudio — and a
+stored device that has since been unplugged is shown as "not connected" rather than
+dropped, because dropping it turns an honest failure into a silent fall back. The
+microphone combo stays disabled and says "not yet": `input_device` is read by nothing,
+and offering a choice the app cannot honour is the failure mode, not the fix.
+
+The two tests that asserted those pickers were **disabled** and **not ready** now
+assert the opposite for output and the same for input, plus an absence test pinning
+the stale note.
+
+**These seam tests were mutation-checked**: reverting the three arguments to hardcoded
+values fails exactly three tests, and restoring them passes. That is the only evidence
+a seam test does anything — a test written alongside the bug tends to agree with it.
+
+### 28.3 Two of them crashed the interpreter before they were right
+
+Worth recording, because both looked like passing tests.
+
+The first wrapped the context in a `__getattr__` proxy and assigned it to
+`screen.context`, which PySide type-checks. The second left a real PortAudio stream
+open behind a test that only meant to look at an argument; the transport was collected
+while the callback was still writing into its buffer — §26.3 again — and the failure
+surfaced **200 tests later in an unrelated file** as a tuple type-flag assertion. No
+new test opens a device here; the device-free half of the guarantee lives in
+`test_transport.py`, and a comment on `record_playback_calls` records why.
+
+### 28.4 `tests/test_docs.py`, and four of its tests being wrong
+
+The pattern is §25.4's: an absence test written against the **artifact**. §27 fixed a
+false claim in `requirements.txt`, wrote down that it had fixed all such claims — and
+`README.md` was still saying "the ONLY supported install path". So the sweep: counts
+that drift every few days, `§N` references that outlive their sections (and
+`DESIGN.md` being append-only makes a dangling citation impossible to spot by
+reading), paths quoted in prose and deleted from disk, superseded claims, and code
+fences.
+
+It found **11 problems** on its first run. Two worth naming:
+
+- `AGENTS.md` had **five** fences, so everything from "Six things that will bite you"
+  to the end of the file — the six warnings, "Unblock this first", "The next blocker"
+  and the whole audio section — rendered inside a code block. In the file every agent
+  reads first, and invisible to anyone reading the source, which is perfectly well
+  formed. `README.md` had seventeen.
+- `README.md` said **"There is no audio yet... the audio clock is the next
+  milestone"**, two sections after §23 made the audio device the clock, in the same
+  file that elsewhere described the audio layers as built.
+
+**Four of the new tests were themselves wrong on the first run**, which is the part
+worth keeping:
+
+- The webcam test scanned for `mediapipe` and `cap.read()` and flagged the stack
+  summary (wrapping had put `(§24, §25)` on another line) and then the xcb
+  troubleshooting note, which is *accurate* and merely mentions the package. Keywords
+  cannot tell "mentions" from "asserts as current", so it now checks the one sentence
+  that genuinely instructed the reader.
+- A backtick-parity test flagged two inline code spans that **wrap across a line**,
+  which is valid Markdown. Deleted — an inline span may wrap, so the check has no
+  sound basis. The fence count has no such ambiguity.
+- The path check resolved bare names like `settings.py` against the repository root
+  and reported sixteen missing files that all exist under `guitaroids/`. It now
+  searches the roots prose actually uses.
+- "Only this file may sweep the tree" was a rule nobody asked for, and it contradicted
+  the sweep added to `test_requirements.py` one commit earlier. Deleted.
+
+The test count is **self-referential**, so it counts every test except this file's, and
+the documents say so in the sentence that states the number. A test asserting the suite
+has 832 tests while adding itself to the suite fails on arrival; the alternative is not
+checking.
+
+Absence tests only where a **replacement fact exists**. A deleted file needs a
+declared-absences list, and a companion test fails the moment an entry becomes wrong —
+an allowlist that never shrinks is where things go to hide.
+
+Verified by mutation: reintroducing the audio claim, adding a fence, and changing the
+count each fail exactly one test.
+
+### 28.5 Two smaller things the sweep turned up
+
+**§27.4 was wrong twice, and correcting it here is the append-only convention
+working.** It said all three files naming the synth were fixed, while a fourth
+(`assets/ATTRIBUTION-soundfont.md`) still said Karplus-Strong *and* pointed at
+`guitaroids/audio/synth_numpy.py`, a module that has never existed. And it credited
+**§24** for the pluck synth, which §24 does not contain — §24 is the microphone, and
+its own "Not done" list is where `audio/pitch.py` is admitted to not exist. The synth
+arrived with the audio work in §23.1.
+
+`requirements.txt` said **"Eight pins: seven direct dependencies"** and was wrong on
+both counts: seven pins, of which four are imported today, two are deliberate
+transitives, and one (`soundfile`) is a named milestone for backing audio. The three
+labels in that file are load-bearing — `test_requirements.py` reads them to decide
+whether each pin is explained, so paraphrasing "transitive" as "transit" silently
+un-justified `attrs`, which is how a comment edit becomes a test failure.
+
+And `AGENTS.md` stated the §22 gain paragraph **twice**, verbatim, with a superseded
+"raise it by 3-4x" in both copies; the real gain is computed from the measured peak
+and reported as `gain_applied`. The clock bullet was also stated twice.
+
+### Not done — §28
+
+- **`tests/test_docs.py` checks `planned` rows not at all.** A `live` row is true
+  today and that is the standard; a `planned` row is a statement of intent, and the
+  interesting question — has this been quietly not built? — needs a human.
+- **The bare-install verification is still manual** (§27.3). A CI job would make it a
+  fact, and would be the natural place to run this file against a fresh clone.
+- **`DECLARED_ABSENT` is an allowlist of two.** It fails when an entry becomes wrong,
+  which is the property that matters, but a doc mentioning a third nonexistent file
+  will be reported as an error rather than as a judgement call.
+- **The song library in `README.md` is a pasted transcript**, now correct, and it will
+  go stale the next time a tab is imported. Nothing checks it, because "the library
+  has three tabs" is a fact about the user's disk, not the repository.
+- **A practice tempo still does not slow the audio** (§23, §24). Unchanged here.

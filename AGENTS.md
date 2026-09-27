@@ -44,13 +44,13 @@ says what ran.
   because mediapipe pulled in the GUI OpenCV build and both builds write the same
   `cv2/` directory; all of that went with the webcam (§25). The one install caveat
   left is tinysoundfont's `--no-deps`, and `pip install --dry-run` still reports
-  false success on it.
-  `scripts/setup.ps1` is the PowerShell equivalent; `tests/test_setup_scripts.py`
-  keeps the two from drifting. `requirements.txt` is **7 direct pins, all `==`**,
-  and `tests/test_requirements.py` keeps it honest: no transitive may be pinned
-  there without a stated reason, every pin must be imported today or carry a named
-  milestone, every pin must match the lock, and the install caveats must all still
-  be present.
+  false success on it. `scripts/setup.ps1` is the PowerShell equivalent;
+  `tests/test_setup_scripts.py` keeps the two from drifting. `requirements.txt` is
+  **7 pins, all `==`** — four imported today, two deliberate transitives, one named
+  milestone — and `tests/test_requirements.py` keeps it honest: no transitive may be
+  pinned there without a stated reason, every pin must be imported today or carry a
+  named milestone, every pin must match the lock, and the install caveats must all
+  still be present.
 - **Layers:** `ui/` → `session/` → `devices/` → `model/`, one-directional. `model/`
   is pure data with zero I/O. `devices/` never imports `session/` or `ui/`.
 - **The clock is the crux.** `song_pos = (stream.time - t0) - stream.latency`, and
@@ -71,9 +71,6 @@ says what ran.
 - **Timing:** `seconds = beat.start / 960 * (60 / song.tempo)`. `Beat.start` is an
   **absolute** tick, so note times are recomputed against a running offset when
   repeats are unrolled.
-- **The note clock is the audio device's**, `song_pos = (stream.time - t0) -
-  stream.latency`, and `t0` is read from the device at `play()` — `stream.time` is
-  not a count of seconds since you opened the stream (§23.3).
 - **`.gpx` is unreadable.** PyGuitarPro 0.11 handles GP3/GP4/GP5 only; GP7/8's
   default `.gpx` raises `unsupported version`. Surfaced as
   `Status.UNSUPPORTED_VERSION`.
@@ -199,21 +196,17 @@ way of being got wrong that looks fine:
 
 **Soundfonts do not clip — §7.5 got that backwards.** A six-note chord peaks at
 **0.22**, not 1.0, because the buffer was read as int16 instead of float32 (§22).
-`sfload(gain=...)` really is useless, so apply gain to the rendered buffer — but
-**raise** it by 3-4x, do not tame it. `generate()` returns a `memoryview` of stereo
-float32; read it as anything else and you get NaN or a fake clip.
+`sfload(gain=...)` really is useless, so gain is applied to the rendered buffer — and
+**raised**, because the render is quiet, not hot. The gain is computed from the
+measured peak (`target_peak / peak`, capped at 12x) rather than fixed, and reported as
+`gain_applied`; the limiter's ceiling is 0.95. `generate()` returns a `memoryview` of
+stereo float32; read it as anything else and you get NaN or a fake clip.
 
 `tinysoundfont` must be installed with `--no-deps`: its `pyaudio` dependency has no
 Linux wheel and cannot be built (no `portaudio.h`). `pyaudio` is a lazy import used
 only for real-time playback, so offline rendering never needs it. Locked in by
 `tests/test_audio_deps.py`. Note `pip install --dry-run` gives a false positive here
 — it exits 0 on a package that will not actually build.
-
-**Soundfonts do not clip — §7.5 got that backwards.** A six-note chord peaks at
-**0.22**, not 1.0, because the buffer was read as int16 instead of float32 (§22).
-`sfload(gain=...)` really is useless, so apply gain to the rendered buffer — but
-**raise** it by 3-4x, do not tame it. `generate()` returns a `memoryview` of stereo
-float32; read it as anything else and you get NaN or a fake clip.
 
 ## Rules
 

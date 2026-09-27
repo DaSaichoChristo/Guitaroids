@@ -1,7 +1,7 @@
 # Guitaroids — runtime dependencies.
 #
-# Eight pins: seven direct dependencies, plus one transitive that is deliberate.
-# Read this file before changing it, because the interesting parts are the
+# Seven pins: four direct, two deliberate transitives, one named milestone. Read
+# this file before changing it, because the interesting parts are the
 # comments and the ones that used to be warnings.
 #
 #   ==> `scripts/setup.sh` is the supported path, and it is now a convenience
@@ -68,11 +68,21 @@
 # relies on it exists. Both kinds belong here, and pretending otherwise is how
 # requirements.txt becomes either a `pip freeze` in disguise or a wish list.
 #
-#   imported today      PySide6, shiboken6, numpy, sounddevice, PyGuitarPro,
-#                       attrs (a deliberate transitive pin)
-#   audio milestone     soundfile (§3.1, decoding) — not imported yet. The synth
+# Seven pins, which is three kinds of thing:
+#
+#   imported today      PySide6, numpy, sounddevice, PyGuitarPro
+#   deliberate          shiboken6, attrs -- transitive packages pinned on purpose, so
+#                       a release cannot change a tested code path underneath us.
+#                       Nothing imports either: shiboken6 is PySide6's binding layer
+#                       and attrs is PyGuitarPro's frozen models.
+#   audio milestone     soundfile (§3.1, decoding) -- not imported yet. The synth
 #                       renders straight from the Chart and nothing decodes a file,
 #                       so this is pinned for the day a song has backing audio.
+#
+# The three labels are load-bearing: `tests/test_requirements.py` reads them out of
+# this file to decide whether each pin is explained, so paraphrasing them ("transit",
+# "planned") silently un-justifies a pin. The test also fails if a pin is neither
+# imported nor explained, which is the rule this list exists to satisfy.
 
 PySide6==6.11.2
 shiboken6==6.11.2

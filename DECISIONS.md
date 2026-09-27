@@ -30,6 +30,13 @@ Anything decided *not* to do — rejected libraries, superseded reasoning, the
 open questions — is deliberately **not** here. That all lives in `DESIGN.md`, which
 is where the "why" belongs.
 
+**What keeps this file honest:** `tests/test_docs.py` checks the rows above against
+the repository, not against anyone's memory. Counts, `§N` references resolving to
+real sections, file paths that exist, and the superseded claims staying superseded.
+A row that goes stale fails a test rather than being found six months later. Rows
+marked `planned` are **not** checked — the point of this file is that a `live` row
+is true today, and `planned` is a statement of intent.
+
 ---
 
 ## Stack & dependencies
@@ -39,13 +46,17 @@ is where the "why" belongs.
 | PySide6 6.11, Qt **Widgets + QPainter**, not QML | live | §1.2 |
 | A bare `pip install -r requirements.txt` **works** — verified in a clean venv, and the scripts say what they add instead of forbidding it | live | §27.2 |
 | The synth fallback is the numpy **pluck**, not Karplus-Strong, in every file that names it | live | §27.4 |
+| **One** soundfont search — `paths.find_soundfont`, the one with tests. The renderer used a private copy that could not see a system soundfont | live | §28.1 |
+| `start_playback(volume=, device=)` are **required with no default**, read from `Settings` by the caller, so a call site cannot inherit a default and silently ignore a preference | live | §28.2 |
+| `master_volume` scales the mix **once, in `Transport.__init__`**, above §22's peak normalisation and below the callback; 0.0–1.0, and above 1.0 raises | live | §28.2 |
+| `click_volume` is applied at the **mix** step, which is the only moment music and click are still separable | live | §28.2 |
 | Python **3.12** in `.venv` — the minor version, because that is the constraint | live | §7.1 |
 | ~~mediapipe 1.0.1, Tasks API only~~ — **dropped**; the input is a microphone now | live | §25 |
 | ~~opencv-contrib-python-headless, installed in a strict order after the GUI build~~ — **dropped with it**, and the install trap with that | live | §25.2 |
 | **No webcam, no OpenCV, no cv2** — nothing imports them, and the lock is 18 packages instead of 32 | live | §25.1 |
 | numpy 2.2.6 — the 3.12 ceiling (2.5.3 needs `>=3.12`) | live | §7.1 |
 | soundfile 0.14.0 decodes audio; **no resampler needed** — the stream opens at the file's own rate | live | §3.1 |
-| Install with `scripts/setup.sh`, never a bare `pip install -r requirements.txt` | live | §2.2 |
+| ~~Never `pip install -r requirements.txt`; use `scripts/setup.sh`~~ — **withdrawn**: a bare install works, verified in a clean venv. `setup.sh` is still the supported path, for tinysoundfont, a soundfont and the M0 gate | superseded | §27.2, supersedes §2.2 |
 | Requirements stay **curated**, with `pip freeze` kept separately as a lock file | live | §6.2 |
 | tinysoundfont 0.3.7, installed **`--no-deps`** from `requirements-optional.txt` | live | §7.5, §9 |
 | ~~mido~~ — **taken off the table**; no MIDI round trip, the synth reads the `Chart` | live | §9 |
@@ -59,7 +70,7 @@ is where the "why" belongs.
 | Four layers, `ui/` → `session/` → `devices/` → `model/`, strictly one-directional | live | §1.3 |
 | `model/` is **pure**: no Qt, no sounddevice, no audio I/O of any kind | live | §1.3 |
 | `devices/` never imports `session/` or `ui/` | live | §1.3 |
-| Four threads; the GUI thread never blocks on `cap.read()`, audio `write()`, or inference | live | §1.4 |
+| Audio is fed by **PortAudio's callback**, so nothing of ours is inside the driver and there is no feeder thread to join — the GUI thread never blocks on `write()` or inference | live | §26.3, supersedes §1.4 |
 | ~~mediapipe `VIDEO` mode, not `LIVE_STREAM`~~ — superseded, there is no capture thread | live | §25 |
 | `QApplication` is a process-wide singleton with a fixed platform — test platforms in **subprocesses** | live | §5.3 |
 | Screens never own game objects; `GameSession` outlives them | live | §1.7 |
@@ -96,7 +107,7 @@ is where the "why" belongs.
 | `AppContext` stays **free of Qt**; a screen owns its own loader | live | §11 |
 | The app opens **full screen** (`showFullScreen`, not maximized); `--windowed` opts out | live | §12 |
 | Before reporting geometry, the entry point **waits for the window to be exposed** | live | §12 |
-| **Nothing scales with the screen** — type and control widths are fixed pixels | live | §12 |
+| ~~Nothing scales with the screen~~ — **reversed**: every design-unit length goes through `theme.px()` and the factor is `clamp(height/1080, 1.0, 1.5)` | superseded | §14, supersedes §12 |
 | A vertical layout filling a variable-height container **needs a stretch item**, or it shares surplus height equally | live | §13 |
 | `ScreenBase.showEvent` **pins every wrapped label's height to its size hint**, so a layout cannot clip the last line | live | §13 |
 | UI scale is `clamp(screen_height / 1080, 1.0, 1.5)`; 1080p is 1.0 and never changes | live | §14 |
@@ -165,7 +176,7 @@ The three `assumed` rows have never been seen hold:
 - **`.gpx`** — read from guitarpro's version-dispatch table, never actually hit.
   A user's real tab would be needed to see this fire.
 - **`passes = stored + 1`** — derived from `gp5.py:327-328`, which decrements the
-  stored value. The one real tab in `songs/` is written out linearly and uses **no
+  stored value. The tabs in `songs/` are written out linearly and use **no
   repeat barlines at all**, so the unroller has still never run on real notation.
   `repeats._repeat_passes` names itself as the line to flip if a real file disagrees.
 - **Alternative endings** — covered only by synthetic fixtures, for the same reason.
@@ -174,14 +185,14 @@ The three `assumed` rows have never been seen hold:
 
 | Decision | Status | Ref |
 |---|---|---|
-| Keyboard input **always** works as a fallback — a demo on an unfamiliar laptop has no camera and must not crash | live | §1.1 |
-| Strumming hand's downward wrist velocity fires all active lanes | planned | §1.4 |
+| Keyboard input **always** works as a fallback — a demo laptop may have no audio input at all, which is the same failure as having had no camera | live | §1.1, restated §24.4 |
+| ~~Strumming hand's downward wrist velocity fires all active lanes~~ — **retired with the hand-tracking input model**; a concept that appears in no section and has no device | rejected | §24, supersedes §1.4 |
 | The input is a **microphone**, not a webcam: 23ms of block against 30–100ms of camera buffering | live | §24.1 |
-| A detected note is judged on **pitch, not string** — the strings' ranges overlap, and the same note is the same note | live | §24.2 |
+| A detected note is judged on **pitch, not string** — the strings' ranges overlap, and the same note is the same note. Decided, and the **judge's pitch-keyed index does not exist yet** (`press_pitch` is nowhere in the tree) | planned | §24.2 |
 | The keyboard **stays the default** input; a machine with no audio input is a real case | live | §24.4 |
 | `InputMode.CAMERA` is read as **`MICROPHONE`**, so an old settings file keeps its meaning | live | §25.5 |
 | An **absence** test must be written against code, not prose — a comment explaining the history defeats it | live | §25.4 |
-| Camera feed mirroring direction (affects handedness) | planned | §1.6 |
+| ~~Camera feed mirroring direction~~ — **retired with the camera**; no device to build it on | rejected | §25, supersedes §1.6 |
 | Hit windows: Perfect ±35ms, Good ±80ms, **expire past 140ms** | live | §1.6, §15.7 |
 | The 80–140ms band resolves the note as a **MISS**, not a stray — one hit, one outcome | live | §15.7 |
 | **Strays are counted but never penalised** — faking through a solo is practice, not cheating | live | §15.7 |
@@ -242,7 +253,7 @@ superseded or gone with the widget.
 | The control lives on **song select**, with the track and the offset — it is a choice about the next attempt, not during one | live | §19.1 |
 | The tempo travels in **`PlayRequest.bpm`**, where `0` means "as written" | live | §19.1 |
 | The rate is **fixed for the run**; nothing can re-time a song that is playing | live | §19.1 |
-| ~~Changing tempo re-anchors the clock origin~~ — **deleted with the mid-song control**; the game is a plain `QElapsedTimer` again | live | §19.1 |
+| ~~Changing tempo re-anchors the clock origin~~ — **deleted with the mid-song control**. (The row also claimed the game reverted to a plain `QElapsedTimer`; that was true for one commit in §19 and was refuted by §23 — the clock is the audio device's) | live | §19.1, §23 |
 | **0 is stored** for "as written", not the written tempo, so a re-exported tab is not held at the old one | live | §19.1 |
 | Both song-select controls save on **Play** — one write per attempt | live | §19.1 |
 | A **generated** backing track that follows the practice tempo | planned | §1.5 |
