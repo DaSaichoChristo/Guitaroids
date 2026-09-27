@@ -210,7 +210,13 @@ class Preferences(ScreenBase):
         form.addRow(note)
 
         self._latency = QtWidgets.QSpinBox()
-        self._latency.setRange(0, 2000)
+        # The model's range, not an arbitrary one. It is asymmetric on purpose
+        # (settings.py): +2s for a genuinely bad interface such as Bluetooth, and
+        # -500ms because the correction can measure out in the other direction.
+        # This control used to be 0-2000, which made the negative half unreachable
+        # exactly when a player needs it -- overshoot, read "early" off the game
+        # screen, and come here to dial it back.
+        self._latency.setRange(-500, 2000)
         self._latency.setSingleStep(5)
         self._latency.setSuffix(" ms")
         self._latency.setToolTip(
@@ -218,7 +224,13 @@ class Preferences(ScreenBase):
             "judged, so a correct note does not read as an early one.\n\n"
             "Start at zero. The analysis window's own 23ms is already compensated "
             "for; this is the trim on top of it, for your own room and your own "
-            "microphone. Guessing it too high makes every note look late."
+            "microphone.\n\n"
+            "The game screen shows your timing as 'Nms late' or 'Nms early'. Put "
+            "that number here: if it says you are 180ms late, enter 180. A value "
+            "that is too HIGH makes every note read as early, because the trim is "
+            "subtracted -- and that is the opposite of the obvious reading, which "
+            "is why it is written down here. Negative is allowed for the same "
+            "reason."
         )
         self._latency.valueChanged.connect(self._on_latency_changed)
         form.addRow(heading("Input latency", kind="dim"), self._latency)

@@ -35,7 +35,7 @@ supersedes §2" resolves without ambiguity.
 
 ## The sections
 
-37 sections, in the order they were written. Dates are all 2026-09-26 or
+38 sections, in the order they were written. Dates are all 2026-09-26 or
 -27 and are in the headings, so they are left out here.
 
 | Section | What it records |
@@ -77,6 +77,7 @@ supersedes §2" resolves without ambiguity.
 | §36 | Reconciling this file with itself |
 | §37 | Auditing `README.md`, and a test that was one word too narrow |
 | §38 | The screenshot tool's false defect, and the one it was hiding |
+| §39 | "Low tempo doesn't work", which was the input-latency setting |
 
 **§33 is missing**, and §36.3 explains why rather than back-filling it: the number was
 reserved for work that was planned, approved and then overtaken by other work, so no
@@ -4525,3 +4526,110 @@ runs.
   of screens' work in a way this section does not change.
 - **No test asserts a docstring's claims**, so §38.4's class of error is still
   unguarded.
+
+---
+
+## §39 — "Low tempo doesn't work", which was the input-latency setting (2026-09-27)
+
+The report: at a low practice tempo the notes stopped being hit, and a large input
+latency buffer did not help. The tempo turned out to be innocent, and the buffer was
+the second half of the problem.
+
+### §39.1 Everything below the judge was measured, not read
+
+Before changing anything, the whole chain was checked against the real library:
+
+| Rate | Hotel California | Judged exactly on the note |
+|---|---|---|
+| 1.0 | 76 BPM, 380.5s | 200 PERFECT |
+| 0.75 | 57 BPM, 507.4s | 200 PERFECT |
+| 0.5 | 38 BPM, 761.1s | 200 PERFECT |
+| 0.25 | 19 BPM, 1522.1s | 200 PERFECT |
+
+Same on all three tabs. So `retime` scales correctly; `chart.duration` needed no
+attention because it is a property of `notes[-1].time` and rescales for free; the
+renderer reads the retimed chart with no cache; `add_count_in` and `count_in_seconds`
+agree (`last` exceeds `needed` only above 1500 BPM); the transport anchors
+`t0 = stream.time + song_start`, which is where `add_count_in` put the track; and
+every per-lane and per-pitch time list is sorted, so the judge's `bisect` is valid.
+The hit windows are fixed in seconds and cannot depend on tempo at all.
+
+**The practice tempo was never broken.**
+
+### §39.2 What was actually happening
+
+The player's second observation was the load-bearing one: **the audio arrives later
+than the note circle.** The tab view and the judge both read `position()`, and
+`position()` is `(stream.time - t0) - stream.latency`. `stream.latency` is whatever
+PortAudio reports, and on a PulseAudio/ALSA stack that under-reports the real acoustic
+arrival lag `L` — it does not include the sound server's own buffering or the DAC. So
+both the circle and the judgement run `L` ahead of the sound, every note is judged
+late by `L`, and `Settings.input_latency_ms` is precisely the trim for it.
+
+**The failure was that `L` was nowhere visible.** The tally says `MISS` and `0%`
+whether you are 180ms late or 1800ms early, and those need opposite corrections. The
+player raised the trim to compensate, overshot into being *early*, and the screen
+looked identical. §21.2's shape one level up: a setting that works, carrying no
+information about whether it is working.
+
+Two things made it worse than merely unhelpful. The tooltip said *"guessing it too high
+makes every note look late"* — **backwards**: the trim is *subtracted*
+(`when = position() - input_latency`), so too high reads **early**. And the spin box
+was `0..2000` while the model has always accepted `-500..2000`, so the one move that
+fixes an overshoot — dial it back negative — was unreachable in the UI.
+
+### §39.3 What was built
+
+- **`Judgement.pressed`.** `update()` resolves notes nobody played, and their
+  `delta_seconds` is how far past the MISS window the clock had moved — always a
+  little over +140ms, and about nobody. Averaging those in biases any calibration
+  toward a permanent +140ms, so the flag exists to keep them out.
+- **`GameState.timing_delta(pitch, position)`.** `press_pitch` is *silent* outside the
+  MISS window by design, so a press 300ms late resolves nothing and carries no
+  information about how late the player was. **A readout fed only by judgements is
+  therefore blind at exactly the offsets that most need reporting.** This asks the
+  question the judgement cannot: signed distance to the nearest *unjudged* note of
+  that pitch, window ignored, found through the sorted list with `bisect` and a bounded
+  outward walk so a long song's per-press cost does not grow with note count.
+- **A timing readout on the game screen**: the **median** of the last 9 played notes,
+  as `180ms late` / `on time`. Median rather than mean because the mean is dragged by
+  the note you fumbled — 5 notes at 200ms and one at 900ms gives a median of 200 and a
+  mean of 300, and the mean would send you to set 300, overshoot, and conclude the
+  readout was broken. It is bounded so a bad patch of playing stops colouring the
+  number, and it lives under the tally rather than in it, because the tally is
+  monospaced with space-aligned columns (§34.1).
+- **The per-note flash now says `MISS  100ms late`.** A bare `MISS` is not actionable;
+  the direction is what tells you which way to move the trim.
+- **The spin box is `-500..2000`**, matching the model, with a test that a hand-edited
+  negative survives an unrelated save — the round trip that used to destroy it.
+
+**Tests: 1014 in total — 998 excluding `tests/test_docs.py`.** Two clean runs.
+
+### Not done — §39
+
+- **`L` has still not been measured on this machine.** Everything here makes it
+  *visible*; nobody has read the number off the screen and set the trim to it. That is
+  the actual verification, and it needs a real run with a real guitar — which is the
+  same blocker §30.5 records.
+- **The detector's own 23ms is folded into `_input_latency()` and therefore invisible
+  in the readout.** The readout shows the *total* correction, so a player who sets the
+  trim to what they read will double-count the detector's share unless the readout says
+  so. The tooltip says the 23ms "is already compensated for", but the number on screen
+  does not subtract it, and the two should be reconciled before someone tunes by the
+  screen.
+- **`timing_delta` is `O(TIMING_SCAN)` per press and unmeasured on a real song.** The
+  cap is 32 either side, which is generous, but 9764 notes of the real library across
+  24 pitches and a press on every 512-sample analysis window is not a load anyone has
+  measured.
+- **A held note still contributes observations.** Once a note is judged, further
+  detections of it fall through to `timing_delta`, which now finds the *next* note of
+  that pitch and reports the player as arriving early for it. The `pressed` flag
+  prevents the judged note from being re-reported; it does not prevent a ringing note
+  from skewing the next one. A player holding a note through a long decay will see the
+  median drift.
+- **The offset readout is not on the results screen.** A player who only wants to know
+  "am I playing late" has to reach a note and read a live HUD; after the song there is
+  nothing. That is the natural place for the median over the whole run.
+- **No test asserts the tooltip is not merely present but correct** beyond the
+  not-backwards check. The wrong-direction claim survived §29.2 to §39 because the
+  tooltip was written once and never re-derived from the arithmetic.

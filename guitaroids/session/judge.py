@@ -33,6 +33,12 @@ GOOD_SECONDS = 0.080
 #: A note later than this past its time is missed whether or not anything is pressed.
 MISS_SECONDS = 0.140
 
+#: How far :meth:`GameState.timing_delta` walks either side of the insertion point
+#: looking for an unjudged note. Bounded so a long song's per-press cost does not
+#: grow with the number of notes at that pitch; 32 is far more than the handful a
+#: player can be plausibly away from.
+TIMING_SCAN = 32
+
 
 class Verdict(Enum):
     PERFECT = "perfect"
@@ -76,6 +82,22 @@ class Judgement:
     pitch: int = 0
     """The detected MIDI pitch, when the judgement came from the microphone. 0 for a
     keypress, and for a note matched by lane."""
+
+    pressed: bool = True
+    """Whether anything was actually played for this note.
+
+    ``False`` only for a note that timed out with no press at all, from
+    :meth:`GameState.update`. The distinction matters because
+    :attr:`delta_seconds` means two different things: for a press it is how late or
+    early *the player* was, and for an expiry it is merely how far past the MISS
+    window the clock had travelled when the screen noticed -- which is always a
+    little over :data:`MISS_SECONDS` and is not a measurement of anything.
+
+    So anything that reads the deltas to work out a player's timing -- a
+    calibration readout, an average -- has to skip these. Averaging them in drags
+    the answer toward a permanent +140ms and makes the offset look larger than it
+    is, which is a calibration that cannot be trusted.
+    """
 
     @property
     def is_penalised(self) -> bool:
@@ -300,6 +322,43 @@ class GameState:
             self.misses += 1
         return best
 
+    def timing_delta(self, pitch: int, position: float) -> float | None:
+        """Signed distance to the nearest **unjudged** note of ``pitch``, ignoring the window.
+
+        ``None`` when the chart has no such pitch, or every note of it is resolved.
+
+        This exists because :meth:`press_pitch` is deliberately silent when a press
+        lands outside the MISS window -- a press 300ms late resolves nothing, because
+        there is no note left to resolve by then. So the judgement carries no
+        information about *how* late the player was, and a timing readout fed only by
+        judgements can never see an offset larger than the window.
+
+        That is backwards: the larger the player's error, the less they could see of
+        it. This asks the question the judgement cannot -- how far is the nearest note
+        this pitch *would* have hit -- so the offset is measurable at any size.
+
+        Signed the same way as :attr:`Judgement.delta_seconds`: positive is late.
+        Uses the sorted per-pitch time list and walks outward from the insertion
+        point, capped, so a long song costs a bounded amount per press rather than a
+        scan of every note of that pitch.
+        """
+        times = self._pitch_times.get(pitch)
+        if not times:
+            return None
+        indices = self._pending_pitch[pitch]
+        slot = bisect_left(times, position)
+        best: float | None = None
+        for offset in range(TIMING_SCAN):
+            for candidate in (slot - 1 - offset, slot + offset):
+                if not 0 <= candidate < len(times):
+                    continue
+                if indices[candidate] in self.by_note:
+                    continue
+                delta = position - times[candidate]
+                if best is None or abs(delta) < abs(best):
+                    best = delta
+        return best
+
     def update(self, position: float) -> list[Judgement]:
         """Resolve every note now past its MISS window. Returns the new misses.
 
@@ -320,6 +379,7 @@ class GameState:
                     lane=lane,
                     note_time=note.time,
                     delta_seconds=position - note.time,
+                    pressed=False,
                 )
                 self.by_note[index] = judgement
                 self.judgements.append(judgement)

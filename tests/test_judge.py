@@ -557,3 +557,94 @@ def test_every_note_in_the_real_library_carries_a_pitch() -> None:
         unpitched += sum(1 for note in chart.notes if note.pitch <= 0)
     assert total > 1000, f"only {total} notes checked; the library looks different"
     assert unpitched == 0, f"{unpitched} of {total} notes have no pitch"
+
+
+# --- timing_delta: measuring an offset the windows cannot see (§39) -----------
+
+
+@pytest.fixture()
+def repeated() -> GameState:
+    """Two notes of the *same* pitch, two seconds apart, on the same string.
+
+    Needed because a pitch-keyed search is only interesting where one pitch has more
+    than one note, and the shared `state` fixture has one note per lane.
+    """
+    return GameState(make_chart([(2.0, 0, 0), (4.0, 0, 0)], collapse=False))
+
+
+def test_timing_delta_measures_a_press_far_outside_the_window(state: GameState) -> None:
+    """The whole reason this exists.
+
+    ``press_pitch`` is silent outside the MISS window by design -- a press 300ms late
+    resolves nothing, because the note it belonged to has already expired. So a readout
+    fed only by judgements is blind at exactly the offsets a player most needs to be
+    told about. This asks the question the judgement cannot.
+    """
+    note = state.chart.notes[0]
+    assert state.press_pitch(note.pitch, note.time + 0.300) is None, (
+        "precondition: nothing is resolved this far out"
+    )
+    assert state.timing_delta(note.pitch, note.time + 0.300) == pytest.approx(0.300)
+
+
+def test_timing_delta_is_negative_when_early(state: GameState) -> None:
+    """Signed like `Judgement.delta_seconds`, so the two can be pooled."""
+    note = state.chart.notes[0]
+    assert state.timing_delta(note.pitch, note.time - 0.250) == pytest.approx(-0.250)
+
+
+def test_timing_delta_finds_the_nearest_of_several_notes_of_one_pitch(
+    repeated: GameState,
+) -> None:
+    """Two notes of one pitch a second apart, pressed between them: the nearer wins.
+
+    A player between two of the same note is reporting on the one they were reaching
+    for, not the one that happens to come first in the chart.
+    """
+    pitch = repeated.chart.notes[0].pitch
+    midpoint = 3.0
+    assert repeated.timing_delta(pitch, midpoint) == pytest.approx(midpoint - 2.0)
+
+
+def test_timing_delta_ignores_notes_already_resolved(repeated: GameState) -> None:
+    """A held note is detected over and over, and must not drag the answer backwards.
+
+    Without this, re-detecting the note just hit would report arrival at the *next* one
+    and the readout would walk away from the truth the longer a note rang.
+    """
+    pitch = repeated.chart.notes[0].pitch
+    repeated.press_pitch(pitch, 2.0)
+    # The 2.0 note is judged and gone, so the only candidate left is the one at 4.0
+    # -- which puts this position 2.0s *before* it. Had the judged note still been
+    # offered, this would have read +0.0 and looked like perfect timing.
+    assert repeated.timing_delta(pitch, 2.0) == pytest.approx(-2.0)
+
+
+def test_timing_delta_is_none_for_a_pitch_the_song_never_uses(state: GameState) -> None:
+    """A pitch with no notes is not a timing observation, it is a stray."""
+    used = {note.pitch for note in state.chart.notes}
+    assert state.timing_delta(max(used) + 40, 1.0) is None
+
+
+def test_timing_delta_is_none_once_every_note_of_that_pitch_is_gone(
+    repeated: GameState,
+) -> None:
+    """Nothing left to be late for, so no answer rather than a wrong one."""
+    pitch = repeated.chart.notes[0].pitch
+    for note in repeated.chart.notes:
+        repeated.press_pitch(pitch, note.time)
+    assert repeated.timing_delta(pitch, 5.0) is None
+
+
+def test_an_expiry_is_not_marked_as_pressed(state: GameState) -> None:
+    """§39. The flag the timing readout depends on to not count an unplayed note."""
+    state.update(2.0 + MISS_SECONDS + 0.001)
+    assert state.judgements, "precondition: something expired"
+    assert all(not j.pressed for j in state.judgements)
+    assert all(j.verdict is Verdict.MISS for j in state.judgements)
+
+
+def test_a_press_is_marked_as_pressed(state: GameState) -> None:
+    note = state.chart.notes[0]
+    state.press_pitch(note.pitch, note.time + CLEAR_MISS)
+    assert state.judgements[-1].pressed is True

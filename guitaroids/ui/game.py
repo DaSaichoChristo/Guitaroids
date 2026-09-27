@@ -29,6 +29,7 @@ one mapping to have.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import replace
 
 from pathlib import Path
@@ -58,6 +59,13 @@ _CENTRED = QtCore.Qt.AlignmentFlag.AlignHCenter
 #: The frame timer. 60Hz is the display; nothing here needs more, and the widget
 #: draws from a position rather than integrating anything.
 FRAME_MS = 16
+
+#: How many recent played notes the timing readout summarises. The **median** of
+#: this many is the player's offset. A mean would be dragged around by the one note
+#: they fumbled; a median throws it away, which is the whole reason for reaching for
+#: it here. 9 is enough to stop reacting to a single bad note and few enough that the
+#: number still moves while a player is adjusting the trim.
+TIMING_SAMPLES = 9
 
 
 class Game(ScreenBase):
@@ -140,6 +148,13 @@ class Game(ScreenBase):
         self._tally.setObjectName("gameTally")
         self._tally.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
 
+        # The player's timing, in one number. Exists because "MISS, 0%" cannot be
+        # acted on: it looks identical whether you are 180ms late or 1800ms early,
+        # and those need opposite corrections. §39.
+        self._timing = heading("", kind="stat", parent=self)
+        self._timing.setObjectName("gameTiming")
+        self._timing.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+
         self._flash = heading("", kind="heading", parent=self)
         self._flash.setObjectName("gameFlash")
         self._flash.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -177,6 +192,9 @@ class Game(ScreenBase):
         pad = px(20)
         self._title.setGeometry(pad, px(12), width // 2, px(40))
         self._tally.setGeometry(width // 2, px(12), width // 2 - pad, px(40))
+        # Under the tally, not beside it: the tally is already the full half-width
+        # and is monospaced, so anything appended to it would break its columns.
+        self._timing.setGeometry(width // 2, px(12) + px(40), width // 2 - pad, px(30))
         self._flash.setGeometry(0, height // 5, width, px(80))
         self._banner.setGeometry(pad, height // 2 - px(40), width - pad * 2, px(80))
         # The bottom row holds Back and nothing else. The key legend used to sit here
@@ -236,6 +254,11 @@ class Game(ScreenBase):
         #: song navigates exactly once however many frames it takes to notice.
         self._result_published = False
         self._last_verdict = None
+        #: Recent *played* notes' signed timing errors, newest last. Only pressed
+        #: judgements: an expired note's delta is the clock's overshoot, not the
+        #: player's, and mixing the two in would bias the answer toward +140ms.
+        self._recent_timing: deque[float] = deque(maxlen=TIMING_SAMPLES)
+        self._refresh_timing()
         self._view.set_chart(chart)
         self._title.setText(chart.title or chart.track_name)
         self._banner.setText("")
@@ -662,10 +685,59 @@ class Game(ScreenBase):
         when = self.position() - self._input_latency()
         judgement = self._state.press_pitch(midi, when)
         if judgement is None:
-            # The common case: a note still sounding, or a detection between notes.
+            # Either a note still sounding, or a press outside the window -- and those
+            # two need different handling. The readout has to be told about the
+            # second, because `press_pitch` is silent out there by design: the bigger
+            # the player's error, the less a judgement-based readout could see of it.
+            self._note_timing(midi, when)
             return
         self._last_verdict = (judgement.verdict, judgement.delta_seconds)
         self._flash.setText(_verdict_text(judgement))
+        self._note_timing(midi, when, delta=judgement.delta_seconds)
+
+    def _note_timing(
+        self, pitch: int, position: float, *, delta: float | None = None
+    ) -> None:
+        """Record one observation of the player's timing.
+
+        Prefers the judgement's own delta, and falls back to asking the judge how far
+        the nearest unjudged note of this pitch was -- so a press that resolved
+        nothing is still measured. See :meth:`GameState.timing_delta` for why the
+        window cannot be the limit on what is visible.
+        """
+        if delta is None:
+            delta = self._state.timing_delta(pitch, position)
+        if delta is None:
+            return
+        self._recent_timing.append(delta)
+        self._refresh_timing()
+
+    def _refresh_timing(self) -> None:
+        """Say how far off the player's playing is, in the direction that helps.
+
+        The median of the last few *played* notes, as a signed number with the
+        direction spelled out. "180ms late" is actionable -- it is the value to put
+        in the input-latency trim -- and it is the difference between a player
+        converging on a correct setting in a handful of notes and one who cannot
+        tell a small lateness from a large earliness, because the tally shows
+        "MISS 0%" for both.
+        """
+        if not self._recent_timing:
+            self._timing.setText("")
+            return
+        ordered = sorted(self._recent_timing)
+        middle = len(ordered) // 2
+        if len(ordered) % 2:
+            median = ordered[middle]
+        else:
+            median = (ordered[middle - 1] + ordered[middle]) / 2.0
+        milliseconds = median * 1000.0
+        if abs(milliseconds) < 5.0:
+            self._timing.setText("timing  on time")
+        elif milliseconds > 0:
+            self._timing.setText(f"timing  {milliseconds:.0f}ms late")
+        else:
+            self._timing.setText(f"timing  {-milliseconds:.0f}ms early")
 
     def _input_latency(self) -> float:
         """Seconds to subtract from every detected note's position."""
@@ -751,11 +823,28 @@ class Game(ScreenBase):
 
 
 def _verdict_text(judgement) -> str:  # noqa: ANN001 - Judgement
-    """The flash shown when a note resolves."""
+    """The flash shown when a note resolves.
+
+    **A played note carries its signed error**, because a bare "MISS" says nothing
+    about what to change. `delta_seconds` is positive when the note was late, so the
+    wording is derived from the sign rather than from the magnitude: a player who is
+    consistently 200ms late needs a *larger* input-latency trim, and one who is 200ms
+    early needs a smaller one -- possibly a negative one -- and "MISS" does not
+    distinguish them.
+
+    A note that expired with no press shows no error, because there is no playing to
+    report: its delta is how far past the window the clock had moved, not an
+    attempt. See `Judgement.pressed`.
+    """
     if judgement.verdict is Verdict.STRAY:
         return ""
-    if judgement.verdict is Verdict.PERFECT:
+    if not judgement.pressed:
+        return "MISS"
+    milliseconds = judgement.delta_seconds * 1000.0
+    if judgement.verdict is Verdict.PERFECT and abs(milliseconds) < 5.0:
         return "PERFECT"
-    if judgement.verdict is Verdict.GOOD:
-        return "GOOD"
-    return "MISS"
+    if abs(milliseconds) < 5.0:
+        name = "PERFECT" if judgement.verdict is Verdict.PERFECT else "GOOD"
+        return name
+    direction = "late" if milliseconds > 0 else "early"
+    return f"{judgement.verdict.value.upper()}  {abs(milliseconds):.0f}ms {direction}"

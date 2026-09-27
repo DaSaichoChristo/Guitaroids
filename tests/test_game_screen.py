@@ -22,7 +22,7 @@ from songbuild import make_chart
 from guitaroids.context import AppContext
 from guitaroids.session.judge import Verdict
 from guitaroids.songlib import Library, SongEntry, Status
-from guitaroids.ui.game import Game
+from guitaroids.ui.game import TIMING_SAMPLES, Game
 from guitaroids.ui.screens import Screen
 from guitaroids.ui.widgets.tabview import TabView
 
@@ -219,11 +219,58 @@ def test_pressing_at_the_note_time_is_perfect(game: Game) -> None:
 
 
 def test_a_miss_flashes_miss(game: Game) -> None:
+    """A missed note says *how* it was missed, because that is the actionable half.
+
+    §39. A bare "MISS" cannot be acted on: 100ms late and 100ms early need opposite
+    corrections to the input-latency trim, and the tally reads "MISS 0%" for both.
+    """
     game._clock = _FrozenClock(2.0 + 0.100)
     _hit(game, 1)
     assert game.state.judgements[-1].verdict is Verdict.MISS
-    assert game._flash.text() == "MISS"
+    assert game._flash.text() == "MISS  100ms late"
     assert game.state.misses == 1
+
+
+def test_an_early_miss_says_early(game: Game) -> None:
+    """The other direction, because the trim is *subtracted* and overshoots early.
+
+    This is the trap the setting walked the user into: they read "consistently late",
+    raised the trim, overshot, and every note then read as early by a larger amount
+    -- with a bare "MISS" on screen, which looks exactly like the original problem.
+    """
+    game._clock = _FrozenClock(2.0 - 0.100)
+    _hit(game, 1)
+    assert game._flash.text() == "MISS  100ms early"
+
+
+def test_a_perfect_within_five_ms_says_just_perfect(game: Game) -> None:
+    """The direction is only worth printing when it is big enough to act on.
+
+    A note hit 3ms early is PERFECT, and "PERFECT 3ms early" is noise on a screen
+    that flashes per note. The threshold is the same 5ms the timing readout uses to
+    say "on time", so the two never contradict each other.
+    """
+    game._clock = _FrozenClock(2.0 - 0.003)
+    _hit(game, 3)
+    assert game.state.judgements[-1].verdict is Verdict.PERFECT
+    assert game._flash.text() == "PERFECT"
+
+
+def test_a_note_that_expired_with_no_press_reports_no_error(game: Game) -> None:
+    """An expiry is not an attempt, so it carries no timing to act on.
+
+    `update()` resolves a note that nobody played, and its `delta_seconds` is how far
+    past the MISS window the clock had travelled -- always a little over 140ms, and
+    about the player. Printing it would put a permanent "MISS 141ms late" on screen
+    for a note that was never played. §39.
+    """
+    game._clock = _FrozenClock(2.0 + 0.150)
+    game.state.update(game.position())
+    expired = game.state.judgements[-1]
+    assert expired.verdict is Verdict.MISS
+    assert expired.pressed is False
+    assert game._flash.text() == "", "no press, no flash"
+    assert game._timing.text() == "", "and nothing for the timing readout to report"
 
 
 def test_a_stray_flashes_nothing(game: Game) -> None:
@@ -1667,3 +1714,115 @@ def test_the_best_accuracy_is_recorded_by_the_game_screen(shell, chart) -> None:
     screen = _finished_screen(shell, chart, with_audio=False)
     screen._tick()
     assert screen.context.settings.best_accuracy_for("test") == pytest.approx(1.0)
+
+
+# --- the timing readout: the number that makes the trim discoverable (§39) -----
+
+
+def _spread_chart(notes: int = 2 * TIMING_SAMPLES + 2) -> "Chart":
+    """A chart with notes spread over time, one lane at a time.
+
+    The shared ``chart`` fixture is six notes all at 2.0s, which is the right shape
+    for judging one note at a time and useless for anything that needs a *sequence*
+    of notes to summarise. `tempo=60` makes a requested second land on that second.
+    """
+    from tests.songbuild import make_chart
+
+    return make_chart(
+        [(2.0 + index * 2.0, index % 6, index % 6) for index in range(notes)],
+        collapse=False,
+    )
+
+
+def _play_offset(game: Game, offset: float, count: int, *, skip: int = 0) -> None:
+    """Play ``count`` real notes, each ``offset`` seconds from where it is due.
+
+    Presses the chart's own pitches at the chart's own times, so a miss is a real
+    miss against a real note and the offset under test is the only variable. `skip`
+    steps over the first few notes, for the test that needs the window to forget.
+    """
+    for note in game.chart.notes[skip : skip + count]:
+        game._clock = _FrozenClock(note.time + offset)
+        game._on_pitch(note.pitch)
+
+
+@pytest.fixture()
+def timed(shell) -> Game:
+    """A game screen over a chart with notes in sequence."""
+    context = context_with(_spread_chart())
+    screen = Game(shell, context)
+    yield screen
+    screen._stop()
+    screen.deleteLater()
+
+
+def test_the_timing_readout_starts_empty(timed: Game) -> None:
+    """Nothing played, nothing claimed. An offset invented from no evidence is a lie."""
+    assert timed._timing.text() == ""
+
+
+def test_the_timing_readout_reports_the_median_as_late(timed: Game) -> None:
+    """Five notes 200ms late, then one at 900ms because the player fumbled.
+
+    The median is 200 and the mean is 300. The mean would send them to set the trim
+    to 300, overshoot by 100ms, and conclude the readout was broken -- which is the
+    failure this exists to prevent. §39.
+    """
+    _play_offset(timed, 0.200, 5)
+    assert timed._timing.text() == "timing  200ms late"
+    _play_offset(timed, 0.900, 1, skip=5)
+    assert timed._timing.text() == "timing  200ms late", "one fumble must not move it"
+
+
+def test_the_timing_readout_says_early_when_the_notes_were_early(timed: Game) -> None:
+    """The direction is the whole value. Early and late need opposite trims."""
+    _play_offset(timed, -0.200, 5)
+    assert timed._timing.text() == "timing  200ms early"
+
+
+def test_the_timing_readout_says_on_time_inside_five_ms(timed: Game) -> None:
+    _play_offset(timed, 0.002, 1)
+    assert timed._timing.text() == "timing  on time"
+
+
+def test_the_timing_readout_ignores_notes_that_expired_unplayed(timed: Game) -> None:
+    """An expiry is not an attempt, so it must not colour the offset.
+
+    `update()` resolves every note past its MISS window whether or not anything was
+    played, and each such judgement carries a delta of a little over +140ms. Counting
+    them would drag any answer toward +140ms and make a correctly-set trim look
+    wrong. §39, and `Judgement.pressed`.
+    """
+    timed._clock = _FrozenClock(40.0)
+    timed.state.update(timed.position())
+    assert timed.state.misses > 5, "the fixture should have expired several notes"
+    assert timed._timing.text() == "", "six unplayed expiries are not a timing"
+
+
+def test_the_timing_readout_forgets_notes_beyond_its_window(timed: Game) -> None:
+    """Bounded, so a bad patch of playing stops colouring the number.
+
+    A player who flubbed the first bar and settled afterwards must see their *current*
+    timing, not an average dominated by notes they have played past.
+    """
+    _play_offset(timed, 0.400, TIMING_SAMPLES)
+    assert timed._timing.text() == "timing  400ms late"
+    _play_offset(timed, 0.0, TIMING_SAMPLES, skip=TIMING_SAMPLES)
+    assert timed._timing.text() == "timing  on time", "the old 400ms must be gone"
+
+
+def test_the_timing_readout_does_not_overlap_the_tally_or_the_flash(game: Game) -> None:
+    """The HUD uses manual geometry, so nothing would stop these colliding but a test.
+
+    The tally is monospaced with space-aligned columns, so the timing cannot be
+    appended to it -- it goes underneath, and "underneath" has to be checked rather
+    than assumed, because `setGeometry` will happily place a label on top of its
+    neighbour. §19.2's failure, by hand.
+    """
+    game.resize(960, 640)
+    game._place_hud()
+    tally, timing, flash = game._tally.geometry(), game._timing.geometry(), game._flash.geometry()
+    assert not tally.intersects(timing), f"tally {tally} overlaps timing {timing}"
+    assert not timing.intersects(flash), f"timing {timing} overlaps flash {flash}"
+    assert timing.top() >= tally.bottom(), "the readout belongs under the tally"
+    assert timing.right() <= game.width(), f"{timing} runs off a {game.width()}px window"

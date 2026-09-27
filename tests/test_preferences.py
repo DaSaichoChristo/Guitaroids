@@ -484,3 +484,78 @@ def test_the_screen_scrolls_rather_than_compressing(screen: Preferences) -> None
             f"group {box.title()!r} is {box.height()}px but needs {needed}px; "
             "its contents will overlap"
         )
+
+
+# --- the input-latency trim can be negative, and survives a save (§39) ---------
+
+
+def test_the_latency_spin_box_offers_the_negatives_the_model_accepts(screen) -> None:
+    """The control's range and the model's range are one number, not two.
+
+    `Settings.input_latency_ms` is documented as asymmetric on purpose -- +2s for a
+    genuinely bad interface, -500ms because the correction can measure out the other
+    way. The spin box was 0-2000, so the negative half was unreachable through the UI
+    and a hand-edited negative was silently rewritten the moment the player opened
+    Preferences to look at it.
+    """
+    assert screen._latency.minimum() == -500, (
+        "a player who overshoots and reads 'early' off the game screen cannot dial "
+        "the value back without hand-editing the settings file"
+    )
+    assert screen._latency.maximum() == 2000
+
+
+def test_a_negative_trim_survives_a_save_and_reload(shell, tmp_path) -> None:
+    """Through the real path: widget -> draft -> file -> back into the widget.
+
+    Testing the spin box's `minimum()` is not this. What matters is that -120 written
+    by hand into a settings file is still -120 after the screen has been opened,
+    changed and saved -- which is the path that destroyed it before.
+    """
+    import json
+
+    (tmp_path / "settings.json").write_text('{"input_latency_ms": -120.0}')
+    context = AppContext(
+        settings=Settings.load(tmp_path / "settings.json"),
+        songs_dir=tmp_path / "songs",
+        settings_path=tmp_path / "settings.json",
+    )
+    shell.show()
+    shell.navigate(Screen.PREFERENCES)
+    screen = shell.current_screen
+    screen.context = context
+    # Away and back, because `showEvent` is what rebuilds the draft from the context's
+    # settings. Assigning the context alone leaves the draft holding the *old*
+    # context's values, and then the test would be measuring my own setup mistake.
+    # `shell.show()` first, or no show event is delivered and the draft is never
+    # rebuilt at all.
+    shell.navigate(Screen.MAIN)
+    shell.navigate(Screen.PREFERENCES)
+    assert screen.context is context
+    try:
+        assert screen._latency.value() == -120, "read back before any edit"
+        # Touch an unrelated control, then save, as a player adjusting something else
+        # would. That round trip is what used to lose the value.
+        screen._count_in.setCurrentIndex(screen._count_in.findData(2))
+        screen.save()
+        stored = json.loads((tmp_path / "settings.json").read_text())
+        assert stored["input_latency_ms"] == -120.0, (
+            f"an unrelated save rewrote the trim to {stored['input_latency_ms']}"
+        )
+    finally:
+        screen.deleteLater()
+
+
+def test_the_latency_tooltip_does_not_contradict_the_sign(screen) -> None:
+    """The trim is *subtracted*, so too high reads early. The old text said late.
+
+    This is not pedantry: it is the one place a player reads to learn what the number
+    does, it named the opposite direction from the arithmetic
+    (`when = position() - input_latency`), and §39 is the report of a player who
+    raised the number to compensate for being late and thereby overshot into being
+    early, with "MISS 0%" on screen for both.
+    """
+    tooltip = screen._latency.toolTip()
+    assert "too HIGH" in tooltip
+    assert "early" in tooltip
+    assert "too high makes every note look late" not in tooltip
