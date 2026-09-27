@@ -3511,3 +3511,169 @@ and reported as `gain_applied`. The clock bullet was also stated twice.
   go stale the next time a tab is imported. Nothing checks it, because "the library
   has three tabs" is a fact about the user's disk, not the repository.
 - **A practice tempo still does not slow the audio** (§23, §24). Unchanged here.
+
+## §29 — The song kept playing, the tempo did nothing, and a note detector (2026-09-26)
+
+**Tests: 894 in total — 881 excluding `tests/test_docs.py`, which is the number
+`AGENTS.md` and `README.md` quote.** Three reported problems, and two of them turned
+out to be bugs rather than missing features. All three are the same shape: a control
+that looked like it was working.
+
+### 29.1 The sound did not stop when you left
+
+`Game.hideEvent` stopped the QTimer and invalidated the clock, and did nothing else.
+The only `stop_playback()` in the entire UI was in `_render_audio`, which runs when a
+**new** song starts — so nothing ever stopped what was already playing. Press Back and
+the song carried on into the main menu.
+
+The test beside it asserted the timer stopped. It passed the entire time the music did
+not, which is the shape this project keeps meeting: **the thing with a test is not the
+thing that is broken.**
+
+**The worse half is the one you would actually hear.** `ChartRenderer` has had a
+`cancel()` since it was written, `should_stop` is polled at every onset so an abort is
+fast, and `test_render_task.py` has always proved that a cancelled render emits
+`cancelled` and never delivers a buffer. Nothing in the UI called it. So leaving during
+a six-second render let the render finish, and `_on_audio_ready` — whose only guard was
+`if self._chart is None`, which is false on a screen you merely navigated away from —
+opened the stream. **The song started in the menu.** That path was built at both ends,
+tested at both ends, and joined by nothing.
+
+`hideEvent` now stops playback and cancels the render; `_on_audio_ready` refuses while
+hidden, which covers the narrow case where the result landed in the event queue between
+the cancel and the slot running. `Transport.stop()` is safe here: it closes PortAudio's
+stream and waits for it, with no join, no timeout and no other thread (§26.3).
+
+There was also **no `closeEvent` anywhere in the project**, so quitting mid-song relied
+on process teardown to release the output device — a device being closed by a process
+that is already dying, which is the situation §26.3's two core dumps came from.
+
+### 29.2 The practice tempo did nothing at all
+
+Reducing the tempo on song select changed nothing: not the bar, not the notes, not the
+song. One line of the wrong branch. `position()` has two paths, and the rate was
+applied to only one of them:
+
+```python
+if self.context.is_playing:
+    return audio                                                   # no rate
+return self._wall_origin + self._clock.elapsed() / 1000.0 * self._rate
+```
+
+Since §23 a playing song takes the **first** path, so the rate reached the clock only
+when there was no audio — the case where nobody is listening to the bar anyway.
+
+Twelve tests covered this, and every one of them was a test of the arithmetic
+(`rate_for`) or the field (`screen.rate`). None touched the seam. That is §21.2's
+failure for the third time in this project, and the rate was not merely unread: it was
+written down in the class docstring, whose own claim — *"the rate is a single
+multiplication here"* — described the branch that never runs.
+
+**The fix is to slow the chart, not to divide the clock.** `retime(chart, rate)` scales
+every note time and bar line by `1/rate` and the tempo by `rate`, and the game screen
+calls it once in `_load_request`. The judge, the tab view and the renderer are all handed
+that chart, so they agree by construction.
+
+Dividing the audio position by the rate was the obvious alternative and it is *worse
+than nothing*: the bar would crawl while the music played at the written tempo, and the
+two would drift by half a second per minute. Time-stretching the rendered buffer is
+worse again — resampling shifts the pitch of every note, and a phase vocoder is a lot of
+machinery for a problem that does not exist, because the app **generates** the audio and
+can be handed a slower chart instead.
+
+Measured on the real library rather than reasoned about — Hotel California, 4099 notes at
+76 BPM, rendered with the pluck backend:
+
+| rate | tempo | last note | rendered |
+|---|---|---|---|
+| 1.00 | 76 | 380.53s | 392.53s |
+| 0.75 | 57 | 507.37s | 519.37s |
+| 0.50 | 38 | 761.05s | 773.05s |
+
+Exactly `1/rate`, to the sample. Peak unchanged at 0.65, and the extra length costs 0.5s
+of CPU: a 12:53 render takes 1.2s, so slowing a song down is not a performance concern.
+
+The count-in slows with it, because `_count_in_seconds` reads the chart's tempo. That is
+the intent and also the cost — at 0.5 of a 76 BPM tab a bar is 6.3 seconds, so the wait
+before the first note is long. A constant offset, not one that grows.
+
+**Both orderings in `_load_request` are load-bearing**, and the second is counter-
+intuitive. The chart must be in place before `rate_for` runs, because `written_bpm`
+reads `self._chart`; and the rate must be resolved *before* the retime, because asking a
+chart already halved for a half-speed request returns 1.0. Getting that second one wrong
+made three existing tests report a rate of 1.0 instead of 0.5, which is how it was
+caught.
+
+### 29.3 `audio/pitch.py`, verified against the project's own audio
+
+§24.3 asked for a fundamental-frequency estimate — autocorrelation or an FFT peak with
+harmonic suppression — and rejected the cheap alternative: a bandpass filter per open
+string with envelope followers, loudest wins. That is twenty lines of numpy and it is
+only correct for low frets. Measured over the three real tabs, frets 0–5 are most of the
+chart, so the filter bank would have worked on the first song tried and failed on the
+next.
+
+**The measurements that set the design**, over 9764 notes in `songs/`:
+
+- MIDI **39–69**, which is 77.8–440 Hz. The bottom is below the open low E: the Sweet
+  Child tabs are in a dropped tuning and 77.8 Hz is B1.
+- At most 24 distinct pitches, and **13 of them are reachable on more than one string** —
+  MIDI 49 on three. So a detected fundamental does not identify a lane, which is §24.2's
+  whole argument for a pitch-keyed index.
+- 77.8 Hz is 567 samples a period, so the 2048-sample window holds **3.6 periods**. That
+  is why the default is 2048 and not 1024, and it is 46ms of the 280ms miss window.
+
+Implemented as McLeod's normalised square-difference function, with the peaks picked one
+per positive excursion and interpolated to sub-sample precision — at 77.8 Hz one sample
+is 4.4 cents, enough to look flat.
+
+**Octave errors are the failure that matters**, because a guitar's harmonics are at 2f
+and 3f: an estimate that reports 2f matches a *different chart note*, so the player is
+held wrong for playing the right one. The peak-picking therefore prefers the *highest*
+frequency among peaks that are near-equal in clarity, which is the direction that turns a
+doubled estimate back into the fundamental. Two tests pin that from both sides — a weak
+fundamental under six harmonics, and a fundamental quieter than its own octave.
+
+**Verified the way §24.3 asked, which is the reason the module is not all sines:**
+rendered with the project's own synth, from a real `Chart`, expected pitch read off the
+chart so the test cannot drift from the model. Four notes across **both backends**, a
+window slid across each note at the hop, and *every* estimate required to be the correct
+MIDI note:
+
+```
+pluck      lane0 fret0  want 64   35 windows   heard=[64]   clarity 1.00
+pluck      lane2 fret3  want 58   35 windows   heard=[58]   clarity 1.00
+pluck      lane4 fret7  want 52   35 windows   heard=[52]   clarity 1.00
+soundfont  lane0 fret0  want 64   35 windows   heard=[64]   clarity 0.99
+soundfont  lane2 fret3  want 58   35 windows   heard=[58]   clarity 1.00
+soundfont  lane4 fret7  want 52   35 windows   heard=[52]   clarity 1.00
+```
+
+280 estimates, no octave errors, no spurious notes. Silence, white noise and 50 Hz mains
+hum all return `None`, which is the answer a microphone needs most of the time.
+
+**A tolerance parameter was removed from `PitchEstimate.nearest_midi`.** The first
+version had one, and a test asserted it returned `None` for MIDI 57.6 — which it did
+not, because 57.6 is 0.4 from 58. Any frequency is within half a semitone of *some*
+equal-tempered note, so the knob could never reject anything: a control that looks like it
+is guarding something and guards nothing, the same disease as §21.2. The filter that
+matters is whether the pitch is in the chart, and only the judge knows the chart.
+
+### Not done — §29
+
+- **`audio/mic.py` does not exist.** Nothing opens an input device, so
+  `Settings.input_device` is read by nothing — §24 acknowledged this and it is still
+  true. It is now the whole of the remaining input work, and it is the one piece that
+  needs hardware to verify.
+- **The judge is still lane-keyed.** `press_pitch` is §24.2's design and it is not
+  written; the 13-of-24 overlapping pitches are the reason it is needed, and until it
+  exists a detected note could not be matched to a chart note safely.
+- **The keyboard is still the only input**, and §24.4's reason for keeping it — "a demo
+  on an unfamiliar machine may have no audio input at all" — is no longer the plan. The
+  decision to remove it is §30's, and it is a reversal of §24.4.
+- **Nothing estimates input latency.** §4.1's tap-along estimator is designed and
+  unbuilt. It matters less than §24.3 thought: 46ms of analysis against a 280ms window.
+- **The estimator has never heard a real guitar.** It is verified against this project's
+  own synthesis, which is a plucked-string model and therefore clean in a way a cheap
+  acoustic guitar through a laptop microphone is not. Expect to widen `MIN_CLARITY` and
+  the 3.6-periods margin after the first attempt with the actual instrument.

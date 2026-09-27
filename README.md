@@ -148,7 +148,7 @@ guitaroids/
   songlib.py library scan, pairing, status
   settings.py user preferences                  pure, no Qt
 scripts/     setup, asset fetchers, import report, screenshots
-tests/       846 tests
+tests/       881 tests
 songs/       your tabs and audio (gitignored)
 ```
 

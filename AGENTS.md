@@ -80,7 +80,7 @@ says what ran.
 
 ## Current state
 
-`tests/` is 846 tests, all passing (not counting `tests/test_docs.py` itself --
+`tests/` is 881 tests, all passing (not counting `tests/test_docs.py` itself --
 that file checks this number, and a test that counts itself never matches). **Five of the six screens are real:** the main
 menu, song select (tab + track + audio offset + **per-song practice tempo**), import
 GP (choose a file, then Add to library), preferences, and **game** — three bars
@@ -168,19 +168,17 @@ mediapipe's OpenCV. Check `pip list` for `opencv` before anything else.
 
 ## The next blocker
 
-**The output half is built; the input half is not.** The game screen's clock is the
-audio device's clock (§23), a real tab plays through a real sound card, and §3.5's
-click-placement test — the "highest-value test in the project" — is written. What
-does not exist is `audio/pitch.py`: nothing detects a note yet, so
-`InputMode.MICROPHONE` is a setting that does nothing, and the judge is still
-keyboard-only.
+**The output half is built, and so is the note detector; the wire between them is
+not.** The game screen's clock is the audio device's (§23), a real tab plays through
+a real sound card, the practice tempo slows the music (§29.2), and `audio/pitch.py`
+finds a note — verified against the project's own rendered audio, not a sine (§29.3).
 
-So the next step is a pitch estimator and the judge's pitch-keyed index beside its
-lane-keyed one (§24.2, §24.3). Both are testable with no device, which is why they
-can be built before a microphone is opened. The second thing to fix is that the
-**practice tempo does not slow the music** — the tab crawls and the audio runs at
-the written tempo (§23), which is the one place the two halves meet and currently
-contradict each other.
+What does not exist is `audio/mic.py`: nothing opens an input device, so
+`Settings.input_device` is still read by nothing and the judge still only takes a
+lane. So the next step is the microphone — a `sounddevice` input stream whose callback
+only copies into a ring, a worker that runs the estimator off the audio thread, and the
+judge's pitch-keyed index beside its lane-keyed one (§24.2). The judge half is pure and
+testable with no device; the capture half is the part that needs hardware.
 
 ## Audio
 

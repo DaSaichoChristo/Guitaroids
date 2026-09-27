@@ -60,7 +60,9 @@ UNTRACKED_OK = frozenset(
 #: called missing.
 SEARCH_ROOTS = ("", "guitaroids", "tests", "scripts")
 
-#: Files the docs name **on purpose** because they are not there. An existence test
+#: Files the docs name **on purpose** because they are not there. `audio/pitch.py` was
+#: on this list from §28 until §29 wrote it, and `test_declared_absences_are_still_absent`
+#: is what noticed -- which is the whole argument for the list. An existence test
 #: cannot tell a typo from a sentence whose subject is a file that does not exist, so
 #: the difference is declared here, with a reason. Each entry must earn its place:
 #: `test_declared_absences_are_still_absent` fails the moment the file lands, which
@@ -68,7 +70,8 @@ SEARCH_ROOTS = ("", "guitaroids", "tests", "scripts")
 DECLARED_ABSENT = {
     "qtenv.py": "deleted with the webcam in §25; AGENTS.md explains the Qt plugin "
     "hijack it used to work around",
-    "audio/pitch.py": "the next blocker. AGENTS.md says outright that it does not exist",
+    "audio/mic.py": "the remaining input work. AGENTS.md says outright that nothing "
+    "opens an input device yet, and §29.3's Not done says the same",
 }
 
 
