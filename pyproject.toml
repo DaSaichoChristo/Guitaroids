@@ -1,0 +1,14 @@
+[tool.pytest.ini_options]
+# `tests` and nothing else. A bare `pytest` at the repo root used to walk the whole
+# tree and try to import `guitaroids/audio/play_tab_prototype.py`, because it was
+# named `test_midi_play.py` and imported pygame at module level -- so the documented
+# `pytest tests` worked while the most natural command a person or an IDE would run
+# failed during collection. The rename fixed that file; this fixes the class.
+testpaths = ["tests"]
+
+# Qt builds one QApplication per process and its platform is fixed at
+# construction, so a test that needs a different one has to be a subprocess. The
+# suite is Qt-heavy already and that is not changing here; the flag is recorded
+# because it is the sort of thing that gets "cleaned up" by someone who does not
+# know yet (DESIGN.md §5.3).
+addopts = "-p no:cacheprovider"

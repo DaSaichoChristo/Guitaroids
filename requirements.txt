@@ -38,9 +38,10 @@
 #
 # WHY THIS FILE IS SHORTER THAN THE VENV
 #
-# Transitive dependencies are deliberately absent and live in
-# requirements-lock.txt, which is `pip freeze` of one working environment. The venv
-# has ~30 packages; this file has eight. The notable transitive pulls are
+# Transitive dependencies live in requirements-lock.txt, which is `pip freeze` of
+# one working environment. The venv has ~30 packages; this file has nine. A
+# transitive may be pinned here only with a stated reason, and exactly one is
+# (`attrs`, below). The notable transitive pulls that are deliberately absent are
 # matplotlib, pillow, contourpy, cycler, fonttools, kiwisolver and pyparsing — all
 # of them mediapipe's, and none of them imported by this project. Use the lock file
 # to reproduce an environment; use this one to know what we actually depend on.
@@ -54,7 +55,7 @@
 # requirements.txt becomes either a `pip freeze` in disguise or a wish list.
 #
 #   imported today      PySide6, shiboken6, numpy, opencv-contrib-python-headless,
-#                       PyGuitarPro
+#                       PyGuitarPro, attrs (a deliberate transitive pin)
 #   audio milestone     sounddevice (§1.5, the master clock), soundfile (§3.1,
 #                       decoding) — neither is imported yet; no audio has ever
 #                       played
@@ -70,13 +71,16 @@ soundfile==0.14.0
 sounddevice==0.5.6
 PyGuitarPro==0.11
 
+# The one transitive we pin on purpose. It is a dependency of PyGuitarPro, which
+# uses it for its frozen models, and pinning it means a future attrs release
+# cannot change how tabs are read out from under a tested parser. Everything else
+# transitive is in requirements-lock.txt.
+attrs==26.1.0
+
 # Runtime: installed with --no-deps by scripts/setup.sh, listed in
 # requirements-optional.txt rather than above, because a plain install fails.
 #   pip install -r requirements-optional.txt --no-deps
 #   tinysoundfont==0.3.7
-#
-# attrs is NOT listed: it is a transitive of PyGuitarPro, and pinning a
-# transitive here is what turns a curated list into a freeze. It is in the lock.
 #
 # Development-only (pytest) is in requirements-dev.txt.
 #

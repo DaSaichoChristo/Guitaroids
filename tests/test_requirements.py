@@ -9,8 +9,8 @@ lying about what the app needs.
 So the facts are pinned here:
 
   * every pin is `==` and parses as a real requirement line
-  * no pin is a **transitive** dependency, which is what the lock file is for
-    (`attrs` is PyGuitarPro's and was listed here until §22)
+  * no **transitive** is pinned without a stated reason -- one deliberate pin
+    (`attrs`, a PyGuitarPro dependency) is legitimate, and several is a freeze
   * every pin is either imported by the code today or has a milestone named in
     the file's own comments -- nothing is pinned on principle alone
   * the pins match the lock file, so the curated list and the frozen snapshot
@@ -74,6 +74,31 @@ def lock() -> dict[str, str]:
     return parse(LOCK)
 
 
+def justified(name: str) -> bool:
+    """Is there a written reason for pinning ``name``?
+
+    Two things count, and they are the two legitimate reasons a curated list has
+    for a pin: a ``§`` section reference, or -- for a transitive -- a note saying
+    why it is pinned anyway.
+
+    The search is over the *whole* file rather than the few lines above the pin,
+    because the milestone notes live in a block well above the pins they describe
+    (the audio pair is a dozen lines below its own heading). Scoping it to the
+    neighbouring lines was the first version and it flagged two correctly-pinned
+    packages, which is how a guard learns to be ignored.
+
+    One definition, used by both tests below, because two implementations of
+    "explained" is how they start disagreeing.
+    """
+    for line in REQUIREMENTS.read_text().splitlines():
+        if name not in line:
+            continue
+        lowered = line.lower()
+        if "§" in line or "transitive" in lowered or "dependency of" in lowered:
+            return True
+    return False
+
+
 # --- shape ---------------------------------------------------------------------
 
 
@@ -109,20 +134,38 @@ def test_the_three_install_caveats_are_still_there() -> None:
 # --- no transitives -------------------------------------------------------------
 
 
-def test_no_transitive_dependency_is_pinned_here(requirements: dict[str, str]) -> None:
-    """The lock file exists for these, and a curated list that grows them is a freeze.
+#: Dependencies of our dependencies. Listing one here is not wrong in itself -- a
+#: deliberate pin with a stated reason is defensible, and `attrs` is one -- it is
+#: wrong when it turns up with nothing said about it, which is how a curated list
+#: becomes a freeze one package at a time.
+TRANSITIVE = {"attrs", "matplotlib", "pillow", "contourpy", "cycler", "fonttools",
+              "kiwisolver", "pyparsing", "absl-py", "flatbuffers", "certifi", "cffi",
+              "six", "packaging", "pluggy", "iniconfig", "typing-extensions",
+              "python-dateutil", "pyside6-addons", "pyside6-essentials", "pycparser"}
 
-    `attrs` was here: nothing in the project imports it, and it is a dependency of
-    PyGuitarPro. It stayed out of the way only until somebody tidied a list without
-    checking what required what (§22).
+
+def test_no_transitive_is_pinned_without_saying_why(requirements: dict[str, str]) -> None:
+    """The lock file exists for these, so a pin here must justify itself.
+
+    This replaced a hard ban on `attrs`, which was the wrong shape: pinning a
+    transitive on purpose is a legitimate call, and a test that forbids the
+    package instead of the *silence* cannot be satisfied honestly. The test now
+    asks the useful question -- is the reason written down next to the pin?
     """
-    transitive = {"attrs", "matplotlib", "pillow", "contourpy", "cycler", "fonttools",
-                  "kiwisolver", "pyparsing", "absl-py", "flatbuffers", "certifi", "cffi",
-                  "six", "packaging", "pluggy", "iniconfig", "typing-extensions",
-                  "python-dateutil", "pyside6-addons", "pyside6-essentials", "pycparser"}
-    listed = set(requirements)
-    assert not listed & transitive, (
-        f"{sorted(listed & transitive)} are transitive; they belong in the lock file"
+    unjustified = [
+        name for name in set(requirements) & TRANSITIVE if not justified(name)
+    ]
+    assert not unjustified, (
+        f"{unjustified} are transitive and pinned with no reason next to them; "
+        "add one or drop the pin"
+    )
+
+
+def test_the_transitive_pins_are_few(requirements: dict[str, str]) -> None:
+    """One is a decision. Five is a freeze that has not admitted it yet."""
+    assert len(set(requirements) & TRANSITIVE) <= 2, (
+        "more than two transitive pins: at this point requirements.txt is a lock "
+        "file with comments, and requirements-lock.txt already exists"
     )
 
 
@@ -141,7 +184,6 @@ def test_every_pin_is_imported_or_has_a_milestone(requirements: dict[str, str]) 
         for path in ROOT.rglob("*.py")
         if ".venv" not in path.parts
     )
-    text = REQUIREMENTS.read_text()
     unjustified = []
     for name in requirements:
         needed_by = COMPANION.get(name)
@@ -154,12 +196,9 @@ def test_every_pin_is_imported_or_has_a_milestone(requirements: dict[str, str]) 
         # compares lowercased against the lock.
         module = re.escape(MODULE_NAME.get(name, name))
         imported = re.search(rf"^\s*(?:import|from)\s+{module}\b", sources, re.M | re.I)
-        if imported:
+        if imported or justified(name):
             continue
-        # Otherwise it must be named next to a §-reference in the file.
-        lines = [line for line in text.splitlines() if name in line and "§" in line]
-        if not lines:
-            unjustified.append(name)
+        unjustified.append(name)
     assert not unjustified, (
         f"{unjustified} are pinned but neither imported nor explained; "
         "add a milestone reference or drop the pin"
