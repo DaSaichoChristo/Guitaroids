@@ -79,14 +79,18 @@ says what ran.
 
 ## Current state
 
-`tests/` is 921 tests, all passing (not counting `tests/test_docs.py` itself --
+`tests/` is 952 tests, all passing (not counting `tests/test_docs.py` itself --
 that file checks this number, and a test that counts itself never matches). **Five of the six screens are real:** the main
 menu, song select (tab + track + audio offset + **per-song practice tempo**), import
-GP (choose a file, then Add to library), preferences, and **game** — three bars
-of tab notation with a left-to-right beat line, `E A D G B E` down the left, a six-key keyboard test mode and PERFECT/GOOD/MISS
-judging. The practice tempo is chosen on song select and travels in `PlayRequest`,
-so a run cannot be re-timed while it plays.
-**Results is still a placeholder**; counts are shown in the HUD and go nowhere.
+GP (choose a file, then Add to library), preferences, **game** — three bars
+of tab notation with a left-to-right beat line, `E A D G B E` down the left, judged
+PERFECT/GOOD/MISS off the pitch a microphone hears — and **results**. The practice tempo
+is chosen on song select and travels in `PlayRequest`, so a run cannot be re-timed
+while it plays, and it slows the music rather than just the tab (§29.2).
+**Results is real**: the tally, the accuracy, the tempo you played at, and the best
+accuracy recorded for that song. **There are no points** — no 10,000 maximum, no streak
+multiplier — so "best" means best accuracy, which is the only number worth comparing
+between attempts (§34.1).
 
 `model/chart.py`, `model/repeats.py`, `songlib.py`, `settings.py`, `importer.py`,
 `session/play_request.py` and `session/judge.py` are pure. `context.py` holds the

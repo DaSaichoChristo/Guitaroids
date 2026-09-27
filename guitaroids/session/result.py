@@ -70,6 +70,25 @@ class Result:
     of the same song at 76 and 57 BPM are not comparable on accuracy alone, and the
     results screen says which one this was."""
 
+    is_new_best: bool = False
+    """Whether this run beat the best accuracy previously recorded for the song.
+
+    Set by the game screen, not computed here, because the answer is only knowable
+    after :meth:`~guitaroids.settings.Settings.record_accuracy_for` has compared
+    against the store. The screen builds a result, records it, and fills this in --
+    which is why it is a field rather than a property.
+
+    Default False so a hand-built ``Result`` in a test is not congratulating the player
+    for a run nobody recorded.
+    """
+
+    previous_best: float | None = None
+    """The best accuracy for this song *before* this run, or ``None`` if it was the
+    first recorded attempt. Paired with :attr:`is_new_best` for the same reason: the
+    two are one fact, asked and answered together, and reading the store again after
+    recording would return this run's own score.
+    """
+
     @property
     def accuracy(self) -> float:
         """Notes hit over notes in the song, 0.0-1.0. **Not** `GameState.accuracy`.

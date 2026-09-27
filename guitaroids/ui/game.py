@@ -29,6 +29,8 @@ one mapping to have.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -38,8 +40,9 @@ from ..audio.click import add_count_in, beats_per_bar
 from ..audio.mic import SAMPLE_RATE, Microphone
 from ..model.chart import Chart, retime
 from ..session.judge import GameState, Verdict
+from ..session.result import Result
 from .render_task import ChartRenderer, estimate_seconds
-from .screens import ScreenBase, constrained_button, content_column, heading
+from .screens import Screen, ScreenBase, constrained_button, content_column, heading
 from .theme import COLORS, px
 from .widgets.tabview import TabView
 
@@ -229,6 +232,9 @@ class Game(ScreenBase):
         self._state = GameState(chart)
         self._offset = float(request.offset_seconds) if request else 0.0
         self._finished = False
+        #: Set once a result has been handed to the results screen, so the end of a
+        #: song navigates exactly once however many frames it takes to notice.
+        self._result_published = False
         self._last_verdict = None
         self._view.set_chart(chart)
         self._title.setText(chart.title or chart.track_name)
@@ -474,9 +480,19 @@ class Game(ScreenBase):
         # A transition, not a state: `context.playback` is None both before the audio
         # starts and after it stops, so testing it says nothing. A flag set when the
         # audio arrived is what distinguishes "never had audio" from "lost it".
-        if self._audio_live and not self.context.is_playing and not self._finished:
+        #
+        # **This runs whether or not the song is finished**, which it did not until
+        # §34. The guard was `not self._finished`, and that is exactly the moment the
+        # results screen cares about: the audio does not stop when the last note is
+        # judged, it stops twelve seconds later when the render's decay runs out, and
+        # the transition that announces the song is over is the one this guard was
+        # hiding. `_maybe_publish` decides what that transition means -- a lost device
+        # mid-song, or a finished song reaching its end.
+        audio_ended = self._audio_live and not self.context.is_playing
+        if audio_ended:
             self._audio_live = False
-            self._note_audio_lost()
+            if not self._finished:
+                self._note_audio_lost()
         position = self.position()
         if self._state is not None:
             self._state.update(position)
@@ -487,6 +503,91 @@ class Game(ScreenBase):
                 self._finished = True
         self._refresh_banner(position)
         self._show_audio_lost()
+        # Unconditional, and that was not the first draft: this was called only when
+        # the audio had just stopped, which meant a run on the **wall clock** never
+        # published at all -- there is no "ended" transition when the audio never
+        # started, and `audio_ended` is False forever. A test caught it. Every
+        # condition that matters is re-checked inside.
+        self._maybe_publish()
+
+    def _maybe_publish(self) -> None:
+        """Hand the finished attempt to the results screen, once, and go there.
+
+        **Only when the sound has stopped.** The last note of Hotel California is at
+        380.5s and its rendered buffer runs to 392.5s, so "every note is judged" is
+        about twelve seconds before the music is over. Leaving on the judgement would
+        cut the tail off, and the player would hear a song stop mid-phrase because a
+        counter reached zero.
+
+        **And immediately when there is no audio at all.** A machine with no output
+        device runs the wall clock, where there is no tail and no sound to wait for --
+        so `outstanding == 0` is itself the end of the song. The caller has already
+        established the song is finished before reaching here.
+
+        `remember=False` is what makes Back land on song select rather than on this
+        screen: song select is already on the history stack from the way in, and
+        pushing GAME would put the finished attempt behind the results for it.
+        """
+        if self._state is None or self._result_published:
+            return
+        if not self._finished:
+            return
+        if self.context.is_playing:
+            return  # still sounding: the tail is not over
+        self._result_published = True
+        self.context.last_result = self._build_result()
+        self.shell.navigate(Screen.RESULTS, remember=False)
+
+    def _build_result(self) -> "Result":
+        """The finished attempt, with the best-score comparison already made.
+
+        Built, then recorded, then rebuilt with the comparison filled in -- because the
+        accuracy to record is the result's, and the answer is only knowable after
+        recording. Computing the ratio here instead would put the accuracy formula in
+        two places, and the two would drift.
+
+        The song's *written* tempo is reported when the run was at the written tempo,
+        because "played at 76 BPM" and "played at 0 BPM" are not the same statement to
+        somebody comparing two attempts.
+        """
+        request = self.context.play_request
+        slug = request.slug if request else ""
+        title = self._chart.title if self._chart else ""
+        track_name = self._chart.track_name if self._chart else ""
+        result = Result.from_state(
+            self._state,
+            title=title,
+            artist=getattr(self._chart, "artist", "") if self._chart else "",
+            track_name=track_name,
+            slug=slug,
+            track_number=request.track_number if request else 0,
+            bpm=self._played_bpm(),
+            rate=self._rate,
+        )
+        is_new_best, previous = self.context.settings.record_accuracy_for(
+            slug, result.accuracy
+        )
+        return replace(result, is_new_best=is_new_best, previous_best=previous)
+
+    def _played_bpm(self) -> float:
+        """The tempo this run was actually played at, in BPM, or 0.0 for "as written".
+
+        **The retimed chart's own tempo, with no further multiplication.** §29.2 already
+        scaled `chart.tempo` by the rate when it retimed the chart, so a 60 BPM tab at
+        0.75 *is* a 45 BPM chart -- and multiplying again reported 33.75, which is a
+        tempo nobody played. A test at rate 1.0 could not see it, because 60 x 1.0 is
+        60.
+
+        **0.0 when the rate is 1.0**, so the results screen can say "as written". A run
+        at the tab's own tempo is not a practice tempo, and printing "practice tempo
+        60 BPM" for a song written at 60 BPM would be a small lie in the one line a
+        player uses to compare two attempts.
+        """
+        if self._chart is None or self._chart.tempo <= 0:
+            return 0.0
+        if self._rate >= 1.0:
+            return 0.0
+        return float(self._chart.tempo)
 
     def _refresh_banner(self, position: float) -> None:
         """Three states, one label: empty library, get ready, complete.

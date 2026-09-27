@@ -37,6 +37,7 @@ from pathlib import Path
 from .audio.transport import Transport
 from .paths import SETTINGS_PATH, SONGS_DIR
 from .session.play_request import PlayRequest
+from .session.result import Result
 from .settings import Settings
 from .songlib import Chart, Library, SongEntry, scan_library
 
@@ -50,6 +51,15 @@ class AppContext:
     songs_dir: Path = field(default_factory=lambda: SONGS_DIR)
     play_request: PlayRequest | None = None
     settings_path: Path = field(default_factory=lambda: SETTINGS_PATH)
+
+    #: The most recent finished attempt, for `Screen.RESULTS` to show.
+    #:
+    #: Here rather than passed to `navigate()`, which takes no payload, and because the
+    #: shell keeps built screens -- a results screen constructed on the second visit
+    #: has to find the second song's result, and a constructor argument would have
+    #: been the first one. ``None`` until a song has been played, which the results
+    #: screen renders as an empty state rather than as zeroes.
+    last_result: "Result | None" = field(default=None, repr=False, compare=False)
 
     #: The open output stream, if one is playing. Not a dataclass field: it is a
     #: device handle with a destructor, so it must be excluded from repr and

@@ -22,6 +22,7 @@ from .game import Game
 from .import_gp import ImportGp
 from .main_menu import MainMenu
 from .preferences import Preferences
+from .results import Results
 from .screens import Screen, ScreenBase, constrained_button, content_column, heading
 from .theme import px
 from .song_select import SongSelect
@@ -36,42 +37,6 @@ _BACK: dict[Screen, Screen] = {
     Screen.PREFERENCES: Screen.MAIN,
     Screen.IMPORT_GP: Screen.MAIN,
 }
-
-
-class PlaceholderScreen(ScreenBase):
-    """Stands in for a screen that has not been built yet.
-
-    Deliberately obvious rather than plausible: a stub that looks finished is worse
-    than one that admits it is not. The title is a constructor argument rather than
-    a class attribute assigned afterwards, because the heading label is built
-    during __init__ and would otherwise render empty.
-    """
-
-    def __init__(
-        self,
-        shell,
-        context: AppContext,
-        label: str,
-        parent: QtWidgets.QWidget | None = None,
-    ) -> None:
-        super().__init__(shell, context, parent)
-        self.screen_label = label
-        column = content_column(self)
-
-        column.addWidget(heading(label))
-        column.addWidget(
-            heading(
-                "This screen is not built yet.\n\n"
-                "The shell, the theme and the navigation are real; this page is a "
-                "placeholder so the flow can be clicked through end to end.",
-                kind="subtitle",
-            )
-        )
-        column.addStretch(1)
-
-        back = constrained_button("Back", width=200)
-        back.clicked.connect(self.shell.go_back)
-        column.addWidget(back, alignment=_CENTRED)
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -97,7 +62,7 @@ class MainWindow(QtWidgets.QMainWindow):
             Screen.MAIN: lambda: MainMenu(self, self.context),
             Screen.SONG_SELECT: lambda: SongSelect(self, self.context),
             Screen.GAME: lambda: Game(self, self.context),
-            Screen.RESULTS: self._make_placeholder(Screen.RESULTS),
+            Screen.RESULTS: lambda: Results(self, self.context),
             Screen.PREFERENCES: lambda: Preferences(self, self.context),
             Screen.IMPORT_GP: lambda: ImportGp(self, self.context),
         }
@@ -120,11 +85,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # --- screen construction ---------------------------------------------------
 
-    def _make_placeholder(self, screen: Screen) -> Callable[[], ScreenBase]:
-        def build() -> ScreenBase:
-            return PlaceholderScreen(self, self.context, screen.label)
-
-        return build
 
     def _widget_for(self, screen: Screen) -> ScreenBase:
         if screen not in self._built:

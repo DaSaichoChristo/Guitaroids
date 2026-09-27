@@ -4,9 +4,11 @@ A Guitar Hero-style app. You play your own guitar and it walks you through Guita
 Pro tabs at tempo, counting misses — it renders the tab into sound and times your
 notes against the audio device's clock.
 
-Hackathon project. In progress — the song import, note-reading and audio layers are
-built and the keyboard test mode is playable. The microphone input is the next piece
-and is not started: for now the six on-screen keys are the way in.
+Hackathon project. In progress — the song import, note-reading, audio and microphone
+layers are all built, and every screen is real. The input is your guitar: a note
+detector (`audio/pitch.py`) works out which note was played and the judge matches on
+**pitch** rather than string, because the strings' ranges overlap. **The keyboard is
+gone** (§32) and **wear headphones** — see below.
 
 ## Quick start
 
@@ -47,12 +49,18 @@ which on a full screen is the whole screen rather than a size we chose. It waits
 for the window to be exposed before reporting, because until the WM has done its
 round trip the window is still sitting at its minimum size.
 
-Five of the six screens are real: the main menu, **song select** (pick a tab, pick a
+All six screens are real: the main menu, **song select** (pick a tab, pick a
 track, tune the audio offset, set a per-song practice tempo), **import GP** (copy a tab into the library),
-**preferences**, and **game** — three bars of tab notation (the bar you just played,
+**preferences**, **game** — three bars of tab notation (the bar you just played,
 the current one, and the one coming) with a line sweeping left to right through the
-current bar, played with the number keys `1`–`6` and judged PERFECT/GOOD/MISS.
-**Results** is a placeholder; the score shows in the HUD during play.
+current bar, judged PERFECT/GOOD/MISS from the pitch your guitar plays — and
+**results**, which shows the tally, your accuracy, the tempo you played at, and the
+best accuracy recorded for that song. There are no points and no multiplier: "best"
+means best accuracy.
+
+**Wear headphones.** The app renders the tab and plays it from the same machine, so
+through speakers the microphone hears the app's own music as your playing and you would
+score PERFECT without touching the guitar.
 
 The game's clock is the audio device's clock, read from the stream, so the notes you
 see and the sound you hear come from one source (§23). The wall clock survives as a
@@ -143,7 +151,7 @@ guitaroids/
   songlib.py library scan, pairing, status
   settings.py user preferences                  pure, no Qt
 scripts/     setup, asset fetchers, import report, screenshots
-tests/       921 tests
+tests/       952 tests
 songs/       your tabs and audio (gitignored)
 ```
 

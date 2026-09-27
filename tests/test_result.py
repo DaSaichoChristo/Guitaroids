@@ -162,23 +162,33 @@ def test_an_abandoned_run_says_so() -> None:
 
 
 def test_the_first_run_is_always_a_new_best() -> None:
+    """Including one that scored nothing: it has nothing to beat.
+
+    Tested against a *missing* key rather than 0.0, which is why the first draft of
+    `record_accuracy_for` reported "not a best" for a first run of 0% while still
+    storing it -- a contradiction the screen would have had to explain.
+    """
     settings = Settings()
     assert settings.best_accuracy_for("hotel") == 0.0
-    assert settings.record_accuracy_for("hotel", 0.0) is True, "even a scoreless run"
+    is_new, previous = settings.record_accuracy_for("hotel", 0.0)
+    assert is_new is True
+    assert previous is None, "nothing was there to beat"
 
 
 def test_a_worse_run_does_not_overwrite_the_best() -> None:
     settings = Settings()
     settings.record_accuracy_for("hotel", 0.94)
-    assert settings.record_accuracy_for("hotel", 0.51) is False
+    is_new, previous = settings.record_accuracy_for("hotel", 0.51)
+    assert is_new is False
+    assert previous == pytest.approx(0.94), "and it names the best it failed to beat"
     assert settings.best_accuracy_for("hotel") == pytest.approx(0.94)
 
 
 def test_the_same_run_twice_is_not_a_new_best() -> None:
     """Otherwise a screen that congratulates you would be teaching you to ignore it."""
     settings = Settings()
-    assert settings.record_accuracy_for("hotel", 0.94) is True
-    assert settings.record_accuracy_for("hotel", 0.94) is False
+    assert settings.record_accuracy_for("hotel", 0.94)[0] is True
+    assert settings.record_accuracy_for("hotel", 0.94)[0] is False
     assert settings.best_accuracy_for("hotel") == pytest.approx(0.94)
 
 
@@ -194,14 +204,14 @@ def test_the_best_is_per_song() -> None:
 def test_an_empty_slug_records_nothing() -> None:
     """A per-song store with one nameless entry is a bug waiting to be read."""
     settings = Settings()
-    assert settings.record_accuracy_for("", 0.99) is False
+    assert settings.record_accuracy_for("", 0.99) == (False, None)
     assert settings.song_best_accuracy == {}
 
 
 def test_out_of_range_accuracies_are_clamped_not_discarded() -> None:
     settings = Settings()
     settings.record_accuracy_for("a", 1.4)
-    settings.record_accuracy_for("b", -0.5)
+    settings.record_accuracy_for("b", -0.5)  # clamped to 0.0, stored as a first run
     assert settings.best_accuracy_for("a") == pytest.approx(1.0)
     assert settings.best_accuracy_for("b") == 0.0
 

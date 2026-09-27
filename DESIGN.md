@@ -3996,3 +3996,123 @@ stated in the failure message so the next reader knows which way it went.
   the comment says so; a reviewer should delete it rather than maintain it.
 - **The `RESULTS` screen is still a placeholder**, so a run's counts are shown in the HUD
   and go nowhere — unchanged by any of this, and still the obvious next screen.
+
+## §34 — Results: the last placeholder, built (2026-09-27)
+
+**Tests: 965 in total — 952 excluding `tests/test_docs.py`.** All six screens are real.
+`Screen.RESULTS` has existed since the first commit with a `PlaceholderScreen` behind
+it, so the flow could be clicked through to a dead end — and the counts the game screen
+has been showing in its HUD went nowhere, which `AGENTS.md` and `README.md` both said
+out loud.
+
+### 34.1 There are no points, and that is a decision rather than an omission
+
+The obvious build is Guitar Hero's: 10,000 at a full combo, a multiplier that grows
+about 2% per consecutive hit up to 4x and collapses toward 1x on a miss. A streak
+would then matter, a single early note would cost more than a late one, and 10,000 is
+a number players already know.
+
+It was not built. The numbers a player can act on are the tally and the percentage,
+and a score means a formula to tune, a set of edge cases to get right — what a stray
+does to the multiplier, where the streak boundaries are, whether the floor is 1x or
+something else — and none of it is about playing a guitar accurately, which is what
+this project is for. So the screen shows the four counts, the accuracy, the notes hit
+out of the song, and the tempo it was played at.
+
+**Which makes "best" mean best accuracy.** That is the one quantity in a run worth
+comparing between attempts, so it is what `Settings.song_best_accuracy` remembers, and
+the screen says "New best" and names what it beat. There is a test for the tempo being
+in the display for the same reason: two runs of one song at 76 and 57 BPM are not
+comparable on accuracy alone.
+
+### 34.2 The two accuracies are not the same number
+
+`GameState.accuracy` is hits over notes **judged so far**, for a live HUD — at three
+seconds in, almost nothing has been judged, so hits/note_count would read near-zero for
+a player doing perfectly well. `Result.accuracy` is hits over the **whole song**.
+
+They are computed separately rather than shared. Sharing them would mean importing a
+live readout into a finished one, and the next reader would have no way to tell which
+of the two they were looking at. A test asserts they differ mid-song: at one note in,
+the live figure is 100% and the final one is 1/8.
+
+Strays are counted and appear in neither side of the ratio, so a microphone that
+mis-hears a string cannot make accuracy look better or worse than the playing was.
+
+### 34.3 "Every note judged" is twelve seconds before "the song has finished"
+
+The transition is the fiddly part, and the measurement is the reason. Hotel California's
+last note is at **380.5s** and its rendered buffer runs to **392.5s**: the render
+includes the decay, so the last judgement lands about twelve seconds before the music
+stops. Leaving on the judgement would cut the tail off mid-phrase because a counter
+reached zero.
+
+So the game screen publishes **when the sound stops**, not when the last note is
+judged — with a wall-clock run treated as ending immediately, because a machine with no
+output device has no tail and nothing to wait for.
+
+**And that required removing a guard.** `_tick` noticed the audio stopping with
+`if ... and not self._finished` — which is exactly the moment the results screen needs,
+so the one transition that announces a song is over was the one being hidden. It now
+notices the transition always, and decides separately what it means: a lost device
+mid-song, or a finished song reaching its end. Those two look identical from outside
+("the stream is not playing"), and confusing them is the mistake a test pins.
+
+**The 12-second wait is a real cost of the auto-navigate choice**, and worth recording
+rather than discovering. The game screen says "Song complete." and keeps showing the
+live tally throughout, so it is not a blank wait, but it is a wait. The button that
+would avoid it is one line if it turns out to feel wrong in use.
+
+### 34.4 Two bugs the tests found, both invisible at rate 1.0
+
+**A wall-clock run never published at all.** `_maybe_publish` was first called only
+when the audio had just stopped — and on a machine with no output device there is no
+such transition, because the audio never started, so `audio_ended` was False forever
+and the results screen was unreachable. The call is now unconditional and
+re-checks its own conditions.
+
+**The reported tempo was multiplied by the rate twice.** §29.2's `retime` already
+scaled `chart.tempo`, so a 60 BPM tab at 0.75 *is* a 45 BPM chart; `_played_bpm` then
+multiplied again and reported **33.75 BPM for a run nobody played that fast**. A test at
+rate 1.0 could not see it, because 60 × 1.0 is 60. It now returns the retimed chart's
+own tempo, and 0.0 when the rate is 1.0 so the screen can say "as written" rather than
+print a number for a song played at its own tempo.
+
+The first of the two is the more interesting one: the no-audio path is a fallback that
+by its nature is rarely exercised, and it was carrying the only broken branch.
+
+### 34.5 What else went
+
+- **`PlaceholderScreen` and `_make_placeholder` are deleted.** Results was the last
+  user of both, and §30.4 and §31 both record dead code here surviving for many commits
+  before anyone noticed.
+- **`AppContext.last_result`** carries the attempt. `navigate()` takes no payload and
+  the shell keeps built screens, so a results screen constructed on the second visit
+  would otherwise hold the first song's numbers — the same bug §32's `showEvent` reload
+  fixed for the game screen. There is a test for the second visit.
+- **The screen re-renders in `showEvent`**, for that same reason, and the test for it
+  has to `shell.show()` first: `showEvent` only fires on a visible widget, and the
+  first version of it asserted the re-render with no window and watched it silently not
+  happen.
+- **An empty state**, because the screen is in the shell's registry and a test can reach
+  it with no result. It says "No song played" rather than showing zeroes, and disables
+  Play again.
+- **`Settings` is at version 5.** Nothing is dropped, so every existing file loads.
+
+### Not done — §34
+
+- **No points, no streak, no per-track best, and no history of attempts.** Two runs of
+  one song at different tempi are reported side by side but not compared, and the best
+  is across all tracks in a tab because that is what the per-song settings already do.
+- **The 12-second tail is not shortened.** It is a property of the render, and trimming
+  it for a screen would be fixing the symptom.
+- **Nothing handles a mid-render abandonment.** A run that is still rendering when the
+  player presses Back is never published, which is right, and there is no record that
+  it was attempted.
+- **The results screen has no audio stop of its own to wait for**, so it is silent
+  apart from whatever the transport is still playing when the transition fires — which
+  is nothing, since the transition is the sound stopping.
+- **`Result` is constructed, recorded, and rebuilt with the comparison filled in.**
+  Because the accuracy to record is the result's own, and the answer is only knowable
+  after recording. Computing the ratio at the call site instead would put the accuracy
+  formula in two places and the two would drift.

@@ -191,6 +191,12 @@ The three `assumed` rows have never been seen hold:
 | A detected note is judged on **pitch, not string** — the strings' ranges overlap, and the same note is the same note. Decided, and the **judge's pitch-keyed index does not exist yet** (`press_pitch` is nowhere in the tree) | planned | §24.2 |
 | The keyboard **stays the default** input; a machine with no audio input is a real case | live | §24.4 |
 | ~~`InputMode.CAMERA` is read as `MICROPHONE`, so an old settings file keeps its meaning~~ — `InputMode` itself is gone with the keyboard. Settings version 4 drops `input_mode` on load; every file on disk says `"keyboard"`, and reading any file now means the microphone, so nothing needs mapping | superseded | §32.2, supersedes §25.5 |
+| The microphone is the **only** input; the six keys and `InputMode` are deleted, and the headphone warning became a visible line rather than a tooltip | live | §32.1, §32.2 |
+| **No points.** No 10,000 maximum and no streak multiplier — the screen shows the tally and the accuracy, and "best" means best accuracy | live | §34.1 |
+| A finished attempt is a **frozen `Result`** in `AppContext.last_result`, carried there because `navigate()` takes no payload and the shell keeps built screens | live | §34.5 |
+| Results is shown when the **sound stops**, not when the last note is judged — the render's decay runs ~12s past the last note, so leaving on the judgement would cut the tail off | live | §34.3 |
+| Final accuracy is hits over the **whole song**, distinct from the HUD's hits-over-judged-so-far; strays are in neither side of the ratio | live | §34.2 |
+| The results screen is registered in the shell, so it needs an **empty state** for the no-result case rather than zeroes | live | §34.5 |
 | An **absence** test must be written against code, not prose — a comment explaining the history defeats it | live | §25.4 |
 | ~~Camera feed mirroring direction~~ — **retired with the camera**; no device to build it on | rejected | §25, supersedes §1.6 |
 | Hit windows: Perfect ±35ms, Good ±80ms, **expire past 140ms** | live | §1.6, §15.7 |

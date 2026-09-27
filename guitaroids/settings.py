@@ -392,15 +392,20 @@ class Settings:
         """
         return self.song_best_accuracy.get(slug, default)
 
-    def record_accuracy_for(self, slug: str, accuracy: float) -> bool:
-        """Record a run's accuracy, keeping the best. Returns whether it is a new best.
+    def record_accuracy_for(self, slug: str, accuracy: float) -> tuple[bool, float | None]:
+        """Record a run's accuracy, keeping the best.
+
+        Returns ``(is_new_best, previous_best)``, and both halves are needed together:
+        the results screen has to say "new best" *and* name what it beat, and asking
+        twice means reading the store between the two calls, when it already holds this
+        run. ``previous_best`` is ``None`` when this was the song's first recorded run.
 
         **The first run for a song is always a new best**, including one that scored
         nothing. The test is against a *missing* key rather than against 0.0, because
         the two differ exactly here: a first attempt at 0% has nothing to beat, so it
-        establishes the bar. Comparing against 0.0 instead made the first run of a
-        song report "not a best" while still storing it, which is a contradiction a
-        screen would have to explain.
+        establishes the bar. Comparing against 0.0 instead made the first run report
+        "not a best" while still storing it, which is a contradiction a screen would
+        have to explain.
 
         Strictly greater after that, so replaying an identical run does not announce a
         new best -- a screen that congratulated you every time you retried the same
@@ -410,10 +415,10 @@ class Settings:
         per-song store with one nameless entry is a bug waiting to be read.
         """
         if not slug:
-            return False
+            return False, None
         value = _clamp_float(accuracy, 0.0, 1.0, 0.0)
         previous = self.song_best_accuracy.get(slug)
         if previous is None or value > previous:
             self.song_best_accuracy[slug] = value
-            return True
-        return False
+            return True, previous
+        return False, previous

@@ -1500,3 +1500,170 @@ def test_leaving_stops_the_input_device_too(shell, chart, fake_mic) -> None:
     screen._mic = FakeMic()
     shell.navigate(Screen.MAIN)
     assert stopped, "the input device was left open on a hidden screen"
+
+
+# --- publishing the result and going to it (§34) -------------------------------
+#
+# The transition is the fiddly part, because "every note is judged" and "the song has
+# finished sounding" are about twelve seconds apart on a real tab, and the guard that
+# noticed the audio stopping used to be `not self._finished` -- which is exactly the
+# moment the results screen needs.
+
+
+def _finished_screen(shell, chart, *, with_audio: bool):
+    """A game screen whose last note has been judged, and whose audio is as described."""
+    from guitaroids.audio.transport import silence
+
+    screen = game_via_shell(shell, chart)
+    _judge_at(screen, 0.0)
+    # Judge every note, so outstanding is 0.
+    for note in screen.chart.notes:
+        screen.state.press_pitch(note.pitch, note.time)
+    assert screen.state.outstanding == 0
+    if with_audio:
+        screen.context.start_playback(
+            silence(30.0, 44100), sample_rate=44100, volume=1.0, device=None
+        )
+        screen._audio_live = True
+    else:
+        screen._audio_live = False
+    return screen
+
+
+def test_the_song_does_not_go_to_results_while_it_is_still_playing(shell, chart) -> None:
+    """The whole point: a note being judged is not the song ending.
+
+    Hotel California's last note is at 380.5s and its buffer runs to 392.5s. Leaving
+    on the judgement would cut the tail off mid-phrase because a counter hit zero.
+    """
+    screen = _finished_screen(shell, chart, with_audio=True)
+    try:
+        screen._tick()
+        assert screen._result_published is False
+        assert shell.current is Screen.GAME
+    finally:
+        screen.context.stop_playback()
+
+
+def test_the_song_goes_to_results_when_the_sound_ends(shell, chart) -> None:
+    screen = _finished_screen(shell, chart, with_audio=True)
+    try:
+        screen.context.stop_playback()  # the tail ran out
+        screen._tick()
+        assert screen._result_published is True
+        assert shell.current is Screen.RESULTS
+        assert screen.context.last_result is not None
+        assert screen.context.last_result.accuracy == pytest.approx(1.0)
+    finally:
+        screen.context.stop_playback()
+
+
+def test_a_song_with_no_audio_goes_immediately(shell, chart) -> None:
+    """The wall clock has no tail and no sound, so the last judgement IS the end."""
+    screen = _finished_screen(shell, chart, with_audio=False)
+    screen._tick()
+    assert shell.current is Screen.RESULTS
+    assert screen.context.last_result is not None
+
+
+def test_it_goes_exactly_once(shell, chart) -> None:
+    """Several frames will pass with the audio already stopped."""
+    screen = _finished_screen(shell, chart, with_audio=False)
+    screen._tick()
+    first = screen.context.last_result
+    shell.navigate(Screen.MAIN)
+    shell.navigate(Screen.RESULTS)
+    screen._tick()
+    screen._tick()
+    assert screen.context.last_result is first, "a second tick republished it"
+
+
+def test_leaving_mid_song_publishes_nothing(shell, chart) -> None:
+    """The attempt was abandoned; recording it as a run would be a lie."""
+    screen = game_via_shell(shell, chart)
+    _judge_at(screen, 0.0)
+    screen._tick()
+    shell.navigate(Screen.MAIN)
+    assert screen.context.last_result is None
+
+
+def test_a_device_lost_mid_song_is_not_mistaken_for_the_end(shell, chart) -> None:
+    """The audio stopping before the last note is a failure, not a finished song.
+
+    This is the pair the old `not self._finished` guard was protecting, and the reason
+    `_maybe_publish` re-checks for itself: both look like "the stream is not playing".
+    """
+    from guitaroids.audio.transport import silence
+
+    screen = game_via_shell(shell, chart)
+    _judge_at(screen, 0.0)
+    # No wall origin: this is the audio-live shape, and `_note_audio_lost` returns
+    # early when one is set -- so leaving it in place tested the guard rather than the
+    # behaviour. (The helper sets it because the wall path needs it to report a time.)
+    screen._wall_origin = None
+    screen.context.start_playback(
+        silence(30.0, 44100), sample_rate=44100, volume=1.0, device=None
+    )
+    screen._audio_live = True
+    try:
+        screen.context.stop_playback()
+        screen._tick()
+        assert screen._result_published is False
+        assert shell.current is Screen.GAME, "it must not navigate away mid-song"
+        assert screen._audio_lost is True, "and it must say the audio stopped"
+    finally:
+        screen.context.stop_playback()
+
+
+def test_a_run_at_the_written_tempo_says_as_written(shell, chart) -> None:
+    """0.0, so the screen says "as written" rather than "practice tempo 60 BPM".
+
+    A run at the tab's own tempo is not a practice tempo, and printing the number for
+    it would be a small lie in the one line a player uses to compare two attempts.
+    """
+    screen = _finished_screen(shell, chart, with_audio=False)
+    screen._tick()
+    result = screen.context.last_result
+    assert result.bpm == 0.0
+    assert result.rate == pytest.approx(1.0)
+
+
+def test_a_slowed_run_records_the_slowed_tempo(shell, chart) -> None:
+    """A run at 75% is a different attempt from one at the written tempo."""
+    screen = game_via_shell(shell, chart, bpm=chart.tempo * 0.75)
+    _judge_at(screen, 0.0)
+    for note in screen.chart.notes:
+        screen.state.press_pitch(note.pitch, note.time)
+    screen._audio_live = False
+    screen._tick()
+    result = screen.context.last_result
+    assert result.rate == pytest.approx(0.75, abs=0.01)
+    # §29.2 already scaled the chart's tempo, so the retimed chart IS the played
+    # tempo. An earlier version multiplied by the rate again and reported 33.75 for
+    # this run -- a tempo nobody played -- and a test at rate 1.0 could not see it.
+    assert result.bpm == pytest.approx(chart.tempo * 0.75, abs=1.0)
+    assert screen.chart.tempo == pytest.approx(chart.tempo * 0.75, abs=1.0)
+
+
+def test_the_song_is_identified_on_the_result(shell, chart) -> None:
+    screen = game_via_shell(shell, chart)
+    _judge_at(screen, 0.0)
+    for note in screen.chart.notes:
+        screen.state.press_pitch(note.pitch, note.time)
+    screen._audio_live = False
+    screen._tick()
+    result = screen.context.last_result
+    assert result.title == (chart.title or chart.track_name)
+    assert result.slug == "test", "and the slug the per-song best is keyed on"
+
+
+def test_the_best_accuracy_is_recorded_by_the_game_screen(shell, chart) -> None:
+    """The setting is written by the same code that publishes the result.
+
+    §28.2's lesson: a preference that is saved, migrated and shown but written by
+    nothing is the project's most repeated bug. This asserts the write happens on the
+    real path, not that the settings class can store a number.
+    """
+    screen = _finished_screen(shell, chart, with_audio=False)
+    screen._tick()
+    assert screen.context.settings.best_accuracy_for("test") == pytest.approx(1.0)
