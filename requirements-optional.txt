@@ -32,8 +32,10 @@
 #   by the channel count, produces a buffer full of NaN and a peak above 1.0
 #   that never happened. Cost us a confusing afternoon once; worth writing down.
 #
-#   Optional in practice: the numpy Karplus-Strong synth needs nothing at all and
-#   takes over when this is absent. Locked in by tests/test_audio_deps.py, which
+#   Optional in practice: the numpy pluck synth needs nothing at all and takes over
+#   when this is absent. (Named "pluck" and not Karplus-Strong: KS is a per-sample
+#   recurrence, so rendering a five-minute chart with it in Python takes minutes.
+#   A fallback slower than the thing it stands in for is not a fallback.) Locked in by tests/test_audio_deps.py, which
 #   asserts pyaudio is absent and that tinysoundfont imports without it.
 
 tinysoundfont==0.3.7

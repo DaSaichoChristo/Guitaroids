@@ -1,26 +1,52 @@
 # Guitaroids — runtime dependencies.
 #
-# Eight direct dependencies, curated by hand. Read this file before changing it:
-# three of these packages cannot be installed by a plain
-# `pip install -r requirements.txt`, for reasons that are not configuration
-# mistakes and cannot be fixed by editing this file.
+# Eight pins: seven direct dependencies, plus one transitive that is deliberate.
+# Read this file before changing it, because the interesting parts are the
+# comments and the ones that used to be warnings.
 #
-#   ==> Use `scripts/setup.sh`. It is the only supported install path.
+#   ==> `scripts/setup.sh` is the supported path, and it is now a convenience
+#       rather than a necessity. A bare `pip install -r requirements.txt` WORKS.
 #
 #
-# 1. tinysoundfont
+# A BARE INSTALL NOW WORKS. Verified, not assumed: in a clean venv, a plain
+# `pip install -r requirements.txt` installs everything above, the app's modules
+# import, and a window opens and renders on the offscreen platform. There is no
+# ordering constraint left, so the long warning that used to live here is gone.
+#
+# It used to say that a bare install was unusable, and that was true: mediapipe
+# required the GUI build of OpenCV, whose bundled Qt plugins hijack
+# QT_PLUGIN_PATH and break PySide6, and both OpenCV builds write to the same
+# cv2/ directory, so the GUI one had to be uninstalled BEFORE the headless one was
+# installed. The reverse order leaves headless's dist-info with its files deleted,
+# pip reports "already satisfied", and `import cv2` stays broken. That cost a real
+# afternoon, and it existed for a webcam tracker that was never built
+# (DESIGN.md §25). Dropping mediapipe dropped the trap with it.
+#
+# WHAT A BARE INSTALL COSTS YOU: the numpy *pluck* synth instead of the
+# soundfont-backed one. It is a real synth, not a beep -- six harmonics under a
+# plucked envelope -- and it is what plays if you have no soundfont. setup.sh
+# additionally installs tinysoundfont and fetches a soundfont, so the app has a
+# sampled guitar.
+#
+#
+# TWO THINGS THAT ARE NOT PYTHON PACKAGES
+#
+# 1. tinysoundfont — installed with --no-deps
 #    Its declared dependency is pyaudio, which has NO Linux wheel in any release
 #    and cannot be built here (portaudio.h is absent; only the libportaudio2
-#    runtime is installed). Installing it normally therefore fails outright.
-#    We never need pyaudio: it is imported in exactly one place in the package,
-#    `Synth.start()`, which is a convenience loader we do not use. It lives in
-#    requirements-optional.txt, which setup.sh installs with --no-deps.
+#    runtime is installed). Installing it normally therefore fails outright, so it
+#    lives in requirements-optional.txt and setup.sh installs it that way.
 #
-# 2. Soundfont
-#    Not a Python package. Fetched by scripts/fetch_soundfont.sh, and gitignored.
+#    We never need pyaudio. It is imported in exactly ONE place in the whole
+#    package, `Synth.start()`, which is a convenience loader we do not use: we
+#    load soundfonts with `sfload()`, which does not touch it. (An earlier version
+#    of this file said the way round pyaudio was `generate_simple()`. That is half a
+#    route: `generate_simple()` is clean, but the only ways to reach a *loaded*
+#    soundfont are `start()` -- which explodes -- and `sfload()`.)
 #
-# The numpy Karplus-Strong synth is the fallback when tinysoundfont is absent, so
-# the app still makes sound with only this file installed.
+# 2. The soundfont
+#    Not a package. Fetched by scripts/fetch_soundfont.sh, and gitignored. Absent
+#    is fine: the pluck synth takes over.
 #
 #
 # WHY THIS FILE IS SHORTER THAN THE VENV
@@ -28,13 +54,11 @@
 # Transitive dependencies live in requirements-lock.txt, which is `pip freeze` of
 # one working environment. A transitive may be pinned here only with a stated
 # reason, and exactly one is (`attrs`, below). Use the lock file to reproduce an
-# environment; use this one to know what we actually depend on.
+# environment; use this one to know what we actually depend on. A clean install from
+# this file alone pulls twelve packages; the venv has eighteen, the difference being
+# tinysoundfont, pytest, and four that are only there because tinysoundfont's
+# install path is unusual.
 #
-# There used to be a THIRD caveat here, the longest one: OpenCV had to be
-# uninstalled and reinstalled in a strict order, because mediapipe insists on the
-# GUI build and both builds write to the same cv2/ directory. It existed for
-# `import cv2`, which nothing imported, for a webcam tracker that was never built
-# (DESIGN.md §25). Dropping mediapipe dropped the trap with it.
 #
 # WHY A PIN IS HERE
 #
@@ -46,8 +70,9 @@
 #
 #   imported today      PySide6, shiboken6, numpy, sounddevice, PyGuitarPro,
 #                       attrs (a deliberate transitive pin)
-#   audio milestone     soundfile (§3.1, decoding) — not imported yet; the synth
-#                       renders offline and nothing decodes a file yet
+#   audio milestone     soundfile (§3.1, decoding) — not imported yet. The synth
+#                       renders straight from the Chart and nothing decodes a file,
+#                       so this is pinned for the day a song has backing audio.
 
 PySide6==6.11.2
 shiboken6==6.11.2
@@ -76,3 +101,5 @@ attrs==26.1.0
 #   pyaudio          never imported; only `Synth.start()` would need it, and we
 #                    load soundfonts with `sfload()` instead.
 #   av, pydub        rejected: need Python 3.11+ / an ffmpeg binary (§3.1).
+#   opencv           with it went mediapipe and the whole install-order trap. See
+#                    the top of this file and DESIGN.md §25.

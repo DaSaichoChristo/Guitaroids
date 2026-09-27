@@ -37,12 +37,14 @@ says what ran.
   toolchain plus Python dev headers. Check `.venv/bin/python --version`, not the
   system `python3`. `DESIGN.md` §5.1 records a wrong analysis caused by exactly
   this; §7.1 records the version hunt.
-- **Install with `scripts/setup.sh`.** There used to be a `never pip install -r
-  requirements.txt` caveat here — the longest paragraph in this file — because
-  mediapipe pulled in the GUI OpenCV build and both builds write the same `cv2/`
-  directory, so one had to be uninstalled before the other was installed. All of
-  that went with the webcam (§25). The one caveat left is tinysoundfont's
-  `--no-deps`, and `pip install --dry-run` still reports false success on it.
+- **A bare `pip install -r requirements.txt` works** — verified in a clean venv,
+  where the app installs, imports, and opens a window (§27.2). `scripts/setup.sh` is
+  still the supported path, for tinysoundfont, a soundfont, and the M0 gate. There
+  used to be a "never pip install" caveat here — the longest paragraph in this file —
+  because mediapipe pulled in the GUI OpenCV build and both builds write the same
+  `cv2/` directory; all of that went with the webcam (§25). The one install caveat
+  left is tinysoundfont's `--no-deps`, and `pip install --dry-run` still reports
+  false success on it.
   `scripts/setup.ps1` is the PowerShell equivalent; `tests/test_setup_scripts.py`
   keeps the two from drifting. `requirements.txt` is **7 direct pins, all `==`**,
   and `tests/test_requirements.py` keeps it honest: no transitive may be pinned
@@ -81,7 +83,7 @@ says what ran.
 
 ## Current state
 
-`tests/` is 809 tests, all passing. **Five of the six screens are real:** the main
+`tests/` is 813 tests, all passing. **Five of the six screens are real:** the main
 menu, song select (tab + track + audio offset + **per-song practice tempo**), import
 GP (choose a file, then Add to library), preferences, and **game** — three bars
 of tab notation with a left-to-right beat line, `E A D G B E` down the left, a six-key keyboard test mode and PERFECT/GOOD/MISS

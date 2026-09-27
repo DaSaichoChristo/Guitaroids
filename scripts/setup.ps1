@@ -3,9 +3,13 @@
     Reproducible setup for Guitaroids on Windows. PowerShell equivalent of setup.sh.
 
 .DESCRIPTION
-    Installs dependencies in the one order that works. This is the ONLY supported
-    install path -- see requirements.txt for why a bare `pip install -r
-    requirements.txt` is not equivalent.
+    venv, pins, the --no-deps package, a soundfont, and the M0 gate, in one command.
+
+    This is the *supported* path, and it used to be the only working one. A bare
+    `pip install -r requirements.txt` now installs everything and the app runs,
+    verified in a clean venv. What this script adds is tinysoundfont (which cannot
+    be installed normally) and a soundfont -- without them the app plays the numpy
+    pluck synth instead of a sampled guitar. See the top of requirements.txt.
 
     PowerShell equivalent of scripts/setup.sh.
     KEEP THE TWO IN SYNC -- tests/test_setup_scripts.py asserts they agree on the

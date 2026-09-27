@@ -57,7 +57,9 @@ def soundfont_candidates() -> tuple[Path, ...]:
     """Every place a soundfont might be, most specific first.
 
     The first that exists wins. Nothing here is required: with no soundfont the
-    numpy Karplus-Strong synth is used instead (DESIGN.md §9.5).
+    numpy *pluck* synth is used instead -- additive synthesis with a plucked
+    envelope, not Karplus-Strong, which is a per-sample recurrence and would render
+    a five-minute chart in minutes (DESIGN.md §24).
     """
     candidates: list[Path] = []
 

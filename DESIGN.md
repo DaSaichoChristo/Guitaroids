@@ -3220,3 +3220,101 @@ same class of bug again in the timeout.
 - **`Stream.latency` is still read on every `position()` call**, which is a PortAudio
   call per frame. It is cheap, and it is also the one remaining place this screen
   touches the driver from the GUI thread.
+
+## §27 — A bare `pip install` works, and that is worth saying (2026-09-26)
+
+**Tests: 813, all passing.** Not a dependency change. A *claim* in `requirements.txt`
+that had become false, tested rather than assumed, and then removed.
+
+### 27.1 The claim that was left behind
+
+Every version of `requirements.txt` opened with the same warning, and it was the
+longest thing in the file:
+
+> ==> Use `scripts/setup.sh`. It is the only supported install path.
+
+> **Use `scripts/setup.sh`, never `pip install -r requirements.txt`.** …
+
+§25 removed the *reason* — the OpenCV ordering trap — but the two files went on
+saying the conclusion, because nothing tests prose. So the project kept telling
+people to avoid a `pip install` that has worked since mediapipe was uninstalled five
+commits earlier.
+
+That is worse than an obsolete note nobody reads. A developer avoiding a path that
+works will meet a real install problem eventually, and by then they have learned to
+discount this file.
+
+### 27.2 Verified rather than reasoned about
+
+The claim could have been rewritten from the argument above. It was not, because the
+argument is exactly the kind of thing that was wrong for §25 — "nothing imports
+`cv2`" did not mean "nothing pulls OpenCV in".
+
+So it was checked:
+
+```
+python3.12 -m venv /tmp/barevenv
+/tmp/barevenv/bin/pip install -r requirements.txt     # exit 0
+```
+
+- installs cleanly, twelve packages, **no ordering constraint and no error**;
+- `PySide6`, `numpy`, `soundfile`, `sounddevice`, `guitarpro` all import;
+- `guitaroids.ui.game`, `guitaroids.audio.render` and `guitaroids.audio.transport`
+  all import;
+- a `QApplication` constructs, a widget is visible, and a `QPainter` pass rasterises
+  — offscreen, from that venv, with nothing from the project's own.
+
+A bare install works. What it costs you is the **numpy pluck synth instead of a
+soundfont-backed guitar** — a real synth, not a beep, and the one that plays if you
+have no soundfont — which is what `setup.sh` additionally buys you, along with
+tinysoundfont and the M0 gate.
+
+### 27.3 What the file says now, and what is pinned
+
+The header states that a bare install works, **says how that was checked**, and says
+what you lose. Both setup scripts dropped "the only supported install path" for the
+same reason and now say what they add instead.
+
+The two facts that are still true survived the softening: tinysoundfont genuinely
+cannot be installed normally (no `portaudio.h`), and the soundfont genuinely is not
+a package. Dropping the caveats along with the obsolete one would have lost both.
+
+Three tests, in the shape §25.4 taught:
+
+- `test_the_obsolete_bare_install_warning_is_gone` — the **absence** of "ONLY
+  supported install path" and "is not equivalent", and the presence of the
+  replacement. This is the one that fails if somebody reverts the wording.
+- `test_the_one_install_caveat_that_remains_is_still_stated` — softer claims are not
+  no claims.
+- `test_the_bare_install_claim_is_verified_not_asserted` — the evidence is recorded
+  in the file, including how to repeat it, so the next person can check rather than
+  trust.
+
+The verification itself is **not** in the suite: it needs a venv and a network, and a
+test that creates one would be slow and flaky. That gap is the honest limitation here
+and it is why the claim is written into the file as a reproducible recipe rather than
+as a result.
+
+### 27.4 A synth that does not exist, named in four places
+
+`requirements.txt`, `requirements-optional.txt` and `paths.py` all promised a
+"numpy Karplus-Strong synth" — a synth that was never written, described in prose
+since §7.5 and implemented as additive synthesis in §24. A requirements file is a
+place a reader trusts, and it was the first place they would have met it.
+
+All three now say **pluck**, and say why it is not KS: the recurrence is per-sample,
+so rendering a five-minute chart in Python takes minutes, and a fallback slower than
+the thing it stands in for is not a fallback. The four DESIGN.md mentions are
+append-only history and stay.
+
+### Not done — §27
+
+- **The bare-install verification is manual.** It is a recipe in a comment, not a CI
+  job. A weekly job that builds a venv from this file and runs the M0 gate would make
+  it a fact rather than a claim, and it is the natural home for the check.
+- **`requirements-lock.txt` was not regenerated**, because no version changed. It is
+  verified against the venv by `test_requirements.py` on every run, so it cannot
+  have drifted.
+- **The header is long.** Eight pins and a page of prose, and the balance may be
+  wrong. It is long because every caveat in it cost an afternoon to learn, which is
+  the defence; if it grows again it should probably move to a doc.

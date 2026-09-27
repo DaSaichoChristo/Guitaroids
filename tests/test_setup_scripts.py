@@ -137,15 +137,37 @@ def test_both_offer_the_numpy_fallback(sh: str, ps1: str) -> None:
         assert "pluck synth" in text, f"{name} does not mention the numpy fallback"
 
 
-def test_both_warn_about_the_bare_pip_install(sh: str, ps1: str) -> None:
+def test_both_point_at_requirements_for_what_they_add(sh: str, ps1: str) -> None:
+    """Both scripts say what they are *for*, and it is no longer "the only way".
+
+    A bare `pip install -r requirements.txt` now works -- verified in a clean venv,
+    where the app installs, imports, and opens a window. So the scripts cannot keep
+    claiming a bare install is broken; that claim was true and cost a day, and
+    leaving it in place would have people avoiding a path that is fine.
+    """
     for name, text in (("setup.sh", sh), ("setup.ps1", ps1)):
         assert "requirements.txt" in text, f"{name} does not reference requirements.txt"
-        # Collapse whitespace: these are wrapped prose files, so the phrase can be
-        # split across a line break and an indent.
         flat = re.sub(r"\s+", " ", text)
-        assert re.search(r"only supported install path", flat, re.I), (
-            f"{name} does not say it is the only supported install path"
+        assert re.search(r"only supported install path", flat, re.I) is None, (
+            f"{name} still says a bare install is not usable; it is"
         )
+        # ...and it has to say what it does add, or the change is silent.
+        assert re.search(r"tinysoundfont", flat, re.I), f"{name} does not say why to use it"
+
+
+def test_the_bare_install_claim_is_verified_not_asserted() -> None:
+    """The file states a bare install works. That is a fact about a clean venv.
+
+    It cannot be checked in this suite -- it needs a venv and a network, and a test
+    that creates one would be slow and flaky -- so what is pinned here is that the
+    claim is *recorded*, including how it was checked, so a reader can repeat it and
+    so nobody quietly deletes the evidence.
+    """
+    text = (ROOT / "requirements.txt").read_text()
+    flat = re.sub(r"\s+", " ", text)
+    assert "A BARE INSTALL NOW WORKS" in text
+    assert "clean venv" in flat, "say how it was checked"
+    assert "pluck" in flat and "sampled" in flat, "say what you lose without setup.sh"
 
 
 def test_powershell_reports_native_exit_codes(ps1: str) -> None:

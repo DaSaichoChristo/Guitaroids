@@ -292,3 +292,48 @@ def test_the_optional_and_dev_files_are_small_and_deliberate() -> None:
     assert set(parse(DEV)) == {"pytest"}
     assert "no-deps" in OPTIONAL.read_text()
     assert "requirements.txt" in DEV.read_text(), "dev installs the runtime too"
+
+
+def test_the_obsolete_bare_install_warning_is_gone() -> None:
+    """**The absence is the assertion**, and it is the whole point of this update.
+
+    A bare `pip install -r requirements.txt` now installs everything and the app
+    runs: verified in a clean venv, where the modules import and a window opens. The
+    file used to say it could not, which was true once and stopped being true when
+    mediapipe went (§25).
+
+    Leaving the warning in place is worse than leaving it out. People would avoid a
+    path that works, and the next person to hit a real install problem would discount
+    everything else in the file too.
+    """
+    text = REQUIREMENTS.read_text()
+    flat = re.sub(r"\s+", " ", text)
+    assert "ONLY supported install path" not in flat
+    assert "is not equivalent" not in flat, "the old claim is still in here"
+    assert "A BARE INSTALL NOW WORKS" in text, "and the replacement is not"
+
+
+def test_the_one_install_caveat_that_remains_is_still_stated() -> None:
+    """Softer claims do not mean no claims.
+
+    tinysoundfont genuinely cannot be installed normally, and the soundfont genuinely
+    is not a package. Dropping the caveats with the obsolete one would lose two facts
+    that are still true.
+    """
+    text = REQUIREMENTS.read_text()
+    assert "pyaudio" in text and "--no-deps" in text
+    assert "fetch_soundfont.sh" in text
+    assert "portaudio.h" in text, "the reason it cannot be built is worth keeping"
+
+
+def test_the_synth_fallback_is_named_after_what_it_is() -> None:
+    """"pluck", not "Karplus-Strong".
+
+    The fallback is additive synthesis with a plucked envelope, not a per-sample KS
+    recurrence, because KS renders a five-minute chart in minutes and a fallback
+    slower than the thing it stands in for is not a fallback (§24). Naming it
+    Karplus-Strong in a requirements file would be the first place a reader meets a
+    synth that does not exist.
+    """
+    assert "Karplus-Strong" not in REQUIREMENTS.read_text()
+    assert "pluck" in REQUIREMENTS.read_text()

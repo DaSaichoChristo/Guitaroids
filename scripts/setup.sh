@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# Reproducible setup. Installs dependencies in the one order that works.
-# This is the ONLY supported install path -- see requirements.txt for why a bare
-# `pip install -r requirements.txt` is not equivalent.
+# Reproducible setup: venv, pins, the --no-deps package, a soundfont, and the
+# M0 gate, in one command.
+#
+# This is the *supported* path, and it used to be the only working one. It no longer
+# is: a bare `pip install -r requirements.txt` now installs everything and the app
+# runs, verified in a clean venv. What this script adds is tinysoundfont (which
+# cannot be installed normally, point 2 below), a soundfont, and the gate. See the
+# top of requirements.txt for what a bare install costs you -- the numpy pluck synth
+# instead of a sampled guitar.
 #
 # PowerShell equivalent: scripts/setup.ps1
 # KEEP THE TWO IN SYNC -- tests/test_setup_scripts.py asserts they agree on the
@@ -18,7 +24,7 @@
 # headless one, in that order, because both write to the same cv2/ directory. It
 # existed entirely because mediapipe requires the GUI build, and mediapipe existed
 # entirely because we were going to track hands with a webcam. We are not
-# (DESIGN.md §25). The trap is gone, and so is the caveat in requirements.txt.
+# (DESIGN.md §25). That was the last thing here that could break a bare install.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

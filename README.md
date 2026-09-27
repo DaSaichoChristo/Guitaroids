@@ -110,10 +110,12 @@ PLAYABLE
 
 Both have bitten this project and both are enforced by tests:
 
-- **Use `scripts/setup.sh`.** There used to be a companion warning here about
-  OpenCV: mediapipe required the *GUI* build, whose Qt plugins break PySide6, and
-  the two builds had to be installed in a strict order. Mediapipe is gone — the
-  input is a microphone — so the trap went with it (`DESIGN.md` §25).
+- **`pip install -r requirements.txt` now just works** — checked in a clean venv,
+  where the app installs, imports, and opens a window. `scripts/setup.sh` is still
+  the supported path, for tinysoundfont, a soundfont and the test gate; what a bare
+  install costs you is the numpy pluck synth instead of a sampled guitar
+  (`DESIGN.md` §27). It used to be the other way round, with a long warning about
+  OpenCV install order that went away when the webcam did (`DESIGN.md` §25).
 - **`pyaudio` cannot be installed here** — no Linux wheel, and no `portaudio.h` to
   build one. `tinysoundfont` is therefore installed with `--no-deps`, which is safe
   because `pyaudio` is a lazy import used only for real-time playback. Locked in by
@@ -143,7 +145,7 @@ guitaroids/
   songlib.py library scan, pairing, status
   settings.py user preferences                  pure, no Qt
 scripts/     setup, asset fetchers, import report, screenshots
-tests/       809 tests
+tests/       813 tests
 songs/       your tabs and audio (gitignored)
 ```
 
