@@ -385,3 +385,175 @@ def test_a_chord_still_counts_as_one_onset_for_the_tally(chord_state: GameState)
     assert GameState(
         make_chart([(2.0, lane, 5) for lane in range(6)], collapse=True)
     ).outstanding == 1
+
+
+# --- press_pitch: the microphone's way in (§24.2, §29.4) ----------------------
+#
+# A detected fundamental does not identify a lane. Measured on the real library, 13 of
+# 24 distinct pitches are reachable on more than one string and MIDI 49 is on three, so
+# matching a detected pitch to a single lane would be wrong about half the time in two
+# of the three tabs -- and never wrong in the third, which is how it would have shipped.
+
+
+def test_a_detected_pitch_hits_the_note_the_song_asked_for() -> None:
+    chart = make_chart([(2.0, 0, 0)], tempo=60, collapse=False)
+    state = GameState(chart)
+    pitch = chart.notes[0].pitch
+    judgement = state.press_pitch(pitch, 2.0)
+    assert judgement is not None
+    assert judgement.lane == 0, "the chart's lane, not a guess at the string"
+    assert judgement.pitch == pitch
+    assert judgement.verdict is Verdict.PERFECT
+
+
+def test_a_pitch_on_three_lanes_resolves_to_the_nearest_note() -> None:
+    """The real case: one pitch, three strings, and pitch alone cannot say which.
+
+    The library's tuning is dropped, which is how MIDI 49 lands on three lanes there.
+    This builds the same shape in the standard tuning, where MIDI 50 is reachable as
+    open D (lane 3), A-string 5th fret (lane 4) and low-E 10th fret (lane 5) -- so the
+    ambiguity is a property of the instrument, not of one odd tab.
+    """
+    chart = make_chart(
+        [(1.0, 3, 0), (2.0, 4, 5), (3.0, 5, 10)], tempo=60, collapse=False
+    )
+    pitches = {n.pitch for n in chart.notes}
+    assert len(pitches) == 1, f"expected one shared pitch, got {pitches}"
+    pitch = pitches.pop()
+
+    state = GameState(chart)
+    assert state.press_pitch(pitch, 1.0).lane == 3
+    assert state.press_pitch(pitch, 2.0).lane == 4
+    assert state.press_pitch(pitch, 3.0).lane == 5
+    assert state.misses == 0
+
+
+def test_measured_overlap_on_the_real_library_is_not_a_rare_edge_case() -> None:
+    """Why the pitch index exists, counted rather than asserted in prose.
+
+    A filter bank or a lane guess would be right about half the pitches in two of the
+    three tabs -- and perfectly right in the third, so it would have shipped.
+    """
+    from pathlib import Path
+
+    from guitaroids.songlib import scan_library
+
+    library = scan_library(Path("songs"), collapse=False)
+    shared = total = 0
+    for entry in library.entries:
+        chart = entry.chart_for(entry.tracks[0].number, collapse=False)
+        if chart is None:
+            continue
+        lanes: dict[int, set[int]] = {}
+        for note in chart.notes:
+            lanes.setdefault(note.pitch, set()).add(note.lane)
+        total += len(lanes)
+        shared += sum(1 for value in lanes.values() if len(value) > 1)
+    if total == 0:
+        pytest.skip("no tabs in songs/")
+    assert total > 10, f"only {total} distinct pitches; the library looks different"
+    assert shared / total > 0.25, (
+        f"only {shared} of {total} pitches are ambiguous, so §24.2's argument is "
+        "weaker than recorded"
+    )
+
+
+def test_the_two_ways_in_cannot_judge_the_same_note_twice() -> None:
+    """They share `by_note`, so a note hit by pitch is closed to a keypress on its lane."""
+    chart = make_chart([(2.0, 0, 0)], tempo=60, collapse=False)
+    state = GameState(chart)
+    first = state.press_pitch(chart.notes[0].pitch, 2.0)
+    assert first is not None
+    second = state.press(0, 2.0)
+    assert second is not None and second.verdict is Verdict.STRAY, "already judged"
+    assert state.resolved == 1
+    assert state.misses == 0, "one note, not a miss and a hit"
+
+
+def test_a_pitch_the_song_never_uses_is_a_stray() -> None:
+    chart = make_chart([(2.0, 0, 0)], tempo=60, collapse=False)
+    state = GameState(chart)
+    stray = state.press_pitch(chart.notes[0].pitch + 6, 2.0)
+    assert stray is not None and stray.verdict is Verdict.STRAY
+    assert state.strays == 1
+
+
+def test_a_held_note_is_not_counted_as_a_stray_for_every_window() -> None:
+    """The subtlety that makes a microphone usable.
+
+    At the 512-sample hop a 400ms note is detected about 35 times. Counting each
+    re-detection would add 35 to the tally for one note held down, and the count would
+    say nothing about how the player played. So a re-detection is silent.
+    """
+    chart = make_chart([(2.0, 0, 0)], tempo=60, collapse=False)
+    state = GameState(chart)
+    pitch = chart.notes[0].pitch
+
+    first = state.press_pitch(pitch, 2.0)
+    assert first is not None
+    assert state.strays == 0
+
+    # 35 further detections across the note's length, as the estimator would deliver.
+    for step in range(1, 36):
+        again = state.press_pitch(pitch, 2.0 + step * 0.0116)
+        assert again is None, f"re-detection {step} produced {again}"
+
+    assert state.strays == 0
+    assert state.resolved == 1
+    assert state.misses == 0
+
+
+def test_a_detection_outside_the_window_is_silent_too() -> None:
+    """Before the window, the note has not been missed -- it has not started."""
+    chart = make_chart([(2.0, 0, 0)], tempo=60, collapse=False)
+    state = GameState(chart)
+    assert state.press_pitch(chart.notes[0].pitch, 1.0) is None
+    assert state.strays == 0
+
+
+def test_the_miss_window_still_expires_a_note_nobody_played() -> None:
+    """`update` is unchanged and still per-lane, and every note is in exactly one lane."""
+    chart = make_chart([(2.0, 0, 0), (3.0, 1, 1)], tempo=60, collapse=False)
+    state = GameState(chart)
+    fresh = state.update(2.5)
+    assert [j.lane for j in fresh] == [0]
+    assert fresh[0].verdict is Verdict.MISS
+    assert state.misses == 1
+
+
+def test_a_chart_with_no_pitches_cannot_be_matched_by_pitch() -> None:
+    """No tuning means no pitch index, and that is a state to be able to report."""
+    from dataclasses import replace
+
+    chart = make_chart([(2.0, 0, 0)], tempo=60, collapse=False)
+    stripped = replace(chart, notes=tuple(replace(n, pitch=0) for n in chart.notes))
+    state = GameState(stripped)
+    assert state.unpitched == 1
+    assert state.press_pitch(64, 2.0) is not None, "the only thing left is a stray"
+    assert state.strays == 1
+    assert state.unpitched == 1, "and it stays reported, because a chart the microphone "
+    "can never hit is worth knowing about"
+
+
+def test_every_note_in_the_real_library_carries_a_pitch() -> None:
+    """Measured, not assumed: the pitch index is only worth building if this is true.
+
+    9764 notes over three tabs. If the tuning were ever unavailable the pitch-keyed
+    index would silently match nothing, and this is the assertion that says so.
+    """
+    from pathlib import Path
+
+    from guitaroids.songlib import scan_library
+
+    library = scan_library(Path("songs"), collapse=False)
+    if not library.entries:
+        pytest.skip("no tabs in songs/")
+    total = unpitched = 0
+    for entry in library.entries:
+        chart = entry.chart_for(entry.tracks[0].number, collapse=False)
+        if chart is None:
+            continue
+        total += len(chart.notes)
+        unpitched += sum(1 for note in chart.notes if note.pitch <= 0)
+    assert total > 1000, f"only {total} notes checked; the library looks different"
+    assert unpitched == 0, f"{unpitched} of {total} notes have no pitch"

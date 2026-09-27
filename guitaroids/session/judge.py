@@ -62,8 +62,20 @@ class Judgement:
 
     verdict: Verdict
     lane: int
+    """The **chart note's** lane, whichever way the note was hit.
+
+    For :meth:`GameState.press_pitch` that is not the string the detected pitch could
+    have come from -- MIDI 55 is D-string-5 *or* open G -- and it is deliberately not
+    reported, because the playfield draws what the song asked for and a hit drawn on the
+    wrong string would be a lie about the tab. ``-1`` means the pitch matched no note at
+    all, which is the stray case.
+    """
+
     note_time: float
     delta_seconds: float = 0.0
+    pitch: int = 0
+    """The detected MIDI pitch, when the judgement came from the microphone. 0 for a
+    keypress, and for a note matched by lane."""
 
     @property
     def is_penalised(self) -> bool:
@@ -87,6 +99,18 @@ class GameState:
     #: Indices into ``chart.notes``, per lane, still awaiting a verdict.
     _pending: list[list[int]] = field(default_factory=list)
     _lane_times: list[list[float]] = field(default_factory=list)
+    #: The same, keyed by MIDI pitch instead of by string. §24.2: the six strings'
+    #: ranges overlap, so a detected fundamental does not identify a lane -- measured on
+    #: the real library, 13 of 24 distinct pitches are reachable on more than one
+    #: string, and MIDI 49 is on three. Both indices share :attr:`by_note`, so a note
+    #: cannot be judged twice whichever way it is hit.
+    _pending_pitch: dict[int, list[int]] = field(default_factory=dict)
+    _pitch_times: dict[int, list[float]] = field(default_factory=dict)
+    #: Notes with no pitch at all (the tab carried no usable tuning). They cannot be
+    #: matched by pitch, so they are absent from the pitch index and can only be hit
+    #: by lane. Counted rather than assumed: a chart that is entirely unmatchable by
+    #: pitch is a state worth being able to report.
+    unpitched: int = 0
     judgements: list[Judgement] = field(default_factory=list)
     #: Judgements keyed by note index, for the hit feedback layer.
     by_note: dict[int, Judgement] = field(default_factory=dict)
@@ -99,9 +123,17 @@ class GameState:
     def _rebuild(self) -> None:
         self._pending = [[] for _ in range(6)]
         self._lane_times = [[] for _ in range(6)]
+        self._pending_pitch = {}
+        self._pitch_times = {}
+        self.unpitched = 0
         for index, note in enumerate(self.chart.notes):
             self._pending[note.lane].append(index)
             self._lane_times[note.lane].append(note.time)
+            if note.pitch <= 0:
+                self.unpitched += 1
+                continue
+            self._pending_pitch.setdefault(note.pitch, []).append(index)
+            self._pitch_times.setdefault(note.pitch, []).append(note.time)
 
     # --- queries -------------------------------------------------------------
 
@@ -198,6 +230,70 @@ class GameState:
             self.judgements.append(stray)
             return stray
 
+        self.by_note[best_index] = best
+        self.judgements.append(best)
+        if best.is_penalised:
+            self.misses += 1
+        return best
+
+    def press_pitch(self, pitch: int, position: float) -> Judgement | None:
+        """Resolve a **detected** pitch at ``position``, or ``None``.
+
+        The same algorithm as :meth:`press` over a pending list keyed by MIDI pitch
+        instead of by string, sharing :attr:`by_note` so a note cannot be judged twice
+        whichever way it is hit. The returned :attr:`Judgement.lane` is the **chart
+        note's** lane, not the string the pitch could have come from: the display stays
+        truthful about what the song asked for.
+
+        A pitch the song never uses is a stray, counted. A pitch the song *does* use
+        with nothing resolvable right now returns ``None`` **silently**, and that
+        asymmetry is the whole subtlety of playing a real instrument:
+
+        - A held note is detected on every analysis window -- at the 512-sample hop, a
+          note lasting 400ms is heard about **35 times**. If each re-detection were a
+          stray, a single held note would add 35 to the count and the tally would say
+          nothing about how the player played.
+        - So "already judged, or outside the window" is treated as *the same note still
+          sounding*, which is what it is.
+
+        Returns ``None`` rather than a STRAY for those, and the caller has nothing to
+        do about it, which is what a microphone needs: most of what it hears is a note
+        that is already being held.
+        """
+        if pitch in self._pitch_times:
+            indices = self._pending_pitch[pitch]
+            times = self._pitch_times[pitch]
+        else:
+            # A pitch the chart never asks for. This is the one case that is genuinely
+            # the player playing something else, so it counts.
+            self.strays += 1
+            stray = Judgement(Verdict.STRAY, lane=-1, note_time=position, pitch=pitch)
+            self.judgements.append(stray)
+            return stray
+
+        low = bisect_left(times, position - MISS_SECONDS)
+        high = bisect_right(times, position + MISS_SECONDS)
+
+        best: Judgement | None = None
+        best_index: int | None = None
+        for slot in range(low, high):
+            index = indices[slot]
+            if index in self.by_note:
+                continue
+            note = self.chart.notes[index]
+            delta = position - note.time
+            if best is None or abs(delta) < abs(best.delta_seconds):
+                best_index = index
+                best = Judgement(
+                    verdict=verdict_for(delta),
+                    lane=note.lane,
+                    note_time=note.time,
+                    delta_seconds=delta,
+                    pitch=pitch,
+                )
+
+        if best is None or best_index is None:
+            return None
         self.by_note[best_index] = best
         self.judgements.append(best)
         if best.is_penalised:
