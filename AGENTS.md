@@ -80,7 +80,7 @@ says what ran.
 
 ## Current state
 
-`tests/` is 891 tests, all passing (not counting `tests/test_docs.py` itself --
+`tests/` is 919 tests, all passing (not counting `tests/test_docs.py` itself --
 that file checks this number, and a test that counts itself never matches). **Five of the six screens are real:** the main
 menu, song select (tab + track + audio offset + **per-song practice tempo**), import
 GP (choose a file, then Add to library), preferences, and **game** — three bars
@@ -168,17 +168,21 @@ mediapipe's OpenCV. Check `pip list` for `opencv` before anything else.
 
 ## The next blocker
 
-**The output half is built, and so is the note detector; the wire between them is
-not.** The game screen's clock is the audio device's (§23), a real tab plays through
-a real sound card, the practice tempo slows the music (§29.2), and `audio/pitch.py`
-finds a note — verified against the project's own rendered audio, not a sine (§29.3).
+**Everything is built except one thing the user has to do.** The clock is the audio
+device's (§23), a real tab plays through a real sound card, the practice tempo slows
+the music (§29.2), and the input half is wired end to end: `audio/pitch.py` finds a
+note, `audio/mic.py` opens a microphone, and the judge matches a **detected pitch**
+rather than a lane, because the strings' ranges overlap (§24.2, §30).
 
-What does not exist is `audio/mic.py`: nothing opens an input device, so
-`Settings.input_device` is still read by nothing and the judge still only takes a
-lane. So the next step is the microphone — a `sounddevice` input stream whose callback
-only copies into a ring, a worker that runs the estimator off the audio thread, and the
-judge's pitch-keyed index beside its lane-keyed one (§24.2). The judge half is pure and
-testable with no device; the capture half is the part that needs hardware.
+What does not exist is a *verified* note detector. §29.3 checks the estimator against
+this project's own synthesis, which is cleaner than a real guitar through a laptop
+microphone — no fret buzz, no room, no sympathetic resonance. The next step is playing
+an actual guitar and seeing what `MIN_CLARITY` and the analysis window need.
+
+**The keyboard is still here, and is scheduled to go.** §24.4's reason for keeping it —
+"a demo on an unfamiliar machine may have no audio input at all" — is no longer the
+plan. The microphone becomes the only input, and the rule that followed from it -- a
+keyboard path that always works -- goes with it.
 
 ## Audio
 

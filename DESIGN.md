@@ -3677,3 +3677,116 @@ matters is whether the pitch is in the chart, and only the judge knows the chart
   own synthesis, which is a plucked-string model and therefore clean in a way a cheap
   acoustic guitar through a laptop microphone is not. Expect to widen `MIN_CLARITY` and
   the 3.6-periods margin after the first attempt with the actual instrument.
+
+## §30 — A microphone, and the latency that comes with it (2026-09-27)
+
+**Tests: 938 in total — 915 excluding `tests/test_docs.py`.** `audio/mic.py` exists, so
+§29.3's Not done list is out of date and `test_docs.py` said so before this section
+did. `Settings.input_device` is read by something for the first time.
+
+### 30.1 Split so that almost none of it needs hardware
+
+The one part of the input half that cannot be verified without a guitar in front of a
+laptop, split in two so that the parts which *can* be wrong without hardware are:
+
+- **`PitchDetector`** — pure and synchronous. Blocks in, estimates out. The windowing,
+  the latency arithmetic and the drop policy all live here, and all of it is tested
+  with no device.
+- **`Microphone`** — a thin wrapper. A `sounddevice` input stream whose callback only
+  copies, a daemon thread that drains a queue, and a callback for the result.
+
+**Nothing of ours is inside the audio callback.** It does the least thing it can: write
+into a preallocated array, then hand it on. It does not estimate, allocate, lock or
+emit — a pitch estimate is a few milliseconds of numpy, and that is a dropout in a
+callback running at real-time priority. This is §26.3's rule, and it is the reason the
+project has had no core dumps since the transport moved to the callback API.
+
+**The queue is bounded and drops the oldest audio.** If the worker falls behind, the
+right failure is a gap — a missed note the player did not play — and the wrong one is
+unbounded growth that eventually takes the process down.
+
+### 30.2 The window overlaps, and that is deliberate
+
+The window advances by a 512-sample hop rather than by its own 2048-sample length, so a
+window overlaps itself and **a note is heard about 23 times** for every 300ms it
+sounds. Measured on a real rendered note: 22 estimates from 300ms, every one the
+correct MIDI note.
+
+That redundancy is the point — a dropped window costs one estimate rather than a note —
+and it is why the judge half had to be designed for it first. A keypress is one event.
+A held guitar note is twenty-three. So `press_pitch` treats "already judged, or outside
+the window" as **the same note still sounding** and returns `None` silently, while a
+pitch the song *never* uses is a stray and is counted. The asymmetry is the whole
+subtlety: counting every re-detection would add 23 to the tally for one held note and
+the count would say nothing about how the player played.
+
+A test walks 35 further detections across a held note's length and requires every one
+to be silent and every count to stay at zero.
+
+### 30.3 The latency is compensated, and had to be
+
+An estimate describes the **middle** of its 2048-sample window, so it is ~23ms behind
+the moment it was emitted, before PortAudio's own buffering. Left uncorrected that is a
+systematic lateness on every note — a third of the Perfect window — which walks a good
+player into MISS without anything looking wrong.
+
+So `PitchDetector.latency_seconds` is subtracted by the screen before judging, and
+**`Settings.input_latency_ms` is the manual trim on top of it.** That setting is saved,
+migrated, shown as a spin box and read by nothing — §24's Not done list, acknowledged
+there rather than discovered later. This is its first honest use: a computed 23ms
+cannot account for a player's own setup.
+
+The test uses a 100ms trim deliberately. Perfect is ±35ms and a note expires at 140ms,
+so a 100ms error is comfortably PERFECT with the correction and comfortably MISS without
+it. A 23ms error passes either way, which would have made the test prove nothing.
+
+### 30.4 I opened a real input device in a test, and it crashed the interpreter
+
+Worth recording, because the file contains a test that exists to stop it happening.
+
+`test_leaving_stops_the_input_device_too` asked for `InputMode.MICROPHONE` without
+patching `Microphone`. `prepared_screen` calls `_load_request`, which called
+`_start_microphone`, which opened a **real input device** — and then the test replaced
+`screen._mic` with a fake, leaving the stream running with nothing holding it. The file
+passed on its own and dumped core in the full run, in an unrelated test, as a segfault.
+
+That is §29.3's exact mistake, from §29.3's exact cause, one commit later. So it is now
+a **fixture** rather than a habit: `fake_mic` replaces the class, and `prepared_screen`
+*refuses* to build a microphone run without it. The guard is the fix; the habit is what
+failed twice.
+
+A similar test also asserted "opened once" by replacing `_start_microphone` — which
+removed the very guard it meant to test, so it was measuring its own spy. It replaces
+`Microphone` instead, and the real method runs.
+
+### 30.5 What is still unverified
+
+**The estimator has never heard a real guitar.** §29.3 verified it against this
+project's own synthesis, which is a plucked-string model and therefore cleaner than a
+cheap acoustic through a laptop microphone: no fret buzz, no room, no sympathetic
+resonance, and a noise floor far lower. Expect to widen `MIN_CLARITY`, and possibly the
+3.6-periods margin, after the first attempt with the actual instrument.
+
+**The app hears itself.** It renders the tab and plays it from the same machine, so
+through speakers the microphone hears its own backing track and the judge awards PERFECT
+for notes nobody played. The answer is headphones, stated in the Preferences tooltip
+(§24.3) — but with the keyboard still present that was advice; once it is removed (§31)
+it is a precondition.
+
+### Not done — §30
+
+- **No latency is estimated, only compensated for a known constant.** §4.1's tap-along
+  estimator is still unbuilt. 23ms of window is a fixed, computable cost; the player's
+  own round trip through a room is not, and `input_latency_ms` is a manual stand-in.
+- **The mic opens on the first microphone run and is never reopened**, so a device
+  unplugged mid-session is not recovered from. `_start_microphone` clears `_mic` on
+  failure and the next run retries, but nothing retries within a run.
+- **`MicrophoneStats` is collected and never read.** Blocks, samples, pitches and
+  dropped windows are all counted, because they are what a bug report would need, and
+  nothing displays them yet.
+- **`device_report` for inputs is untested against a real enumeration**, only against
+  its own promise never to raise. It has one bug of its own that way already — the first
+  version formatted a `None` samplerate, which `transport.device_report` had already
+  learned to guard against and this one did not.
+- **The keyboard is still the default input**, and §24.4's reason for keeping it is no
+  longer the plan.

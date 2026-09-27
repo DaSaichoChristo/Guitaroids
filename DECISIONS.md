@@ -53,12 +53,12 @@ is true today, and `planned` is a statement of intent.
 | Python **3.12** in `.venv` — the minor version, because that is the constraint | live | §7.1 |
 | ~~mediapipe 1.0.1, Tasks API only~~ — **dropped**; the input is a microphone now | live | §25 |
 | ~~opencv-contrib-python-headless, installed in a strict order after the GUI build~~ — **dropped with it**, and the install trap with that | live | §25.2 |
-| **No webcam, no OpenCV, no cv2** — nothing imports them, and the lock is 18 packages instead of 32 | live | §25.1 |
+| **No webcam, no OpenCV, no cv2** — nothing imports them, and the one requirements file is 18 packages instead of 32 | live | §25.1 |
 | numpy 2.2.6 — the 3.12 ceiling (2.5.3 needs `>=3.12`) | live | §7.1 |
 | soundfile 0.14.0 decodes audio; **no resampler needed** — the stream opens at the file's own rate | live | §3.1 |
 | ~~Never `pip install -r requirements.txt`; use `scripts/setup.sh`~~ — **withdrawn**: a bare install works, verified in a clean venv. `setup.sh` is still the supported path, for tinysoundfont, a soundfont and the M0 gate | superseded | §27.2, supersedes §2.2 |
 | Requirements stay **curated**, with `pip freeze` kept separately as a lock file | live | §6.2 |
-| tinysoundfont 0.3.7, installed **`--no-deps`** from `requirements-optional.txt` | live | §7.5, §9 |
+| tinysoundfont 0.3.7, installed **`--no-deps`** from a separate step | live | §7.5, §9 |
 | ~~mido~~ — **taken off the table**; no MIDI round trip, the synth reads the `Chart` | live | §9 |
 | FluidR3 mono soundfont, fetched rather than committed (MIT) | live | §7.5 |
 | Soundfonts **do not clip** — a six-note chord peaks at 0.22; `sfload(gain=…)` is not a level control, so boost the **rendered buffer** | live | §22.2 |

@@ -1342,3 +1342,238 @@ def test_the_count_in_slows_with_the_song(shell, chart) -> None:
     written = game_via_shell(shell, chart)._count_in_seconds()
     screen = game_via_shell(shell, chart, bpm=chart.tempo / 2)
     assert screen._count_in_seconds() == pytest.approx(written / 0.5)
+
+
+# --- the microphone's way in (§29.4) ------------------------------------------
+#
+# Driven by emitting the screen's signal, exactly as the worker thread would. No
+# device, no thread and no test-only code in the product: the same path a real
+# detection takes, minus the microphone.
+
+
+class FakeMicrophone:
+    """A `Microphone` that records and opens nothing. See the `fake_mic` fixture."""
+
+    def __init__(self, **kwargs) -> None:  # noqa: ANN003
+        self.kwargs = kwargs
+        self.started = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def stop(self) -> None:
+        self.started = False
+
+    class detector:  # noqa: N801 - a stand-in, not a real class
+        latency_seconds = 0.0232
+
+
+@pytest.fixture()
+def fake_mic(monkeypatch):
+    """Replace the `Microphone` class, so no test in this file can open a real device.
+
+    **A test that opens an input stream corrupts the interpreter.** This file leaked
+    one exactly like that -- `test_leaving_stops_the_input_device_too` asked for
+    `InputMode.MICROPHONE` without patching, `prepared_screen` called
+    `_start_microphone`, a real device opened, and the test then replaced
+    `screen._mic` with a fake, leaving the stream running with nothing holding it. The
+    suite passed on its own and dumped core in the full run, in a test that had nothing
+    to do with audio: the same failure as §29.3, from the same mistake, two commits
+    later.
+
+    So it is a fixture rather than a habit, and `prepared_screen` refuses to build a
+    microphone run without it.
+    """
+    import guitaroids.ui.game as game_module
+
+    monkeypatch.setattr(game_module, "Microphone", FakeMicrophone)
+    return FakeMicrophone
+
+
+def mic_screen(shell, chart, **settings_kwargs):
+    from guitaroids.settings import Settings, InputMode
+
+    settings = Settings(**settings_kwargs)
+    screen = prepared_screen(shell, chart, settings)
+    if settings.input_mode is InputMode.MICROPHONE:
+        assert not isinstance(screen._mic, type(None)) or screen._mic_error, (
+            "a microphone run was built with a real Microphone class. Request the "
+            "`fake_mic` fixture; an input device opened by a test crashes the process."
+        )
+    return screen
+def _judge_at(screen, seconds: float) -> None:
+    """Freeze the screen's clock at `seconds`, so `position()` is exactly that."""
+    screen._preparing = False
+    screen._clock = _FrozenClock(seconds)
+    screen._wall_origin = 0.0
+    screen.context.stop_playback()
+
+
+def test_a_detected_pitch_is_judged(shell, chart) -> None:
+    screen = mic_screen(shell, chart)
+    note = screen.chart.notes[0]
+    _judge_at(screen, note.time)
+    screen._on_pitch(note.pitch)
+    assert screen.state.resolved == 1, "the detected note was not judged"
+    assert screen.state.judgements[0].verdict is Verdict.PERFECT
+    assert screen._flash.text(), "no feedback was shown"
+
+
+def test_a_detection_with_nothing_to_hit_is_silent(shell, chart) -> None:
+    """Most of what a microphone hears is not a note, and must cost nothing."""
+    screen = mic_screen(shell, chart)
+    _judge_at(screen, 1.0)  # between notes
+    before = (screen.state.strays, screen.state.resolved)
+    screen._on_pitch(chart.notes[0].pitch)
+    assert (screen.state.strays, screen.state.resolved) == before
+
+
+def test_the_analysis_latency_is_subtracted_before_judging(shell, chart) -> None:
+    """The bug this prevents is invisible: every note a few milliseconds late.
+
+    An estimate describes the middle of its 2048-sample window, so it is ~23ms behind
+    the moment it was emitted. Uncorrected that is a systematic lateness on every note,
+    and `input_latency_ms` on top of it is the player's own trim.
+
+    A 100ms trim is used deliberately. Perfect is ±35ms and a note expires at 140ms, so
+    a 100ms error is comfortably PERFECT when the correction has the right sign and
+    comfortably MISS when it does not -- a 23ms error would pass either way, which
+    would make this test prove nothing.
+    """
+    screen = mic_screen(shell, chart, input_latency_ms=100)
+    note = screen.chart.notes[0]
+    assert screen._input_latency() == pytest.approx(0.100)
+
+    _judge_at(screen, note.time + 0.100)
+    screen._on_pitch(note.pitch)
+    assert screen.state.judgements[0].verdict is Verdict.PERFECT, (
+        "the position was not corrected for the analysis latency"
+    )
+
+    # The control: the same detection with no trim at all is 100ms late, and a 100ms
+    # error is a miss. Without this, the test above would also pass if `_on_pitch`
+    # simply ignored the position.
+    untrimmed = mic_screen(shell, chart, input_latency_ms=0)
+    _judge_at(untrimmed, note.time + 0.100)
+    untrimmed._on_pitch(note.pitch)
+    assert untrimmed.state.judgements[0].verdict is Verdict.MISS
+
+
+def test_the_detector_latency_is_included_in_the_trim(shell, chart) -> None:
+    """The two latencies add: the computed half-window and the player's own."""
+    screen = mic_screen(shell, chart, input_latency_ms=20)
+
+    class FakeDetector:
+        latency_seconds = 0.0232
+
+    class FakeMic:
+        # `stop` because the screen closes its microphone in `hideEvent`, and a fake
+        # that cannot be stopped fails every later test in the file when the screen is
+        # torn down. The first version omitted it and the error surfaced in an
+        # unrelated test's teardown.
+        def stop(self) -> None:
+            pass
+
+    fake = FakeMic()
+    fake.detector = FakeDetector()
+    screen._mic = fake
+    assert screen._input_latency() == pytest.approx(0.0432, abs=1e-6)
+
+
+def test_the_manual_latency_trim_is_read_at_all(shell, chart) -> None:
+    """`input_latency_ms` is the first thing this setting has ever been read for.
+
+    It was saved, migrated, shown as a spin box, and read by nothing (§24's Not done
+    list). The latency correction is its only honest use: a computed 23ms cannot
+    account for a player's own setup, and this is the trim for that.
+    """
+    screen = mic_screen(shell, chart, input_latency_ms=40)
+    assert screen._input_latency() == pytest.approx(0.040)
+    assert screen.context.settings.input_latency_ms == 40
+
+
+def test_the_microphone_is_not_opened_for_a_keyboard_run(shell, chart) -> None:
+    from guitaroids.settings import InputMode, Settings
+
+    screen = prepared_screen(shell, chart, Settings(input_mode=InputMode.KEYBOARD))
+    assert screen._mic is None, "a keyboard run must not open an input device"
+
+
+def test_a_microphone_run_asks_for_the_device_exactly_once(shell, chart, monkeypatch) -> None:
+    """Opening a stream is not idempotent, so the guard is what matters.
+
+    `_start_microphone` opens a real input device, so calling it for real here would
+    make the suite depend on hardware -- and leave a device open behind it, which is
+    §29.3's crash. `Microphone` itself is replaced so the real `_start_microphone` runs,
+    **including its own `if self._mic is not None: return`**. The first version
+    replaced `_start_microphone` instead, which removed the guard along with the
+    device, and so "opened twice" -- it was testing its own spy.
+    """
+    import guitaroids.ui.game as game_module
+    from guitaroids.settings import InputMode, Settings
+
+    started: list[bool] = []
+
+    class FakeMic:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.kwargs = kwargs
+
+        def start(self) -> None:
+            started.append(True)
+
+        def stop(self) -> None:
+            pass
+
+        class detector:  # noqa: N801 - a stand-in, not a real class
+            latency_seconds = 0.0232
+
+    monkeypatch.setattr(game_module, "Microphone", FakeMic)
+    screen = prepared_screen(shell, chart, Settings(input_mode=InputMode.MICROPHONE))
+    _judge_at(screen, 1.0)
+    screen._load_request()
+    assert started == [True], "a microphone run did not open the input device"
+
+    # A second run must not open it again: the stream lives with the screen.
+    screen._load_request()
+    assert started == [True], "the input device was opened twice"
+    assert screen._mic_error == ""
+
+
+def test_the_keyboard_is_the_default_so_a_device_is_not_opened_by_accident(shell, chart, monkeypatch) -> None:
+    import guitaroids.ui.game as game_module
+    from guitaroids.settings import Settings
+
+    started: list[bool] = []
+
+    class FakeMic:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            pass
+
+        def start(self) -> None:
+            started.append(True)
+
+        def stop(self) -> None:
+            pass
+
+    monkeypatch.setattr(game_module, "Microphone", FakeMic)
+    screen = prepared_screen(shell, chart, Settings())  # the default mode
+    _judge_at(screen, 1.0)
+    screen._load_request()
+    assert started == [], "a run opened an input device it was not asked for"
+
+
+def test_leaving_stops_the_input_device_too(shell, chart, fake_mic) -> None:
+    """§29.1 fixed the output stream. The input one is held for the screen's life."""
+    from guitaroids.settings import InputMode, Settings
+
+    screen = prepared_screen(shell, chart, Settings(input_mode=InputMode.MICROPHONE))
+    stopped: list[bool] = []
+
+    class FakeMic:
+        def stop(self) -> None:
+            stopped.append(True)
+
+    assert isinstance(screen._mic, fake_mic), "the fixture did not take"
+    screen._mic = FakeMic()
+    shell.navigate(Screen.MAIN)
+    assert stopped, "the input device was left open on a hidden screen"

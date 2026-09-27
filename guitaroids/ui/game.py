@@ -35,8 +35,10 @@ from typing import TYPE_CHECKING
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..audio.click import add_count_in, beats_per_bar
+from ..audio.mic import SAMPLE_RATE, Microphone
 from ..model.chart import Chart, retime
 from ..session.judge import GameState, Verdict
+from ..settings import InputMode
 from .render_task import ChartRenderer, estimate_seconds
 from .screens import ScreenBase, constrained_button, content_column, heading
 from .theme import COLORS, px
@@ -105,6 +107,14 @@ class Game(ScreenBase):
         self._renderer.ready.connect(self._on_audio_ready)
         self._renderer.failed.connect(self._on_audio_failed)
         self._renderer.cancelled.connect(self._on_audio_cancelled)
+
+        #: The input device, when the player asked for the microphone. Opened on the
+        #: first run and kept for the screen's life -- opening a stream per song would
+        #: put a device acquisition on the critical path of starting a run.
+        self._mic: Microphone | None = None
+        #: Why the microphone did not open, if it did not. Reported, not swallowed.
+        self._mic_error = ""
+        self._pitchDetected.connect(self._on_pitch)
 
         self._view = TabView(self)
         self._build_hud()
@@ -232,6 +242,8 @@ class Game(ScreenBase):
         self._title.setText(chart.title or chart.track_name)
         self._banner.setText("")
         self._flash.setText("")
+        if self.context.settings.input_mode is InputMode.MICROPHONE:
+            self._start_microphone()
         self._render_audio(chart, request)
         self._timer.start()
         self._refresh_tally()
@@ -543,6 +555,69 @@ class Game(ScreenBase):
         self._last_verdict = (judgement.verdict, judgement.delta_seconds)
         self._flash.setText(_verdict_text(judgement))
 
+    # --- the microphone -------------------------------------------------------
+
+    #: Emitted on the GUI thread by the worker, carrying an integer MIDI note.
+    #: A signal rather than a direct call because the estimate is produced on the
+    #: microphone's thread, and Qt's queued connection is what puts it back here.
+    _pitchDetected = QtCore.Signal(int)
+
+    def _start_microphone(self) -> None:
+        """Open the input device, if the player asked for the microphone.
+
+        A device that will not open is **not** an error the player is shown: the
+        keyboard is still there (§24.4) and a game that cannot listen is still a game
+        you can play. The failure is recorded so it can be reported, and the run
+        continues.
+
+        Nothing here is a fallback path that was never designed: §23 established that a
+        silent device should be announced rather than papered over, and the same applies
+        to a silent *input*.
+        """
+        if self._mic is not None:
+            return
+        settings = self.context.settings
+        self._mic = Microphone(
+            device=settings.input_device,
+            sample_rate=SAMPLE_RATE,
+            on_pitch=self._on_estimate,
+        )
+        try:
+            self._mic.start()
+        except Exception as exc:  # noqa: BLE001 - any device failure keeps the game
+            self._mic = None
+            self._mic_error = str(exc)
+
+    def _on_estimate(self, estimate) -> None:  # noqa: ANN001 - PitchEstimate
+        """Called on the microphone's worker thread. Emit, and get off it."""
+        self._pitchDetected.emit(int(estimate.nearest_midi()))
+
+    def _on_pitch(self, midi: int) -> None:
+        """Judge a detected note. The microphone's way in, beside :meth:`_press`.
+
+        **The position is corrected for the analysis latency before judging.** An
+        estimate describes the middle of its 2048-sample window, so it is ~23ms behind
+        the moment it was emitted, before PortAudio's own buffering. Uncorrected, that
+        is a systematic lateness on every note -- a third of the Perfect window, and
+        enough to walk a good player into MISS. `Settings.input_latency_ms` is the
+        manual trim on top of it, and it is the first thing this setting has ever been
+        read for.
+        """
+        if self._state is None or self._finished:
+            return
+        when = self.position() - self._input_latency()
+        judgement = self._state.press_pitch(midi, when)
+        if judgement is None:
+            # The common case: a note still sounding, or a detection between notes.
+            return
+        self._last_verdict = (judgement.verdict, judgement.delta_seconds)
+        self._flash.setText(_verdict_text(judgement))
+
+    def _input_latency(self) -> float:
+        """Seconds to subtract from every detected note's position."""
+        detector = self._mic.detector.latency_seconds if self._mic else 0.0
+        return detector + self.context.settings.input_latency_ms / 1000.0
+
     def _refresh_tally(self) -> None:
         if self._state is None:
             return
@@ -589,6 +664,10 @@ class Game(ScreenBase):
         self.context.stop_playback()
         self._renderer.cancel()
         self._audio_live = False
+        if self._mic is not None:
+            # The input device too, for the same reason as the output: a stream left
+            # open on a screen nobody is looking at is a device held for nothing.
+            self._mic.stop()
         super().hideEvent(event)
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # noqa: N802 - Qt naming
