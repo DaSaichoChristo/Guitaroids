@@ -2,13 +2,14 @@
 
 Deliberately thin. All real work lives in guitaroids.app.
 
-The Qt bootstrap is applied before ``app`` is imported, so that anything loading
-PySide6 or cv2 picks up the correct plugin path. Note that the strict requirement
-is really about *constructing* the QApplication, not about importing PySide6 --
-Qt reads QT_PLUGIN_PATH at application construction. Importing app first would
-therefore usually work too, but it makes the guarantee depend on something nobody
-can see, and it stops being true the moment a test imports guitaroids.app without
-going through here.
+This file used to exist for one reason: ``guitaroids.qtenv`` had to set
+``QT_PLUGIN_PATH`` before anything imported PySide6, because mediapipe's GUI build
+of OpenCV ships Qt plugins that hijack it and break the app with ``Could not load
+the Qt platform plugin "xcb"``. That was three install caveats and an ordering rule
+for a webcam tracker that was never built (DESIGN.md §25).
+
+With no OpenCV there is nothing to bootstrap ahead of, so this is now what it always
+claimed to be: four lines that call :func:`guitaroids.app.run`.
 """
 
 from __future__ import annotations
@@ -17,10 +18,6 @@ import sys
 
 
 def main(argv: list[str]) -> int:
-    from guitaroids import qtenv
-
-    qtenv.apply()
-
     from guitaroids.app import run
 
     return run(argv)

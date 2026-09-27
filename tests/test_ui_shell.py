@@ -86,16 +86,34 @@ def test_the_app_asks_for_full_screen_not_maximized() -> None:
     assert "showMaximized()" not in source, "maximized is not full screen"
 
 
-def test_main_module_bootstraps_before_importing_app() -> None:
-    """The import order in __main__.py is the point of the file.
+def test_the_entry_point_is_thin_and_still_bootstraps() -> None:
+    """`python -m guitaroids` has to reach `run`, and nothing else is its job.
 
-    Parsed rather than imported, because importing it would launch the app. This
-    asserts the qtenv.apply() call textually precedes the app import.
+    Parsed with ``ast`` rather than imported (importing would launch the app) and
+    rather than grepped. Grepping was the previous approach here and it was wrong
+    twice: it read the module docstring's explanation of what qtenv *was* as if it
+    were a use of it, and the fix was a line filter that then had to be taught about
+    docstrings. An AST cannot be confused by prose.
     """
+    import ast
+
     source = (ROOT / "guitaroids" / "__main__.py").read_text()
-    apply_at = source.index("qtenv.apply()")
-    app_at = source.index("from guitaroids.app import run")
-    assert apply_at < app_at, "qtenv must be applied before app is imported"
+    tree = ast.parse(source)
+
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+
+    assert "guitaroids.app" in imported, "the entry point lost its job"
+    assert "qtenv" not in imported, "the Qt plugin bootstrap is gone; do not bring it back"
+    assert not any(name.startswith("PySide6") for name in imported), (
+        "the entry point imports no Qt: the app module owns that"
+    )
+    assert len(source.splitlines()) < 30, "__main__.py has grown past a shim"
+
 
 
 def test_argv_is_forwarded_to_run() -> None:

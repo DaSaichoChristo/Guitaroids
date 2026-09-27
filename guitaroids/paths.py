@@ -49,9 +49,8 @@ SONGS_DIR: Path = REPO_ROOT / "songs"
 #: Runtime settings. Gitignored; see settings.example.json for the committed copy.
 SETTINGS_PATH: Path = REPO_ROOT / "settings.json"
 
-#: Fetched assets: the mediapipe model and an optional soundfont.
+#: Fetched assets: an optional soundfont.
 ASSETS_DIR: Path = REPO_ROOT / "assets"
-MODEL_PATH: Path = ASSETS_DIR / "hand_landmarker.task"
 
 
 def soundfont_candidates() -> tuple[Path, ...]:

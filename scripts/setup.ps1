@@ -9,30 +9,26 @@
 
     PowerShell equivalent of scripts/setup.sh.
     KEEP THE TWO IN SYNC -- tests/test_setup_scripts.py asserts they agree on the
-    critical pins (opencv version, the model URL, the soundfont URL).
+    critical pins, and that neither has an OpenCV step.
 
-    Three things are not optional and cannot be fixed by editing a requirements file:
+    Two things are not optional and cannot be fixed by editing a requirements file:
 
-      1. OpenCV ordering. mediapipe hard-requires the GUI build of OpenCV, whose
-         bundled Qt plugins under cv2/qt/plugins hijack QT_PLUGIN_PATH and break
-         PySide6 with 'Could not load the Qt platform plugin "xcb"'. pip treats the
-         GUI and headless builds as unrelated distributions, so both get installed.
-         Both write the same cv2/ directory, so the GUI build must be removed
-         BEFORE headless is installed. The reverse order deletes the headless
-         files while leaving its dist-info, and pip then reports "already
-         satisfied" and restores nothing, leaving 'import cv2' broken.
-
-      2. tinysoundfont needs --no-deps. Its only dependency is pyaudio, which has
+      1. tinysoundfont needs --no-deps. Its only dependency is pyaudio, which has
          no Windows wheel in any release and cannot be built without the PortAudio
-         SDK. pyaudio is a lazy import used only for real-time playback, and we
-         render offline, so --no-deps costs nothing. Locked in by
+         SDK. pyaudio is a lazy import used only by Synth.start(), which we do not
+         call, and we render offline, so --no-deps costs nothing. Locked in by
          tests/test_audio_deps.py.
 
-      3. The model and the soundfont are not Python packages. They are fetched,
-         and gitignored.
+      2. The soundfont is not a Python package. It is fetched, and gitignored.
 
-    Only the soundfont step is allowed to fail: the numpy Karplus-Strong synth
-    needs nothing at all and takes over if it is absent.
+    Only the soundfont step is allowed to fail: the numpy pluck synth needs nothing
+    at all and takes over if it is absent.
+
+    There used to be an OpenCV ordering step here, mirroring setup.sh: uninstall the
+    GUI build, install the headless one, in that order, because both write to the
+    same cv2/ directory. It existed entirely because mediapipe requires the GUI
+    build, and mediapipe existed entirely because we were going to track hands with
+    a webcam. We are not (DESIGN.md §25).
 
 .PARAMETER Python
     Interpreter used to create the venv. Must be Python 3.12.
@@ -119,28 +115,6 @@ if ($PyVer -ne '3.12' -and $PyVer -ne '3.10') {
 Write-Step 'Installing pinned dependencies'
 Invoke-Native -Exe $Py -NativeArgs @('-m', 'pip', 'install', '-r', 'requirements-dev.txt', '--quiet') | Out-Null
 
-# Both OpenCV builds install into the same cv2/ directory and clobber each other.
-# Removing only the GUI build leaves headless's dist-info behind with its files
-# deleted, and pip then says "already satisfied" and reinstalls nothing. So remove
-# BOTH, then install headless cleanly.
-# The version is written literally rather than into a variable so that
-# tests/test_setup_scripts.py can compare it against setup.sh.
-$GuiVersion = ''
-$GuiShow = & $Py -m pip show opencv-contrib-python 2>$null
-if ($LASTEXITCODE -eq 0) {
-    $GuiVersion = (($GuiShow | Select-String '^Version:').ToString() -replace '^Version:\s*', '').Trim()
-}
-Invoke-Native -Exe $Py -NativeArgs @(
-    '-m', 'pip', 'uninstall', '-y',
-    'opencv-contrib-python', 'opencv-contrib-python-headless', '--quiet'
-) -AllowFailure | Out-Null
-
-$guiNote = if ($GuiVersion) { "GUI build $GuiVersion removed" } else { 'GUI build (absent) removed' }
-Write-Step "Installing headless OpenCV build ($guiNote)"
-Invoke-Native -Exe $Py -NativeArgs @(
-    '-m', 'pip', 'install', 'opencv-contrib-python-headless==5.0.0.93', '--quiet'
-) | Out-Null
-
 Write-Step 'Installing optional packages that need --no-deps (requirements-optional.txt)'
 if (Invoke-Native -Exe $Py -NativeArgs @(
         '-m', 'pip', 'install', '-r', 'requirements-optional.txt', '--no-deps', '--quiet'
@@ -148,7 +122,7 @@ if (Invoke-Native -Exe $Py -NativeArgs @(
     Write-Note 'ok - sampled soundfonts available'
 }
 else {
-    Write-Note 'FAILED - continuing. The numpy Karplus-Strong synth is the fallback,'
+    Write-Note 'FAILED - continuing. The numpy pluck synth is the fallback,'
     Write-Note 'so audio still renders without it. See requirements-optional.txt.'
 }
 
@@ -187,10 +161,6 @@ function Get-Asset {
         if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
     }
 }
-
-$ModelUrl = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
-Get-Asset -Url $ModelUrl -Dest (Join-Path $Root 'assets\hand_landmarker.task') `
-    -Label 'mediapipe hand landmarker model' | Out-Null
 
 # --- soundfont (optional) -------------------------------------------------------
 
@@ -239,7 +209,7 @@ else {
 
         if (-not $unpacked) {
             Write-Note 'could not extract the soundfont package.'
-            Write-Note 'The numpy Karplus-Strong synth will be used instead.'
+            Write-Note 'The numpy pluck synth will be used instead.'
             Write-Note 'To supply one manually, set GUITAROIDS_SOUNDFONT or drop an'
             Write-Note '.sf2/.sf3 into assets/.'
         }
@@ -261,7 +231,7 @@ else {
     }
     catch {
         Write-Note "soundfont fetch failed: $($_.Exception.Message)"
-        Write-Note 'The numpy Karplus-Strong synth will be used instead.'
+        Write-Note 'The numpy pluck synth will be used instead.'
     }
     finally {
         foreach ($p in @($tmp, $extract)) {
@@ -279,5 +249,5 @@ Invoke-Native -Exe $Py -NativeArgs @('-m', 'pytest', 'tests/test_m0_window.py', 
 Write-Host ""
 Write-Host "Setup complete. See DESIGN.md 7 for track choice and audio synthesis."
 Write-Host "Two gotchas that have bitten this project:"
-Write-Host "  - use this script, not 'pip install -r requirements.txt' (opencv order)"
+Write-Host "  - use this script, not 'pip install -r requirements.txt' (see requirements.txt)"
 Write-Host "  - tinysoundfont needs --no-deps; pyaudio cannot be installed here"

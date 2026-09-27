@@ -5,20 +5,20 @@
 #
 # PowerShell equivalent: scripts/setup.ps1
 # KEEP THE TWO IN SYNC -- tests/test_setup_scripts.py asserts they agree on the
-# critical pins (opencv version, the model URL, the soundfont URL).
+# critical pins (the soundfont URL, and that neither has an OpenCV step).
 #
-# Why the order matters (DESIGN.md §2.2, §7.4):
-#   1. mediapipe depends on opencv-contrib-python, the GUI build. Its bundled Qt
-#      plugins under cv2/qt/plugins override QT_PLUGIN_PATH and break PySide6.
-#   2. Both OpenCV builds write to the same cv2/ directory, so the GUI build must
-#      be uninstalled BEFORE the headless build is installed. The reverse order
-#      deletes the headless files and breaks `import cv2`. This bit us during
-#      testing and is now asserted by tests/test_m0_window.py.
-#   3. tinysoundfont is installed with --no-deps, because pyaudio has no wheel and
-#      needs portaudio19-dev. We only render offline, and pyaudio is a lazy import
-#      used solely for real-time playback. Beware: `pip install --dry-run` exits 0
-#      on tinysoundfont even though a real install fails, so a dry run is not
-#      evidence either way.
+# Why there is still an order to it (DESIGN.md §7.5):
+#   tinysoundfont is installed with --no-deps, because pyaudio has no wheel and
+#   needs portaudio19-dev. We render offline, and pyaudio is a lazy import used
+#   solely by Synth.start(), which we do not call. Beware: `pip install --dry-run`
+#   exits 0 on tinysoundfont even though a real install fails, so a dry run is not
+#   evidence either way.
+#
+# There used to be an OpenCV dance here -- uninstall the GUI build, install the
+# headless one, in that order, because both write to the same cv2/ directory. It
+# existed entirely because mediapipe requires the GUI build, and mediapipe existed
+# entirely because we were going to track hands with a webcam. We are not
+# (DESIGN.md §25). The trap is gone, and so is the caveat in requirements.txt.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -46,30 +46,13 @@ fi
 echo "==> Installing pinned dependencies"
 $PY -m pip install -r requirements-dev.txt --quiet
 
-# pip resolves mediapipe's opencv-contrib-python dep even though requirements.txt
-# lists the headless variant, because the two are separate distributions.
-#
-# Both builds install into the SAME cv2/ directory, so they clobber each other.
-# Removing only the GUI build leaves headless's dist-info behind with its files
-# deleted, and pip then reports "already satisfied" and reinstalls nothing --
-# leaving `import cv2` broken. So remove BOTH, then install headless cleanly.
-GUI_VERSION=""
-$PY -m pip show opencv-contrib-python >/dev/null 2>&1 && \
-    GUI_VERSION=$($PY -m pip show opencv-contrib-python | awk '/^Version:/{print $2}')
-$PY -m pip uninstall -y opencv-contrib-python opencv-contrib-python-headless --quiet || true
-echo "==> Installing headless OpenCV build (GUI build ${GUI_VERSION:-(absent)} removed)"
-$PY -m pip install "opencv-contrib-python-headless==5.0.0.93" --quiet
-
 echo "==> Installing optional packages that need --no-deps (requirements-optional.txt)"
 if $PY -m pip install -r requirements-optional.txt --no-deps --quiet; then
     echo "    ok - $(grep -c '^[a-zA-Z]' requirements-optional.txt || echo 0) package(s)"
 else
-    echo "    FAILED - continuing. The numpy Karplus-Strong synth is the fallback,"
-    echo "    so audio still renders without it. See requirements-optional.txt."
+    echo "    FAILED - continuing. The numpy pluck synth is the fallback, so audio"
+    echo "    still renders without it. See requirements-optional.txt."
 fi
-
-echo "==> Fetching the mediapipe hand landmarker model"
-scripts/fetch_model.sh
 
 echo "==> Fetching a soundfont (optional, used by tinysoundfont)"
 scripts/fetch_soundfont.sh || echo "    skipped - numpy synth will be used instead"

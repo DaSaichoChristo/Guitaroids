@@ -31,10 +31,6 @@ songs/*.wav
 songs/*.flac
 songs/*.m4a
 
-# mediapipe model, vendored rather than committed (~7.8MB).
-# Fetch with: scripts/fetch_model.sh
-assets/*.task
-
 # Soundfont, fetched rather than committed (~23MB). MIT-licensed, so committing it
 # would be legal, but it is large and regenerable.
 # Fetch with: scripts/fetch_soundfont.sh

@@ -6,8 +6,12 @@ revisiting.
 
 Two things are being asserted:
 
-1. The §2.2 OpenCV/Qt plugin hijack is genuinely gone (``cv2/qt`` does not exist),
-   and Qt is pointed at PySide6's own plugins.
+1. **OpenCV is not here any more.** It was the whole reason this gate had a static
+   section: mediapipe pulled in the GUI build, whose bundled Qt plugins hijack
+   ``QT_PLUGIN_PATH`` (§2.2), and the gate had to prove the hijack was inert. With
+   mediapipe gone (§25) the hijack cannot happen, so the check is now that the
+   packages are not *declared* -- which is a stronger claim than "not currently
+   broken", because it survives someone reinstalling them by hand.
 2. A real ``QApplication`` starts, a real ``QPainter`` pass rasterizes pixels, and
    a real widget is mapped onto the display.
 
@@ -31,43 +35,53 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from guitaroids import qtenv  # noqa: E402
-
-qtenv.apply()
-
 
 # --- static checks: no QApplication needed -------------------------------------
 
 
-def test_plugin_dir_resolves() -> None:
-    plugins = qtenv.plugin_dir()
-    assert plugins is not None, "PySide6 Qt/plugins not found"
+def test_pyside6_ships_its_own_xcb_plugin() -> None:
+    """The question ``qtenv`` used to answer, asked directly.
+
+    ``qtenv`` computed this path and exported it as ``QT_PLUGIN_PATH``, because
+    OpenCV's GUI build was competing for it. There is nothing competing now, so the
+    plugin only has to exist in PySide6 -- which is what this checks.
+    """
+    import PySide6
+
+    plugins = Path(PySide6.__file__).parent / "Qt" / "plugins"
+    assert plugins.is_dir(), f"PySide6 Qt/plugins missing at {plugins}"
     assert (plugins / "platforms" / "libqxcb.so").is_file(), "xcb platform plugin missing"
 
 
-def test_opencv_has_no_qt_plugins() -> None:
-    """The §2.2 hazard, asserted rather than assumed.
+def test_opencv_and_mediapipe_are_not_declared_dependencies() -> None:
+    """**Absence, not inertness.** The old check proved the hijack was not currently
+    happening; this proves it cannot be *made* to happen by an install.
 
-    If this fails, mediapipe pulled the GUI OpenCV build back in and its bundled
-    plugins will fight PySide6 for QT_PLUGIN_PATH.
+    Somebody reinstalling the GUI OpenCV build by hand is exactly the failure the old
+    test was watching for, and it is now caught at the requirements file rather than
+    at a mysterious "Could not load the Qt platform plugin".
     """
-    import cv2
+    def declared(path: Path) -> list[str]:
+        # Comments excluded: requirements.txt explains at length why OpenCV used to
+        # be a trap, and a test reading that prose would forbid the explanation.
+        return [
+            line.strip().lower()
+            for line in path.read_text().splitlines()
+            if line.strip() and not line.strip().startswith(("#", "-r "))
+        ]
 
-    assert not (Path(cv2.__file__).parent / "qt").exists(), (
-        "cv2/qt exists: the GUI OpenCV build is installed. "
-        "Run: pip uninstall -y opencv-contrib-python && "
-        "pip install opencv-contrib-python-headless==<same version>"
-    )
+    for package in ("opencv", "mediapipe"):
+        assert not any(package in line for line in declared(ROOT / "requirements.txt")), (
+            f"{package} is declared in requirements.txt again"
+        )
+        assert not any(package in line for line in declared(ROOT / "requirements-lock.txt")), (
+            f"{package} is in the lock file: the venv still has it installed"
+        )
 
 
 def test_all_dependencies_import() -> None:
-    for module in ("cv2", "mediapipe", "numpy", "soundfile", "sounddevice", "guitarpro"):
+    for module in ("numpy", "soundfile", "sounddevice", "guitarpro"):
         __import__(module)
-
-
-def test_qt_plugin_path_points_at_pyside6() -> None:
-    plugins = str(qtenv.plugin_dir())
-    assert os.environ.get("QT_PLUGIN_PATH", "").split(os.pathsep)[0] == plugins
 
 
 # --- window checks, one platform per subprocess --------------------------------
@@ -76,8 +90,6 @@ CHILD = """
 import os
 import sys
 sys.path.insert(0, {root!r})
-from guitaroids import qtenv
-qtenv.apply()
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QPixmap, QImage

@@ -3,10 +3,9 @@
 Owns the QApplication lifetime, the theme, and the exit code. Screens, the song
 library and game logic live elsewhere.
 
-Module-level Qt imports are safe here, unlike in ``__main__.py``: Qt reads
-``QT_PLUGIN_PATH`` when the *application is constructed*, not at import time, so
-the only ordering that matters is that ``qtenv.apply()`` runs before
-``QApplication(...)``.
+Qt is imported at module level, which used to be unsafe: ``QT_PLUGIN_PATH`` had to
+be set first, because mediapipe's GUI build of OpenCV ships Qt plugins that hijack
+it. With no OpenCV there is no ordering constraint left at all (§25).
 """
 
 from __future__ import annotations
@@ -17,7 +16,6 @@ import time
 
 from PySide6 import QtWidgets
 
-from guitaroids import qtenv
 from guitaroids.context import AppContext
 from guitaroids.ui.shell import MainWindow
 from guitaroids.ui import theme
@@ -130,7 +128,6 @@ def run(argv: list[str] | None = None) -> int:
     # Second bootstrap, and not a redundant one: tests import guitaroids.app
     # directly and never go through __main__.py. apply() is idempotent, so calling
     # it in both places costs one dict lookup and makes both entry paths safe.
-    qtenv.apply()
 
     app = build_application([sys.argv[0]])
 

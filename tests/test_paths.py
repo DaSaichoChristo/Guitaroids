@@ -44,7 +44,11 @@ def test_all_paths_hang_off_the_root() -> None:
     assert paths.SONGS_DIR == paths.REPO_ROOT / "songs"
     assert paths.SETTINGS_PATH == paths.REPO_ROOT / "settings.json"
     assert paths.ASSETS_DIR == paths.REPO_ROOT / "assets"
-    assert paths.MODEL_PATH == paths.ASSETS_DIR / "hand_landmarker.task"
+    # MODEL_PATH went with the mediapipe hand model (§25). Asserted as an absence so
+    # a path constant for a file nothing fetches cannot creep back in.
+    assert not hasattr(paths, "MODEL_PATH"), (
+        "MODEL_PATH is the mediapipe model, which is no longer fetched"
+    )
 
 
 def test_songs_dir_exists() -> None:

@@ -17,10 +17,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from guitaroids import qtenv  # noqa: E402
-
-qtenv.apply()
-
 from PySide6.QtCore import QTimer, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
 
@@ -28,8 +24,6 @@ OUT = Path("/tmp/opencode/m0_proof.xwd")
 
 
 def main() -> int:
-    print(qtenv.describe())
-
     app = QApplication([])
     label = QLabel("Guitaroids - M0 passed")
     label.setStyleSheet("background:#1b6b3a; color:white; font-size:24px;")

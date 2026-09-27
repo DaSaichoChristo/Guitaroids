@@ -74,6 +74,20 @@ def lock() -> dict[str, str]:
     return parse(LOCK)
 
 
+def _pin_lines(path: Path) -> list[str]:
+    """The lines of a requirements file that actually declare something.
+
+    Comments are excluded because two of this file's tests assert an *absence* --
+    of OpenCV, of transitives -- and both files explain in prose what used to be
+    there. A test that read the prose would forbid the explanation.
+    """
+    return [
+        line.strip()
+        for line in path.read_text().splitlines()
+        if line.strip() and not line.strip().startswith(("#", "-r "))
+    ]
+
+
 def justified(name: str) -> bool:
     """Is there a written reason for pinning ``name``?
 
@@ -116,18 +130,37 @@ def test_the_file_is_not_empty(requirements: dict[str, str]) -> None:
     assert len(requirements) >= 5, "the curated list has lost its contents"
 
 
-def test_the_three_install_caveats_are_still_there() -> None:
+def test_the_install_caveats_are_still_there() -> None:
     """Each one, deleted, reintroduces a real failure.
 
-    §2.2's OpenCV ordering is the one that costs an afternoon: pip reports the
-    headless build "already satisfied" and leaves `import cv2` broken.
+    There are **two** now, not three. The OpenCV ordering caveat was the longest one
+    in this file and it cost an afternoon; it existed only because mediapipe insists
+    on the GUI build, and §25 removed mediapipe. Asserting it is still present would
+    pin a step we deleted on purpose.
     """
     text = REQUIREMENTS.read_text()
-    assert "opencv-contrib-python-headless" in text, "the OpenCV warning is gone"
-    assert "BEFORE the headless" in text, "the *order* is what matters, not the list"
     assert "--no-deps" in text, "tinysoundfont's install caveat is gone"
-    assert "fetch_model.sh" in text or "fetch_soundfont.sh" in text, (
-        "soundfonts and the model are fetched, not installed; say so"
+    assert "pyaudio" in text, "and the reason for it"
+    assert "fetch_soundfont.sh" in text, (
+        "a soundfont is fetched, not installed; say so"
+    )
+
+
+def test_the_opencv_caveat_stays_gone() -> None:
+    """The absence is the assertion.
+
+    The caveat lived in a comment, so a reader could be forgiven for keeping it "just
+    in case". Keeping it would be worse than useless: it tells the next person that
+    a bare `pip install -r requirements.txt` is dangerous, which is no longer true.
+    """
+    declared = _pin_lines(REQUIREMENTS)
+    assert not any("opencv" in line.lower() for line in declared), (
+        "OpenCV is a dependency again"
+    )
+    assert "opencv-contrib-python-headless" not in declared
+    # ...and the historical note stays, so nobody re-adds it without reading why.
+    assert "OpenCV" in REQUIREMENTS.read_text(), (
+        "the file should still say the trap existed and why it is gone"
     )
 
 

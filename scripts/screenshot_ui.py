@@ -63,10 +63,6 @@ def main(argv: list[str]) -> int:
 
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-    from guitaroids import qtenv
-
-    qtenv.apply()
-
     from guitaroids.app import build_application
     from guitaroids.context import AppContext
     from guitaroids.ui import theme
