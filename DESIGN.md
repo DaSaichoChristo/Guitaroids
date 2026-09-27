@@ -4829,7 +4829,7 @@ The tempting fix is to lower the threshold. The right one is that the names now 
 `staff_colour` at full alpha: **a label is worth the same as the line it labels.** The
 test was reporting a real fault, and 112 is unreadable.
 
-**Tests: 1028 in total — 1012 excluding `tests/test_docs.py`.** Two clean runs.
+**Tests: 1027 in total — 1011 excluding `tests/test_docs.py`.** Two clean runs.
 
 ### Not done — §41
 
