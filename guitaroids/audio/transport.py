@@ -16,14 +16,32 @@ at all -- which is the property §3.5 asked for and the reason this is a separat
 module from the sounddevice wrapper. A test that needs a device is a test that is
 flaky on a machine with no sound card, which is most CI.
 
-**The callback allocates nothing.** PortAudio runs it at real-time priority; a
-``numpy`` slice, a comparison and a copy of pre-rendered samples is the entire
-body. Everything expensive -- rendering the chart, building the click, mixing --
-happens before the stream is opened.
+**Only the feeder thread touches the stream, including closing it.** This is not
+tidiness. Closing a PortAudio stream while another thread is blocked inside
+``write()`` on it is a use-after-free inside C: on this machine it aborted the
+process with "corrupted double-linked list" and a PulseAudio refcount assertion,
+and took the interpreter with it. So :meth:`Transport.stop` sets a flag and waits;
+the feeder's own ``finally`` does the stopping and closing.
+
+**``play()`` returns immediately, because ``write()`` does not.** Measured on this
+machine: a 0.4s buffer blocks 0.44s, a 5s buffer blocks 4.97s. ``OutputStream.write``
+is *blocking* -- it returns when the device has consumed the data, not when it has
+queued it. So writing a six-minute song in one call freezes the caller for six
+minutes, which on the GUI thread means a frozen window and no navigation for the
+length of the song. The stream is therefore fed from a daemon thread, one block at a
+time, and ``play()`` returns in milliseconds.
+
+The clock is unaffected: :attr:`Stream.time` counts what the device has consumed
+whether or not we are in the middle of feeding it, so the position a player sees is
+the same either way. And because the writes happen on our own thread rather than in
+a PortAudio callback, there is no real-time constraint to honour at all -- the
+"callback allocates nothing" rule applies to the ``callback=`` API, which this does
+not use.
 """
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 
@@ -42,6 +60,11 @@ BLOCK = 1024
 #: for this long is broken, and a silent infinite wait is the worst failure mode
 #: for a thing you are watching a progress bar for.
 STALL_SECONDS = 2.0
+
+#: Frames handed to the device per write. Not a latency knob -- the position comes
+#: from ``stream.time``, not from how much we have queued -- just a compromise
+#: between Python-loop overhead and syscall count. 4096 frames is 93ms at 44.1kHz.
+FEED_BLOCK = 4096
 
 
 class TransportError(Exception):
@@ -187,6 +210,12 @@ class Transport:
         self._device = device
         self._stream = None
         self._frames_written = 0
+        self._cursor = 0
+        self._feeder: threading.Thread | None = None
+        #: Set by stop(); the feeder checks it between blocks and closes the stream
+        #: on its way out. A plain bool guarded by the GIL is enough, and cheaper
+        #: than an Event to read on every 93ms block.
+        self._stopping = False
         #: PortAudio's clock reading at which the chart's time zero lands. Read
         #: from the device in `play`, never assumed -- see there.
         self._t0: float | None = None
@@ -209,10 +238,26 @@ class Transport:
 
     @property
     def is_running(self) -> bool:
-        return self._stream is not None and self._stream.active
+        """True while the device is playing and the feeder is alive.
+
+        Checked without calling into PortAudio when there is no feeder, because
+        ``stream.active`` on a stream another thread is closing is the race that
+        aborts the process.
+        """
+        if self._stream is None:
+            return False
+        if self._feeder is not None and not self._feeder.is_alive():
+            return False
+        return True
 
     @property
     def frames_written(self) -> int:
+        """How much has been handed to the device so far.
+
+        Not the same as how much has been *heard*: the device buffers. The
+        difference is exactly ``stream.latency``, which is why the clock reads
+        ``stream.time`` rather than counting frames written.
+        """
         return self._frames_written
 
     # --- the clock ---------------------------------------------------------
@@ -225,14 +270,17 @@ class Transport:
         confused with "at the first note" -- which for the real tab is three
         seconds of empty notation with a note at the end of it.
         """
-        if self._stream is None or self._t0 is None:
+        if not self.is_running or self._t0 is None:
             return -1.0
-        return Position(
-            stream_time=self._stream.time,
-            t0=self._t0,
-            latency=float(self._stream.latency),
-            offset=self._offset,
-        ).song_position()
+        try:
+            return Position(
+                stream_time=self._stream.time,
+                t0=self._t0,
+                latency=float(self._stream.latency),
+                offset=self._offset,
+            ).song_position()
+        except Exception:  # noqa: BLE001 - the stream was closed under us
+            return -1.0
 
     def elapsed(self) -> float:
         """Seconds of audio played, ignoring the player's offset."""
@@ -253,11 +301,12 @@ class Transport:
     # --- lifecycle ---------------------------------------------------------
 
     def play(self) -> None:
-        """Open the stream and start it. Blocking until the buffer is queued.
+        """Open the stream, start it, and hand it to a feeder thread. Returns at once.
 
-        ``OutputStream.write`` blocks until the device has consumed the data, which
-        is what makes this usable as a clock and unpleasant as a UI call. The game
-        screen will drive it from the audio thread; the practice script just waits.
+        Not "blocks until the buffer is queued": there is no such moment, because
+        ``write`` returns when the device has *consumed* the data. A 0.4s buffer
+        blocks 0.44s and a six-minute one blocks six minutes, so the writes happen on
+        :meth:`_feed` instead.
         """
         import sounddevice as sd
 
@@ -287,8 +336,46 @@ class Transport:
         # fine: PortAudio queues it.
         # The (frames, 2) form, not the flat one: sounddevice's array API reads a
         # flat buffer as mono, and then refuses it for a 2-channel stream.
-        self._stream.write(self._frames)
-        self._frames_written = len(self._frames)
+        self._cursor = 0
+        self._stopping = False
+        self._feeder = threading.Thread(
+            target=self._feed, name="guitaroids-audio", daemon=True
+        )
+        self._feeder.start()
+
+    def _feed(self) -> None:
+        """Hand the buffer to the device a block at a time, then close it.
+
+        On the feeder thread, never the caller's, and it owns the stream's whole
+        lifetime. A slice of a numpy array is a view, so each write costs one
+        allocation rather than a copy of the song, and ``write`` releases the GIL, so
+        the GUI thread is not held up either.
+        """
+        stream = self._stream
+        if stream is None:
+            return
+        try:
+            while not self._stopping and self._cursor < len(self._frames):
+                if stream.stopped:
+                    return
+                chunk = self._frames[self._cursor : self._cursor + FEED_BLOCK]
+                written = stream.write(chunk)
+                self._cursor += written
+                self._frames_written = self._cursor
+            # Everything queued; the stream stays active until the device drains it.
+        except Exception:  # noqa: BLE001 - the device went away mid-song
+            # An unplugged interface, a suspended PulseAudio daemon. A daemon thread
+            # that lets this escape prints a traceback nobody reads and leaves the
+            # transport looking like it is still playing.
+            pass
+        finally:
+            # Closing here rather than in stop() is the whole point: nobody else may
+            # touch this stream while a write could be in flight.
+            for close in (stream.stop, stream.close):
+                try:
+                    close()
+                except Exception:  # noqa: BLE001 - already gone
+                    pass
 
     def wait(self, *, timeout: float | None = None, poll: float = 0.05) -> bool:
         """Block until the buffer has been played. ``False`` if the timeout hit.
@@ -317,15 +404,24 @@ class Transport:
         return float(self._stream.time) >= end
 
     def stop(self) -> None:
-        """Close the stream. Safe to call twice, and safe with no stream."""
-        if self._stream is None:
-            return
-        try:
-            self._stream.stop()
-            self._stream.close()
-        finally:
-            self._stream = None
-            self._t0 = None
+        """Ask the feeder to stop, and wait for it. Safe to call twice.
+
+        This thread does **not** close the stream. It sets a flag and joins; the
+        feeder's ``finally`` does the closing, because closing a stream out from
+        under a thread blocked in ``write()`` aborts the process inside PortAudio.
+
+        The join is bounded and generous: a write returns as soon as the device has
+        consumed one 93ms block, so the flag is seen almost immediately. The bound
+        exists so a wedged device cannot hang the caller -- the GUI thread on quit,
+        in particular.
+        """
+        feeder = self._feeder
+        self._stopping = True
+        if feeder is not None and feeder is not threading.current_thread():
+            feeder.join(timeout=2.0)
+        self._stream = None
+        self._feeder = None
+        self._t0 = None
 
     def __enter__(self) -> "Transport":
         self.play()

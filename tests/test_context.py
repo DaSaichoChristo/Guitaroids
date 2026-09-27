@@ -353,3 +353,97 @@ def test_a_full_chord_chart_is_what_the_app_ships(tmp_path: Path) -> None:
     assert chart is not None
     assert chart.note_count == 24
     assert "collapsed" not in " ".join(chart.warnings)
+
+
+# --- playback (§24) ---------------------------------------------------------------
+#
+# The context owns the audio device handle, because §1.7 says screens never own
+# devices and a rule you satisfy by leaking the handle somewhere else is not a rule
+# satisfied. These are the guards; the device tests are at the bottom and skip when
+# there is no sound card.
+
+
+def test_a_fresh_context_is_not_playing() -> None:
+    ctx = AppContext()
+    assert ctx.playback is None
+    assert ctx.is_playing is False
+    assert ctx.song_position() == -1.0
+
+
+def test_song_position_is_minus_one_rather_than_zero() -> None:
+    """"Not playing" and "at the first note" are different states.
+
+    For the real tab the first note is three seconds in, so a zero would be a lie
+    the caller cannot detect.
+    """
+    assert AppContext().song_position() == -1.0
+
+
+def test_stopping_with_nothing_open_is_safe() -> None:
+    ctx = AppContext()
+    ctx.stop_playback()
+    ctx.stop_playback()
+    assert ctx.playback is None
+
+
+def test_the_playback_handle_is_excluded_from_repr_and_equality() -> None:
+    """A dataclass field holding a device handle would put a C pointer in the repr
+    and make two contexts unequal because of a sound card."""
+    ctx = AppContext()
+    assert "playback" not in repr(ctx)
+    assert ctx == AppContext()
+
+
+def _has_output() -> bool:
+    try:
+        import sounddevice as sd
+
+        return any(d["max_output_channels"] > 0 for d in sd.query_devices())
+    except Exception:  # noqa: BLE001 - no PortAudio is a legitimate state
+        return False
+
+
+needs_output = pytest.mark.skipif(not _has_output(), reason="no output device")
+
+
+@needs_output
+def test_starting_playback_opens_a_stream_and_gives_a_position() -> None:
+    from guitaroids.audio.transport import silence
+
+    ctx = AppContext()
+    try:
+        transport = ctx.start_playback(silence(0.4, 44100), sample_rate=44100)
+        assert ctx.playback is transport
+        assert ctx.is_playing is True
+        # Count-in of 0.25s, so the position starts negative: still in the lead-in.
+        assert ctx.song_position() < 0.0
+    finally:
+        ctx.stop_playback()
+    assert ctx.is_playing is False
+    assert ctx.song_position() == -1.0
+
+
+@needs_output
+def test_starting_a_second_song_stops_the_first() -> None:
+    """Two songs at once is not a subtle bug."""
+    from guitaroids.audio.transport import silence
+
+    ctx = AppContext()
+    try:
+        first = ctx.start_playback(silence(0.4, 44100), sample_rate=44100)
+        second = ctx.start_playback(silence(0.4, 44100), sample_rate=44100)
+        assert ctx.playback is second
+        assert first.is_running is False, "the first stream was left open"
+    finally:
+        ctx.stop_playback()
+
+
+@needs_output
+def test_a_failed_stream_does_not_leave_a_handle_behind() -> None:
+    """An unwritable buffer must not leave a half-open transport in the slot."""
+    import numpy as np
+
+    ctx = AppContext()
+    with pytest.raises(Exception):
+        ctx.start_playback(np.zeros((10, 2), dtype=np.float64), sample_rate=44100)
+    assert ctx.playback is None

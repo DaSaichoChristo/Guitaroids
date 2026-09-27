@@ -34,13 +34,16 @@ from typing import TYPE_CHECKING
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from ..audio.click import add_count_in, beats_per_bar
 from ..model.chart import Chart
 from ..session.judge import GameState, Verdict
+from .render_task import ChartRenderer, estimate_seconds
 from .screens import ScreenBase, constrained_button, content_column, heading
 from .theme import COLORS, px
 from .widgets.tabview import TabView
 
 if TYPE_CHECKING:  # pragma: no cover - types only
+    from ..audio.render import RenderResult
     from ..context import AppContext
 
 _CENTRED = QtCore.Qt.AlignmentFlag.AlignHCenter
@@ -84,6 +87,16 @@ class Game(ScreenBase):
         #: select and arrives in the PlayRequest (§19.1), so unlike §18 there is
         #: nothing to re-anchor: the rate never changes while the clock is running.
         self._rate = 1.0
+
+        #: True while the chart is being turned into audio. The clock does not start
+        #: until it is, because a song that starts on the wall clock and is then
+        #: taken over by the audio clock jumps by however long the render took.
+        self._preparing = False
+        self._render_error = ""
+        self._renderer = ChartRenderer(self)
+        self._renderer.ready.connect(self._on_audio_ready)
+        self._renderer.failed.connect(self._on_audio_failed)
+        self._renderer.cancelled.connect(self._on_audio_cancelled)
 
         self._view = TabView(self)
         self._build_hud()
@@ -199,24 +212,139 @@ class Game(ScreenBase):
         # right speed rather than snapping to it on the next tick. 0.0 means the
         # request asked for the tab's own tempo, which is a rate of 1.0.
         self._rate = self.rate_for(request.bpm if request else 0.0)
-        self._clock.start()
+        self._render_audio(chart, request)
         self._timer.start()
         self._refresh_tally()
+
+    def _render_audio(self, chart: Chart, request) -> None:
+        """Start turning the chart into audio, off the GUI thread.
+
+        The clock does not start here. It starts when the audio is ready, in
+        :meth:`_on_audio_ready`, because a song that begins on the wall clock and is
+        then handed to the audio clock jumps by however long the render took -- and
+        it jumps forwards, which is the direction that makes a rhythm game feel
+        broken rather than merely wrong.
+        """
+        self.context.stop_playback()
+        self._render_error = ""
+        if not self.context.audio_enabled:
+            # Playing silently is a supported state, not a degraded one. The song
+            # runs on the wall clock, exactly as it always did.
+            self._start_timer_clock()
+            return
+        if not self._renderer.start(chart):
+            # A render is already in flight, which can only happen if the player
+            # re-entered the screen faster than a seven-second render. Fall back to
+            # the wall clock rather than refusing to play the song at all.
+            self._start_timer_clock()
+            return
+        self._preparing = True
+        self._show_preparing(chart)
+
+    def _show_preparing(self, chart: Chart) -> None:
+        """Say what is happening, and roughly how long.
+
+        A frozen screen with no explanation reads as a hang, and this genuinely
+        takes seconds -- a five-minute tab is 130MB of float32 stereo.
+        """
+        seconds = estimate_seconds(chart)
+        self._banner.setText(
+            f"Preparing audio...\n\nAbout {seconds:.0f}s. "
+            "Rendering the tab into sound."
+        )
+
+    def _start_timer_clock(self) -> None:
+        """The no-audio fallback: a wall clock, which cannot say whether it feels right.
+
+        Used when there is no device, no soundfont, or the render failed. §1.5 says
+        never drive note timing from a GUI timer, and the honest reading of that is
+        "unless there is no audio to drive it from" -- a game that will not start
+        without a sound card is worse than one that starts slightly wrong.
+        """
+        self._preparing = False
+        self._clock.start()
+        self._banner.setText("")
+
+    # --- the render, arriving -------------------------------------------------
+
+    def _on_audio_ready(self, result: "RenderResult") -> None:
+        """The audio exists. Count it in, open the stream, start the audio clock."""
+        if self._chart is None:
+            return
+        count_in = int(self.context.settings.count_in_bars)
+        mixed, _clicks = add_count_in(
+            result.samples,
+            bpm=float(self._chart.tempo),
+            count_in_bars=count_in,
+            beats_per_bar=beats_per_bar(self._chart),
+            sample_rate=result.sample_rate,
+        )
+        try:
+            self.context.start_playback(
+                mixed,
+                sample_rate=result.sample_rate,
+                song_start=self._count_in_seconds(),
+                offset=self._offset,
+            )
+        except Exception as exc:  # noqa: BLE001 - any device failure falls back
+            # No output device, or PortAudio refused it. The song is still playable
+            # on the wall clock, so say what happened and play it.
+            self._render_error = str(exc)
+            self._start_timer_clock()
+            return
+        self._preparing = False
+        self._banner.setText("")
+
+    def _count_in_seconds(self) -> float:
+        """Seconds between sample zero and the chart's time zero.
+
+        Must agree exactly with what :func:`add_count_in` reserved, or the first
+        note arrives offset from the music by the difference.
+        """
+        from ..audio.click import count_in_seconds as _seconds
+
+        if self._chart is None:
+            return 0.0
+        return _seconds(
+            bpm=float(self._chart.tempo),
+            count_in_bars=int(self.context.settings.count_in_bars),
+            beats_per_bar=beats_per_bar(self._chart),
+        )
+
+    def _on_audio_failed(self, message: str) -> None:
+        """The audio could not be made. Play the song anyway, and say why not."""
+        self._render_error = message
+        self._start_timer_clock()
+
+    def _on_audio_cancelled(self) -> None:
+        """The player moved on. Nothing to show and nothing to start."""
+        self._preparing = False
 
     # --- the clock -----------------------------------------------------------
 
     def position(self) -> float:
         """Chart position, in seconds. The one number everything else reads.
 
-        ``chart_time = elapsed_real * rate``, with the offset subtracted in *chart*
-        time -- the offset aligns the music to the tab, which is a property of the
-        song, not of how fast you are playing it.
+        **The audio device's clock when there is one, the wall clock when there is
+        not.** §1.5 is explicit that note timing must come from
+        ``(stream.time - t0) - stream.latency`` and never from a GUI timer, because
+        a timer is self-consistent and cannot say whether the game feels right. The
+        wall clock survives as a fallback for a machine with no output device --
+        starting late on such a machine is better than not starting.
 
         The rate is read once, at load (§19.1): the practice tempo is chosen on song
         select and travels in the PlayRequest, so there is no origin to move and no
         re-anchor. Everything downstream works in chart time, which is why the rate
         is a single multiplication here rather than a rescale of the chart.
+
+        Returns ``-1.0`` while the audio is still being rendered, so nothing
+        downstream can mistake "not started" for "at the first note".
         """
+        if self._preparing:
+            return -1.0
+        audio = self.context.song_position()
+        if audio >= 0.0:
+            return audio
         if not self._clock.isValid():
             return 0.0
         return self._clock.elapsed() / 1000.0 * self._rate - self._offset

@@ -13,6 +13,20 @@ close a library or lose a play request.
 
 Pure enough to build in a test: give it a ``Library`` you constructed and it never
 touches the filesystem.
+
+**It also owns the audio transport**, which is the one device handle in the app.
+§1.7 says screens never own game objects, precisely so that popping one cannot leak
+an audio stream -- and a rule you satisfy by leaking it somewhere else is not a rule
+satisfied. The shell holds one context for the whole session, so the handle lives
+here and is closed when a new song starts or the app exits.
+
+The context stays **Qt-free**, which is the constraint that is actually tested: the
+transport is numpy and sounddevice, and sounddevice is imported inside
+``audio.transport`` rather than here, so importing this module still pulls in no
+Qt and no audio. What the context stores is a pre-rendered numpy array and an
+optional ``Transport``; the expensive part -- turning a chart into samples -- happens
+on a worker thread, because rendering a six-minute tab takes about seven seconds and
+the GUI thread may not block (§1.4).
 """
 
 from __future__ import annotations
@@ -20,6 +34,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .audio.transport import Transport
 from .paths import SETTINGS_PATH, SONGS_DIR
 from .session.play_request import PlayRequest
 from .settings import Settings
@@ -35,6 +50,21 @@ class AppContext:
     songs_dir: Path = field(default_factory=lambda: SONGS_DIR)
     play_request: PlayRequest | None = None
     settings_path: Path = field(default_factory=lambda: SETTINGS_PATH)
+
+    #: The open output stream, if one is playing. Not a dataclass field: it is a
+    #: device handle with a destructor, so it must be excluded from repr and
+    #: equality, and only ever replaced through :meth:`start_playback`.
+    playback: "Transport | None" = field(default=None, repr=False, compare=False)
+
+    #: Whether to render and play audio at all.
+    #:
+    #: A user-facing switch, because playing silently has to be possible: a machine
+    #: with no output device, headphones unplugged, or a player who just wants the
+    #: tab. It is also what the test suite turns off, and that is a second use worth
+    #: being explicit about -- a screen that renders a chart on construction would
+    #: make every widget test pay for a background render, and would leave the timer
+    #: and audio clocks racing in the tests rather than one of them.
+    audio_enabled: bool = True
 
     # --- construction -------------------------------------------------------
 
@@ -118,6 +148,70 @@ class AppContext:
 
     def clear_play_request(self) -> None:
         self.play_request = None
+
+    # --- playback ------------------------------------------------------------
+
+    def start_playback(
+        self,
+        samples,
+        *,
+        sample_rate: int,
+        song_start: float = 0.0,
+        offset: float = 0.0,
+        device: str | None = None,
+    ) -> "Transport":
+        """Open an output stream for ``samples`` and start it. Returns the transport.
+
+        Takes **already-rendered audio**, not a chart, on purpose: rendering is
+        several seconds of CPU and must not happen here, on whatever thread is
+        holding a button. The caller renders on a worker and calls this with the
+        result.
+
+        Any stream already open is closed first, so starting a second song cannot
+        leave the first one playing underneath it -- which is not a subtle bug, it
+        is two songs at once.
+        """
+        from .audio.transport import Transport
+
+        self.stop_playback()
+        transport = Transport(
+            samples,
+            sample_rate=sample_rate,
+            song_start=song_start,
+            offset=offset,
+            device=device,
+        )
+        transport.play()
+        self.playback = transport
+        return transport
+
+    def stop_playback(self) -> None:
+        """Close the output stream, if one is open. Safe to call twice."""
+        if self.playback is None:
+            return
+        try:
+            self.playback.stop()
+        finally:
+            self.playback = None
+
+    def song_position(self) -> float:
+        """Seconds into the chart, or ``-1.0`` when nothing is playing.
+
+        The one number the game screen reads for its clock. -1.0 rather than 0.0 so
+        "not playing" cannot be mistaken for "at the first note" -- and for the real
+        tab the first note is three seconds in, so the two are visibly different.
+
+        A caller that wants a usable position either way (the game's timer fallback,
+        tests) should not use this; it is the audio clock's answer, including when
+        the answer is "there isn't one".
+        """
+        if self.playback is None:
+            return -1.0
+        return self.playback.position()
+
+    @property
+    def is_playing(self) -> bool:
+        return self.playback is not None and self.playback.is_running
 
     def chart_for(self, request: PlayRequest | None = None) -> Chart | None:
         """Resolve a request into a playable chart, or ``None``.

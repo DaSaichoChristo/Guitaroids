@@ -50,6 +50,9 @@ def context(tmp_path: Path) -> AppContext:
         settings=Settings(),
         songs_dir=tmp_path / "songs",
         settings_path=tmp_path / "settings.json",
+        # These tests press Play, which navigates to GAME, and the game screen would
+        # start a background render for each one. They are about song select.
+        audio_enabled=False,
     )
 
 

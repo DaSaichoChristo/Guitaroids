@@ -280,3 +280,70 @@ def test_the_origin_is_read_from_the_device_clock() -> None:
         assert transport.position() < 1.0, "and the position must be sane anyway"
     finally:
         transport.stop()
+
+
+# --- the two things a real device found, and they are the interesting ones --------
+
+
+@needs_device
+def test_play_returns_immediately_for_a_long_buffer() -> None:
+    """``OutputStream.write`` is *blocking*, so writing a song in one call freezes
+    the caller for the length of the song.
+
+    Measured before the feeder thread existed: a 0.4s buffer blocked 0.44s, a 5s
+    buffer 4.97s. On a six-minute song that is a six-minute freeze, and on the GUI
+    thread it is a frozen window with no navigation for the length of the track.
+    """
+    transport = Transport(silence(30.0, RATE), sample_rate=RATE)
+    try:
+        import time
+
+        started = time.perf_counter()
+        transport.play()
+        took = time.perf_counter() - started
+        assert took < 1.0, f"play() blocked {took:.2f}s for a 30s buffer"
+        assert transport.is_running
+    finally:
+        transport.stop()
+
+
+@needs_device
+def test_stopping_while_the_feeder_is_mid_write_does_not_abort() -> None:
+    """Only the feeder may touch the stream, including closing it.
+
+    Closing a PortAudio stream while another thread is blocked inside ``write()`` is
+    a use-after-free in C. It aborted the process outright -- "corrupted
+    double-linked list" and a PulseAudio refcount assertion -- on a 60-second buffer,
+    where the feeder is always mid-write.
+
+    A test cannot assert "did not abort the process" from inside the process that
+    aborted, so this asserts the two halves it can: that stop() returns, and that
+    nothing is left running or reachable afterwards.
+    """
+    transport = Transport(silence(30.0, RATE), sample_rate=RATE)
+    transport.play()
+    import time
+
+    time.sleep(0.15)  # let the feeder get into a write
+    transport.stop()
+    assert transport.is_running is False
+    assert transport.position() == -1.0
+    transport.stop()  # twice, still safe
+
+
+@needs_device
+def test_a_device_that_vanishes_mid_song_does_not_raise_on_the_feeder() -> None:
+    """An unplugged interface leaves a daemon thread holding a dead stream.
+
+    An exception escaping that thread prints a traceback nobody reads and leaves the
+    transport looking like it is still playing, so it is caught and the stream is
+    closed on the way out.
+    """
+    transport = Transport(silence(2.0, RATE), sample_rate=RATE)
+    transport.play()
+    transport._stream = None  # simulate the device going away underneath the feeder
+    import time
+
+    time.sleep(0.2)
+    assert transport.is_running is False
+    transport.stop()

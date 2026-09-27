@@ -101,6 +101,13 @@ def context() -> AppContext:
     ``settings_path`` points into a directory that does not exist so a test that
     calls ``save_settings`` fails loudly rather than quietly writing the
     developer's real config.
+
+    ``audio_enabled=False`` because the alternative is that any test which navigates
+    to GAME starts a background render of a real tab -- measured at 7.1s for
+    Hotel California, plus 130MB -- and the thread pool then runs for the rest of the
+    session. The suite went from 32s to 231s, and one song-select test started failing
+    on timing, before this was switched off. The audio path has its own tests, which
+    ask for it explicitly.
     """
     missing = Path("/nonexistent/guitaroids-tests")
     return AppContext(
@@ -108,6 +115,7 @@ def context() -> AppContext:
         settings=Settings(),
         songs_dir=missing / "songs",
         settings_path=missing / "settings.json",
+        audio_enabled=False,
     )
 
 

@@ -91,6 +91,17 @@ class RenderError(Exception):
     """A chart could not be turned into audio."""
 
 
+class RenderCancelled(RenderError):
+    """The render was abandoned part-way.
+
+    A subclass, so a caller that only cares "did it work" catches :class:`RenderError`
+    and a caller that wants to tell "cancelled" from "failed" -- the screen does,
+    because one is worth a message and the other is not -- can. A half-rendered
+    buffer is never returned: a truncated song that sounds almost right is worse
+    than no song.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class RenderResult:
     """Audio, plus the facts a caller needs in order to check it."""
@@ -150,7 +161,11 @@ def preset_for(program: int) -> int:
 
 
 def _render_soundfont(
-    chart: Chart, soundfont_path: Path, sample_rate: int
+    chart: Chart,
+    soundfont_path: Path,
+    sample_rate: int,
+    *,
+    should_stop=None,
 ) -> RenderResult:
     if not soundfont_path.is_file():
         # Checked here rather than left to sfload, which fails with a message about
@@ -186,6 +201,10 @@ def _render_soundfont(
     held: list[tuple[int, int]] = []
     cursor = 0
     for index, group in enumerate(groups):
+        # Checked at an onset rather than inside `generate`, which is where the time
+        # goes and which cannot be interrupted part-way through a block.
+        if should_stop is not None and should_stop():
+            raise RenderCancelled(f"render cancelled after {index} onsets")
         onset = int(round(group[0].time * sample_rate))
         if onset > cursor:
             cursor = _advance(out, synth, cursor, min(onset, total))
@@ -261,7 +280,7 @@ def pluck(frequency: float, seconds: float, sample_rate: int) -> np.ndarray:
     return (wave * envelope * np.float32(0.5)).astype(np.float32)
 
 
-def _render_pluck(chart: Chart, sample_rate: int) -> RenderResult:
+def _render_pluck(chart: Chart, sample_rate: int, *, should_stop=None) -> RenderResult:
     groups = group_by_onset(list(chart.notes))
     if not groups:
         raise RenderError("the chart has no notes to play")
@@ -269,6 +288,8 @@ def _render_pluck(chart: Chart, sample_rate: int) -> RenderResult:
     total = max(max(ends), int(chart.duration * sample_rate) + sample_rate)
     out = np.zeros((total, 2), dtype=np.float32)
     for index, group in enumerate(groups):
+        if should_stop is not None and should_stop():
+            raise RenderCancelled(f"render cancelled after {index} onsets")
         start = int(round(group[0].time * sample_rate))
         midi = max(group, key=lambda n: n.pitch)
         frequency = 440.0 * (2.0 ** ((midi.pitch - 69) / 12.0))
@@ -322,6 +343,7 @@ def render_chart(
     max_gain: float = MAX_GAIN,
     soundfont: Path | None = None,
     backend: str = "auto",
+    should_stop=None,
 ) -> RenderResult:
     """Render ``chart`` to stereo float32, normalised to ``target_peak``.
 
@@ -332,6 +354,12 @@ def render_chart(
     ``target_peak=None`` returns the render exactly as produced, which is what the
     level tests want -- they are asserting on the *unnormalised* peak, and a
     normalised one would make them pass whatever the soundfont does.
+
+    ``should_stop`` is a predicate polled at every onset; returning True abandons
+    the render with :class:`RenderCancelled`. It exists for the background renderer,
+    which must be able to give up when the player has already moved on to another
+    song, and it is a poll rather than a thread interrupt because the work is inside
+    a C call that cannot be interrupted.
     """
     if not chart.notes:
         raise RenderError("the chart has no notes to play")
@@ -339,15 +367,17 @@ def render_chart(
         raise ValueError(f"unknown backend {backend!r}")
 
     if backend == "pluck":
-        result = _render_pluck(chart, sample_rate)
+        result = _render_pluck(chart, sample_rate, should_stop=should_stop)
     else:
         found = find_soundfont() if soundfont is None else soundfont
         if found is None:
             if backend == "soundfont":
                 raise RenderError("no soundfont found; fetch one, or use backend='pluck'")
-            result = _render_pluck(chart, sample_rate)
+            result = _render_pluck(chart, sample_rate, should_stop=should_stop)
         else:
-            result = _render_soundfont(chart, found, sample_rate)
+            result = _render_soundfont(
+                chart, found, sample_rate, should_stop=should_stop
+            )
 
     if target_peak is None:
         return result

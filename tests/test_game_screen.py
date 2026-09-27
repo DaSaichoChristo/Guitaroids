@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 import pytest
+from qtsupport import wait_until
 from songbuild import make_chart
 
 from guitaroids.context import AppContext
@@ -45,6 +46,11 @@ def context_with(chart, **kwargs) -> AppContext:
         library=Library(root=Path("songs"), entries=(entry_for(chart, **kwargs),)),
         songs_dir=Path("songs"),
         settings_path=Path("/nonexistent/settings.json"),
+        # These tests are about the wall clock, the tab view and the judge. With audio
+        # on, every Game construction would start a background render and the screen
+        # would sit in its "Preparing audio" state until a queued signal arrived --
+        # which never happens, because nothing pumps the event loop here.
+        audio_enabled=False,
     )
     context.request_play("test", 1)
     return context
@@ -732,3 +738,137 @@ class _FrozenClock:
     def set(self, seconds: float) -> None:
         """Put the clock at a time without going through a restart."""
         self._ms = int(seconds * 1000)
+
+
+# --- the audio clock (§24) -------------------------------------------------------
+#
+# Before this, the game ran on a QElapsedTimer, which is self-consistent and cannot
+# say whether the game feels right (§1.5). These tests cover the switch: with audio
+# the position comes from the device, without it the wall clock is the fallback, and
+# a song that is still being rendered is not yet playing.
+
+
+def audio_context(chart, **kwargs) -> AppContext:
+    """A context that *wants* audio, for the tests that exercise the render path."""
+    context = context_with(chart, **kwargs)
+    context.audio_enabled = True
+    return context
+
+
+def test_audio_off_means_the_wall_clock_runs_immediately(shell, chart) -> None:
+    """The fallback has to be instant, or every test in this file would wait."""
+    screen = game_via_shell(shell, chart)
+    assert screen._preparing is False
+    screen._clock = _FrozenClock(5.0)
+    assert screen.position() == pytest.approx(5.0, abs=0.05)
+
+
+def test_the_screen_prepares_audio_when_it_is_enabled(shell, chart) -> None:
+    """The clock does not start while a render is in flight.
+
+    Starting it and handing over later would make the song jump forwards by however
+    long the render took, which is the direction of jump that makes a rhythm game
+    feel broken rather than merely wrong.
+    """
+    shell.show()
+    shell.navigate(Screen.GAME)
+    screen = shell.current_screen
+    screen.context = audio_context(chart)
+    screen._load_request()
+
+    assert screen._preparing is True
+    assert screen.position() == -1.0, "a rendering song must not report a position"
+    assert "Preparing audio" in screen._banner.text()
+    screen._renderer.cancel()
+    wait_until(lambda: not screen._renderer.is_running)
+
+
+def test_input_is_ignored_while_the_audio_is_preparing(shell, chart) -> None:
+    """A keypress during a count-in render is not a miss, it is a keypress."""
+    shell.show()
+    shell.navigate(Screen.GAME)
+    screen = shell.current_screen
+    screen.context = audio_context(chart)
+    screen._load_request()
+    try:
+        screen._press(0)
+        assert screen._state is not None
+        assert screen._state.resolved == 0
+    finally:
+        screen._renderer.cancel()
+        wait_until(lambda: not screen._renderer.is_running)
+
+
+def test_a_failed_render_falls_back_to_the_wall_clock(shell, chart) -> None:
+    """No soundfont, no device, a preset the soundfont lacks: play the song anyway.
+
+    A rhythm game that will not start without a sound card is worse than one that
+    starts slightly wrong.
+    """
+    screen = game_via_shell(shell, chart)
+    screen._preparing = True
+    screen._on_audio_failed("no soundfont found")
+
+    assert screen._preparing is False
+    assert screen._render_error == "no soundfont found"
+    screen._clock = _FrozenClock(3.0)
+    assert screen.position() == pytest.approx(3.0, abs=0.05)
+
+
+def test_a_cancelled_render_starts_nothing(shell, chart) -> None:
+    """The player has already moved on; there is nothing to play and nothing to say."""
+    screen = game_via_shell(shell, chart)
+    screen._preparing = True
+    screen._on_audio_cancelled()
+    assert screen._preparing is False
+    assert screen._render_error == ""
+
+
+def test_the_count_in_offset_agrees_with_what_was_rendered(shell, chart) -> None:
+    """The offset between sample zero and the chart's zero, from one source.
+
+    The game screen asks the click module how long the count-in lasts, and
+    ``add_count_in`` reserved exactly that much. If the two ever disagreed, every
+    note would arrive offset from the music by the difference -- a timing bug that
+    sounds like the player's own sloppiness.
+    """
+    from guitaroids.audio.click import add_count_in, count_in_seconds
+
+    screen = game_via_shell(shell, chart)
+    screen.context.settings.count_in_bars = 2
+    import numpy as np
+
+    track = np.zeros((44100, 2), dtype=np.float32)
+    combined, clicks = add_count_in(
+        track,
+        bpm=float(chart.tempo),
+        count_in_bars=2,
+        beats_per_bar=4,
+        sample_rate=44100,
+    )
+    reserved = len(combined) - len(track)
+    # The reserved room is the count-in plus the last click's own decay, so the
+    # offset the screen hands the transport is a lower bound on it, not equal to it.
+    assert screen._count_in_seconds() == pytest.approx(count_in_seconds(
+        bpm=float(chart.tempo), count_in_bars=2, beats_per_bar=4
+    ))
+    assert reserved / 44100 >= screen._count_in_seconds() - 0.001
+    assert clicks.indices[0] == 0
+
+
+def test_the_audio_position_wins_over_the_wall_clock(shell, chart) -> None:
+    """The device's clock is the one §1.5 says to use, so when it is there it is
+    what the screen reads -- even with the wall clock wound forward."""
+    from guitaroids.audio.transport import silence
+
+    screen = game_via_shell(shell, chart)
+    screen._clock = _FrozenClock(30.0)  # would say 30s
+    try:
+        screen.context.start_playback(silence(5.0, 44100), sample_rate=44100)
+        import time
+
+        time.sleep(0.2)
+        audio = screen.position()
+        assert audio < 2.0, f"read the wall clock ({audio:.1f}s) instead of the device"
+    finally:
+        screen.context.stop_playback()
