@@ -97,6 +97,22 @@ class PitchDetector:
         """
         return (self._window / 2.0) / self._sample_rate
 
+    def reset(self) -> None:
+        """Discard buffered audio, keeping the estimate history.
+
+        Called when the stream reopens. The sliding window is *state*: it holds the
+        last ``max_buffer`` samples and every estimate is computed from them, so a
+        detector reused across a stop/start opens with up to ``max_buffer`` of
+        pre-restart audio still in it -- 371ms on this configuration -- and the first
+        windows analysed after the reopen describe the room, or the previous song,
+        rather than the one that is starting.
+
+        ``estimates`` is kept, deliberately. It is a test surface and a debug aid, and
+        clearing it would make a restart look like a fresh detector when the only thing
+        that actually changed is the audio.
+        """
+        self._buffer = np.zeros(0, dtype=np.float64)
+
     def push(self, block: np.ndarray) -> list[PitchEstimate]:
         """Add a block of mono or stereo audio, and return any new estimates.
 
@@ -222,6 +238,10 @@ class Microphone:
 
         if self._stream is not None:
             return
+        # The detector is reused across a stop/start, and its sliding window holds
+        # pre-restart audio. Drop it here rather than analysing the room as though it
+        # were the first note of the song.
+        self._detector.reset()
         self._stop.clear()
         self._overruns = 0
         try:

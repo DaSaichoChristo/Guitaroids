@@ -662,15 +662,40 @@ class Game(ScreenBase):
         Nothing here is a fallback path that was never designed: §23 established that a
         silent device should be announced rather than papered over, and the same applies
         to a silent *input*.
+
+        **The idempotence guard asks whether the microphone is *running*, not whether
+        one exists.** It used to ask the second question, and the two are not the same:
+        `hideEvent` stops the input stream for the same reason it stops the output one
+        -- a device held open on a screen nobody is looking at is a device held for
+        nothing -- and it does so *without* clearing `self._mic`, because the object is
+        kept deliberately. So after any visit away the object existed, was dead, and
+        this guard saw a non-`None` microphone and returned. The second run then had a
+        live screen, a live chart, a live clock and **no input at all**, so every note
+        timed out as a MISS. §44.
+
+        A stale-handle guard is §21.2's shape: it looks like it protects the thing it
+        names, and instead it protects the bug. `Microphone.is_running` had no reader
+        anywhere in the package, which is why nothing noticed.
         """
-        if self._mic is not None:
+        if self._mic is not None and self._mic.is_running:
             return
+        # Cleared before the attempt, not after a failure: a device that opens on the
+        # second run must not report the first run's error, and a device that fails on
+        # the second run must not report the first run's success by leaving the old
+        # message in place.
+        self._mic_error = ""
         settings = self.context.settings
-        self._mic = Microphone(
-            device=settings.input_device,
-            sample_rate=SAMPLE_RATE,
-            on_pitch=self._on_estimate,
-        )
+        if self._mic is None:
+            self._mic = Microphone(
+                device=settings.input_device,
+                sample_rate=SAMPLE_RATE,
+                on_pitch=self._on_estimate,
+            )
+        # `Microphone.start()` is idempotent, so this is a no-op on a live instance and
+        # a real reopen on a stopped one. **The object is deliberately kept across
+        # visits** -- the comment in `__init__` says why: acquiring a device per song
+        # puts a device acquisition on the critical path of starting a run. That is
+        # only sound while the object being kept is a *live* one.
         try:
             self._mic.start()
         except Exception as exc:  # noqa: BLE001 - any device failure keeps the game

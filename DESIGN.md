@@ -35,7 +35,7 @@ supersedes §2" resolves without ambiguity.
 
 ## The sections
 
-42 sections, in the order they were written. Dates are all 2026-09-26 or
+43 sections, in the order they were written. Dates are all 2026-09-26 or
 -27 and are in the headings, so they are left out here.
 
 | Section | What it records |
@@ -82,6 +82,7 @@ supersedes §2" resolves without ambiguity.
 | §41 | A retro palette, and the layout bill that came with it |
 | §42 | Centred titles, and a field drawn on top of its own name |
 | §43 | A logo for the main menu, and a background that was never removed |
+| §44 | "Redo the song and I miss everything", which was a guard asking the wrong question |
 
 **§33 is missing**, and §36.3 explains why rather than back-filling it: the number was
 reserved for work that was planned, approved and then overtaken by other work, so no
@@ -5040,3 +5041,118 @@ discriminating test added, the same mutation fails
 - **`assets/hand_landmarker.task` (7.8MB) is tracked**, which is a webcam-era leftover
   from §25 and looks like it should have gone when the camera did. Unrelated to this
   work and not investigated.
+
+---
+
+## §44 — "Redo the song and I miss everything", which was a guard asking the wrong question (2026-09-27)
+
+The report: the first run is clean, but ending a song early and redoing it with the
+same settings misses **every** note. Consistent, not occasional. A large constant
+offset is not what that is; an absent input is.
+
+### §44.1 The bug
+
+Two decisions that are individually right and jointly fatal:
+
+| | |
+|---|---|
+| `hideEvent` stops the input stream | Correct, and the same reason it stops the output one: a device held open on a screen nobody is looking at is a device held for nothing. It keeps `self._mic`, because the object is deliberately reused to keep device acquisition off the critical path of starting a run. |
+| `_start_microphone` guard | `if self._mic is not None: return` — which asks **"does a Microphone object exist?"** |
+
+`Microphone.stop()` sets `self._stream = None` (mic.py:263) and keeps the object. So
+after any visit away: the object existed, the device was closed, and the guard saw a
+non-`None` microphone and returned. The second run had a live screen, a live chart, a
+live clock and **no input at all**, so every note timed out as a MISS.
+
+**A stale-handle guard is §21.2's shape.** It looks like it protects the thing it
+names; it protected the bug instead. And `Microphone.is_running` — the property that
+answers the question actually being asked — had **no reader anywhere in the package**,
+which is why nothing noticed.
+
+`Microphone.start()` is idempotent (`if self._stream is not None: return`), so the fix
+is to make the guard ask about liveness and let `start()` reopen:
+
+```python
+if self._mic is not None and self._mic.is_running:
+    return
+```
+
+`self._mic_error` is now cleared **before** the attempt rather than only on failure, so
+a working microphone is not still described by the first run's complaint and a failing
+one is described by its own.
+
+### §44.2 All three redo paths land in the same place, so the question did not need asking
+
+`Screen.GAME` is navigated to from exactly two places — `results._play_again`
+(results.py:239) and song select (song_select.py:527) — plus Escape's `go_back()`. All
+three reach the **cached** `Game` instance (shell.py:90), whose `showEvent` reloads
+because leaving it stopped the timer. One fix covers every path, and "which button did
+you press" was answerable from the code rather than from the player.
+
+### §44.3 The detector reset, included deliberately
+
+Restarting the microphone reuses its `PitchDetector`, whose sliding window holds up to
+`MAX_QUEUED_SAMPLES = WINDOW * 8` = **371ms** of audio. The first windows analysed
+after a reopen describe the room, or the previous song. Fixing the guard alone would
+have traded "no input" for "a burst of phantom input at the top of the song", so
+`PitchDetector.reset()` clears the buffer — keeping `estimates`, which is a test
+surface and a debug readout — and `Microphone.start()` calls it after its idempotence
+guard, so a live microphone's window is not thrown away.
+
+### §44.4 A test that did not test, in a test written to catch one
+
+The end-to-end regression test called `screen._on_pitch(note.pitch)` directly, which
+**bypasses the microphone entirely**. It passed against the exact bug it was written
+for, because the judge does not care whether anything is listening.
+
+So the fake grew `deliver(midi)`, which is **silent while stopped** — a closed
+microphone hears nothing — and the test goes through it. Verified by mutation: with
+the old guard restored, `test_revisiting_restarts_the_microphone` **and**
+`test_a_second_run_judges_a_detected_note` both fail; with the fix, both pass.
+
+That is §21.2 inside a test written about §21.2, and it is why the mutation check is
+the step that mattered rather than the step that confirmed the tests were green.
+
+Three of the file's other fakes also lacked `is_running` and raised `AttributeError`
+on the fixed line. Each was given the property, because **a double is a contract** —
+and the one that records "was `start()` called" would still be satisfied by a
+`start()` that returned early, which is why the new tests assert `is_running`.
+
+### §44.5 A guard kept, not routed around
+
+`tests/test_mic.py` carries an absence test in the §25.4 shape: its own source may not
+contain `.start()`, `InputStream` or `sd.`, because a real input stream left open
+behind a test cost a crash in §29.3. The two `start()` tests need to call `start()`.
+
+They are in `tests/test_mic_start.py` instead, and that file is the one place in the
+suite allowed to. The absence test scans the source *before* its own definition, so
+appending below it would have satisfied the letter of the guard while leaving the file
+that states the rule looking broken. Splitting keeps both true: `test_mic.py` never
+calls `start()`, and the file that does says why it is safe — `sounddevice.InputStream`
+is replaced with a fake for the duration of each test, so no device opens.
+
+**Tests: 1055 in total — 1039 excluding `tests/test_docs.py`.** Two clean runs, plus
+the M0 gate.
+
+### Not done — §44
+
+- **The bug was found by inspection, not by a failing test.** Six of the tests here
+  touch the microphone's lifecycle and none of them noticed a second run had no
+  input. `test_revisiting_starts_a_fresh_run` revisits and asserts the *judging* state
+  is reset, which it is; `test_a_run_opens_the_microphone_exactly_once` asserts the
+  first run opens a device and has no second visit in it. Both true, neither on the
+  seam. This is the project's third variation on §21.2 and the second in a row.
+- **`test_mic_start.py` duplicates `note` and `RATE` from `test_mic.py`.** Deliberate
+  — a test module is not a shared library — but it is duplication, and the right home
+  is a `tests/` helper the way `songbuild.py` is one.
+- **The 371ms of stale audio was never observed causing a phantom detection.** The
+  reset is justified by measurement of the buffer size, not by a reproduced symptom,
+  because the real tab's first note is 3.16s in behind a count-in. On a chart whose
+  first note is at zero it would matter, and that case is untested.
+- **`is_running` still has only one reader.** The game screen now reads it; nothing
+  reports a dead microphone to the player. `_mic_error` covers a device that *fails to
+  open*, not one that was closed and never reopened, so a failure mode of exactly this
+  shape would again be invisible rather than merely unhandled.
+- **The stale-buffer effect on `dropped` and `stats` was not considered.** `reset()`
+  clears the window but not `dropped`, so the counter spans restarts. Probably right —
+  it is a liveness counter, not a per-run one — and unexamined.

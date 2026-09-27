@@ -149,6 +149,48 @@ def test_estimates_accumulate_for_inspection() -> None:
     assert all(e.clarity > 0 for e in detector.estimates)
 
 
+def test_a_reset_drops_buffered_audio_but_keeps_the_estimates() -> None:
+    """The two halves are different on purpose, and the second one is a contract.
+
+    The sliding window holds up to `max_buffer` samples -- 371ms at this
+    configuration -- and every estimate is computed from it. A detector reused across
+    a stop/start therefore opens holding audio from *before* the restart, and the
+    first windows it analyses describe the room rather than the song. §44.
+
+    `estimates` is kept because it is a test surface and a debug readout: clearing it
+    would make a restart look like a fresh detector when the only thing that changed
+    is the audio.
+    """
+    detector = PitchDetector(RATE)
+    detector.push(note(52))
+    assert len(detector.estimates) > 0
+    detector.push(note(52))
+    assert len(detector._buffer) > 0, "precondition: the window is holding audio"
+
+    detector.reset()
+
+    assert len(detector._buffer) == 0, "pre-restart audio is still in the window"
+    assert len(detector.estimates) > 0, "the estimate history is a contract"
+    assert detector.latency_seconds > 0, "a reset must not disturb the reported latency"
+
+
+def test_audio_analysed_after_a_reset_is_only_the_new_audio() -> None:
+    """The behaviour that matters: a reset does not just shrink the window.
+
+    A reset that left a partial window would make the first estimate straddle the
+    restart, which is the same defect by a different route.
+    """
+    detector = PitchDetector(RATE)
+    detector.push(note(52))
+    detector.reset()
+
+    # Half a window of silence, then the note: the note must still be found, so the
+    # window was emptied rather than half-emptied.
+    detector.push(np.zeros(WINDOW // 2, dtype=np.float64))
+    found = detector.push(note(52))
+    assert found, "the first note after a reset was lost, so the window was not cleared"
+
+
 # --- the device wrapper, without a device --------------------------------------
 
 

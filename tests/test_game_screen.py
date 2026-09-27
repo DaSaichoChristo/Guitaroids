@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from qtsupport import wait_until
@@ -501,6 +502,90 @@ def test_revisiting_starts_a_fresh_run(shell, chart) -> None:
     shell.navigate(Screen.MAIN)
     shell.navigate(Screen.GAME)
     assert screen.state.resolved == 0, "re-entering must not resume a finished run"
+
+
+# --- the microphone has to come back with you (§44) ---------------------------
+
+
+def test_revisiting_restarts_the_microphone(shell, chart) -> None:
+    """The second run has to have an *input*, or every note times out.
+
+    `hideEvent` stops the input stream for the same reason it stops the output one --
+    a device held open on a screen nobody is looking at is a device held for nothing
+    -- and it keeps `self._mic`, because the object is deliberately reused to keep
+    device acquisition off the critical path of starting a run.
+
+    Those two decisions are individually right and jointly fatal while the guard asks
+    "does a Microphone object exist?". After one visit away the answer was yes, the
+    device was closed, and the run had no input at all.
+
+    **Asserted on liveness, not on `start()` having been called.** "Was the method
+    invoked" is the spy assertion, and a spy is what let §21.2 through: a `start()`
+    that returned early would satisfy it. `is_running` is the state the player
+    experiences.
+    """
+    screen = game_via_shell(shell, chart)
+    assert screen._mic is not None
+    assert screen._mic.is_running, "the first run must open a microphone"
+
+    shell.navigate(Screen.MAIN)
+    assert not screen._mic.is_running, "leaving must release the device"
+
+    shell.navigate(Screen.GAME)
+    assert screen._mic.is_running, (
+        "coming back must reopen the device; a run with a live screen, a live chart "
+        "and no input judges every note as a MISS"
+    )
+
+
+def test_a_second_run_judges_a_detected_note(shell, chart, qapp) -> None:
+    """The end-to-end version, and the assertion that would have caught the bug.
+
+    A dead microphone is otherwise **indistinguishable from a player who played
+    nothing**: the tally reads the same, and `test_revisiting_starts_a_fresh_run`
+    passes, because the judging state really is reset correctly. Only the device was
+    not. This goes through the real seam -- leave, come back, then a pitch arriving on
+    the same path a live microphone would use -- and asks whether it is judged.
+    """
+    screen = game_via_shell(shell, chart)
+    shell.navigate(Screen.MAIN)
+    shell.navigate(Screen.GAME)
+
+    screen._clock = _FrozenClock(2.0)
+    # **Through the device, not through `_on_pitch`.** The first version called
+    # `_on_pitch` directly, which bypasses the microphone entirely -- and therefore
+    # passed against the exact bug it was written for, because the judge does not
+    # care whether anything is listening. `deliver` is silent on a stopped fake, so
+    # this is the shape a player experiences.
+    note = next(n for n in screen.chart.notes if n.lane == 0)
+    screen._mic.deliver(note.pitch)
+    qapp.processEvents()
+
+    assert screen.state.resolved == 1, (
+        "the second run judged nothing, so the note expired as a MISS -- which is "
+        "what a player sees when the microphone never reopened"
+    )
+    assert screen.state.judgements[-1].verdict is Verdict.PERFECT
+    assert screen.state.misses == 0
+
+
+def test_a_microphone_that_fails_to_reopen_reports_the_second_runs_error(
+    shell, chart, monkeypatch
+) -> None:
+    """A stale message is worse than none: it names the wrong attempt.
+
+    `_mic_error` is cleared before the attempt rather than only on failure, so a
+    device that opens on the second run does not still be described by the first
+    run's complaint, and a device that fails on the second run is described by *its*
+    complaint.
+    """
+    screen = game_via_shell(shell, chart)
+    screen._mic_error = "first run's complaint"
+    shell.navigate(Screen.MAIN)
+    shell.navigate(Screen.GAME)
+    assert screen._mic_error == "", (
+        f"a working microphone is still described by {screen._mic_error!r}"
+    )
 
 
 # --- structure ---------------------------------------------------------------
@@ -1350,6 +1435,32 @@ class FakeMicrophone:
     def stop(self) -> None:
         self.started = False
 
+    @property
+    def is_running(self) -> bool:
+        """Models the real `Microphone`, which reports `self._stream is not None`.
+
+        Present because the production guard reads it (§44). Without it, every test
+        that used this fake raised `AttributeError` on the fixed line -- which is the
+        right outcome for a fake that does not model the surface, and a reminder that
+        a double is a contract. The old guard asked "does a Microphone exist?", which
+        this fake answered with `started` and nobody had to model liveness at all.
+        """
+        return self.started
+
+    def deliver(self, midi: int) -> None:
+        """Hand a pitch to the screen the way a live device would.
+
+        **Silent while stopped**, and that is the entire point. A closed microphone
+        hears nothing, so a fake that delivers unconditionally lets a test assert on
+        the judge while claiming to test the input path -- which is what the first
+        version of `test_a_second_run_judges_a_detected_note` did, and it passed
+        against the exact bug it was written for. §21.2, in a test about §21.2.
+        """
+        if not self.is_running:
+            return
+        estimate = SimpleNamespace(nearest_midi=lambda: midi)
+        self.kwargs["on_pitch"](estimate)
+
     class detector:  # noqa: N801 - a stand-in, not a real class
         # **Zero, deliberately.** A real detector contributes 23.2ms (§30.3), and that
         # is a microphone fact. Every test that is not *about* the latency would
@@ -1463,8 +1574,16 @@ def test_the_detector_latency_is_included_in_the_trim(shell, chart) -> None:
         # that cannot be stopped fails every later test in the file when the screen is
         # torn down. The first version omitted it and the error surfaced in an
         # unrelated test's teardown.
+        #
+        # `is_running` because the production guard reads it (§44). False, since this
+        # fake is never started -- the screen only wants something to read the
+        # detector's latency off.
         def stop(self) -> None:
             pass
+
+        @property
+        def is_running(self) -> bool:
+            return False
 
     fake = FakeMic()
     fake.detector = FakeDetector()
@@ -1504,12 +1623,18 @@ def test_a_run_opens_the_microphone_exactly_once(shell, chart, monkeypatch) -> N
     class FakeMic:
         def __init__(self, **kwargs) -> None:  # noqa: ANN003
             self.kwargs = kwargs
+            self._running = False
 
         def start(self) -> None:
             started.append(True)
+            self._running = True
 
         def stop(self) -> None:
-            pass
+            self._running = False
+
+        @property
+        def is_running(self) -> bool:
+            return self._running
 
         class detector:  # noqa: N801 - a stand-in, not a real class
             # **Zero, deliberately.** A real detector contributes 23.2ms (§30.3), and
@@ -1542,6 +1667,10 @@ def test_leaving_stops_the_input_device_too(shell, chart, fake_mic) -> None:
     class FakeMic:
         def stop(self) -> None:
             stopped.append(True)
+
+        @property
+        def is_running(self) -> bool:
+            return True
 
     assert isinstance(screen._mic, fake_mic), "the fixture did not take"
     screen._mic = FakeMic()
