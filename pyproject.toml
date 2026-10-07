@@ -1,16 +1,37 @@
-[tool.pytest.ini_options]
-# `tests` and nothing else. A bare `pytest` at the repo root walks the whole tree and
-# imports every `test_*.py` it finds there, so a module that is a script, a prototype
-# or a scratch file can break collection for the most natural command a person or an
-# IDE would run -- while the documented `pytest tests` works fine and hides it. This
-# happened here: an early audio prototype was named `test_midi_play.py` and imported
-# pygame at module level. It has since been deleted, but the class of mistake is not
-# about that file, which is why the rule stays.
-testpaths = ["tests"]
+[project]
+name = "guitaroids"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [{ name = "Christopher Chaar", email = "chaar0123@outlook.com" }]
+requires-python = ">=3.12"
+dependencies = [
+  "attrs==26.1.0",
+  "cffi==2.1.1",
+  "iniconfig==2.3.0",
+  "numpy==2.2.6",
+  "packaging==26.3",
+  "pluggy==1.6.0",
+  "pycparser==3.0",
+  "pygments==2.21.0",
+  "pyguitarpro==0.11",
+  "pyside6==6.11.2",
+  "pyside6-addons==6.11.2",
+  "pyside6-essentials==6.11.2",
+  "pytest==9.1.1",
+  "shiboken6==6.11.2",
+  "sounddevice==0.5.6",
+  "soundfile==0.14.0",
+  "tinysoundfont==0.3.7",
+  "typing-extensions==4.16.0",
+]
 
-# Qt builds one QApplication per process and its platform is fixed at
-# construction, so a test that needs a different one has to be a subprocess. The
-# suite is Qt-heavy already and that is not changing here; the flag is recorded
-# because it is the sort of thing that gets "cleaned up" by someone who does not
-# know yet (DESIGN.md §5.3).
-addopts = "-p no:cacheprovider"
+[project.scripts]
+guitaroids = "guitaroids.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "."
